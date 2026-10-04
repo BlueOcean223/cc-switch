@@ -9,7 +9,7 @@ describe("Pi provider presets", () => {
   it("owns a broad provider catalog without OpenCode-only templates", () => {
     const names = piProviderPresets.map((preset) => preset.name);
 
-    expect(piProviderPresets.length).toBeGreaterThanOrEqual(50);
+    expect(piProviderPresets.length).toBeGreaterThanOrEqual(40);
     expect(names).toEqual(
       expect.arrayContaining(["Kimi", "DeepSeek", "OpenRouter", "AWS Bedrock"]),
     );
@@ -67,8 +67,6 @@ describe("Pi provider presets", () => {
 
     expect(requestUrls).toMatchObject({
       "Kimi For Coding": "https://api.kimi.com/coding/v1/messages",
-      PackyCode: "https://www.packyapi.ai/v1/messages",
-      AICodeMirror: "https://api.aicodemirror.ai/api/claudecode/v1/messages",
       OpenRouter: "https://openrouter.ai/api/v1/messages",
     });
   });
@@ -84,20 +82,8 @@ describe("Pi provider presets", () => {
     ).toMatchObject({
       Kimi: "openai-completions",
       "Kimi For Coding": "anthropic-messages",
-      RightCode: "openai-responses",
       "AWS Bedrock": "bedrock-converse-stream",
     });
-  });
-
-  it("uses Pi's 272K context value for every GPT-5.6 Sol preset", () => {
-    const models = piProviderPresets.flatMap((preset) =>
-      preset.settingsConfig.models.filter(
-        (model) => model.id === "gpt-5.6-sol",
-      ),
-    );
-
-    expect(models.length).toBeGreaterThan(0);
-    expect(models.every((model) => model.contextWindow === 272_000)).toBe(true);
   });
 
   // #7859: 官方 V4.1 Flash 识图，V4 Pro 仍是纯文本

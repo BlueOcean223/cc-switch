@@ -36,14 +36,14 @@ describe("GrokBuildProviderForm", () => {
     expect(screen.queryByRole("button", { name: /BytePlus/ })).toBeNull();
     expect(screen.queryByRole("button", { name: /Kimi/ })).toBeNull();
 
-    await user.click(screen.getByRole("button", { name: /PatewayAI/ }));
+    await user.click(screen.getByRole("button", { name: /OpenRouter/ }));
 
     const baseUrlInput =
       container.querySelector<HTMLInputElement>("#codexBaseUrl");
     const nameInput =
       container.querySelector<HTMLInputElement>('input[name="name"]');
-    expect(baseUrlInput?.value).toBe("https://api.pateway.ai/v1");
-    expect(nameInput?.value).toBe("PatewayAI");
+    expect(baseUrlInput?.value).toBe("https://openrouter.ai/api/v1");
+    expect(nameInput?.value).toBe("OpenRouter");
   });
 
   it("points the get-API-key link at the preset's apiKeyUrl", async () => {
@@ -56,15 +56,15 @@ describe("GrokBuildProviderForm", () => {
       />,
     );
 
-    await user.click(screen.getByRole("button", { name: /88API/ }));
+    await user.click(screen.getByRole("button", { name: /CherryIN/ }));
 
     const websiteInput = container.querySelector<HTMLInputElement>(
       'input[name="websiteUrl"]',
     );
-    expect(websiteInput?.value).toBe("https://88api.ai");
+    expect(websiteInput?.value).toBe("https://open.cherryin.ai");
     expect(screen.getByRole("link", { name: /API Key/ })).toHaveAttribute(
       "href",
-      "https://88api.ai/sign-up?aff=HSGY",
+      "https://open.cherryin.ai/console/token",
     );
   });
 

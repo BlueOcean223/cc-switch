@@ -133,7 +133,7 @@ describe("ClaudeDesktopProviderForm", () => {
     const onSubmit = vi.fn();
     renderForm(undefined, onSubmit);
 
-    await user.click(screen.getByRole("button", { name: /PackyCode/ }));
+    await user.click(screen.getByRole("button", { name: /AtlasCloud/ }));
 
     expect(screen.getByDisplayValue("claude-sonnet-5")).toBeInTheDocument();
     expect(screen.getByDisplayValue("claude-opus-5")).toBeInTheDocument();

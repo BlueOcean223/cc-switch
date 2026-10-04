@@ -226,11 +226,11 @@ describe("preset families", () => {
     expect(hits("moonshot")).toEqual([["family:kimi", []]]);
   });
 
-  it("merges Claude's visible presets into 74 rows", () => {
+  it("merges Claude's visible presets into 34 rows", () => {
     const claudeEntries = providerPresets
       .filter((item) => !item.hidden)
       .map((item, index) => ({ id: `claude-${index}`, preset: item }));
-    expect(groupPresetRows(claudeEntries)).toHaveLength(74);
+    expect(groupPresetRows(claudeEntries)).toHaveLength(34);
   });
 
   it("orders plans and regions as the design does where a family says so", () => {
@@ -302,7 +302,14 @@ describe("preset families", () => {
       dimension: "region",
     });
     // 两维都没写：用域名区分
-    expect(layoutOf(claude, "sudocode")).toEqual({
+    const domainOnly = [
+      ["chat", "https://example.chat"],
+      ["us", "https://example.us"],
+    ].map(([id, websiteUrl]) => ({
+      id,
+      preset: preset(`Example ${id}`, "third_party", websiteUrl),
+    }));
+    expect(presetVersionLayout(domainOnly)).toEqual({
       kind: "single",
       dimension: null,
     });

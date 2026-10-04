@@ -33,6 +33,39 @@ exports[`ProviderForm 预设新增行金标 > claude > AWS Bedrock (API Key) 1`]
 }
 `;
 
+exports[`ProviderForm 预设新增行金标 > claude > AtlasCloud 1`] = `
+{
+  "apiKeyLocations": [
+    "settingsConfig.env.ANTHROPIC_AUTH_TOKEN",
+  ],
+  "row": {
+    "icon": "atlascloud",
+    "iconColor": "",
+    "meta": {
+      "apiFormat": "anthropic",
+      "endpointAutoSelect": true,
+    },
+    "name": "AtlasCloud",
+    "notes": "",
+    "presetCategory": "aggregator",
+    "presetId": "claude-<index>",
+    "settingsConfig": {
+      "env": {
+        "ANTHROPIC_AUTH_TOKEN": "sk-golden-test",
+        "ANTHROPIC_BASE_URL": "https://api.atlascloud.ai",
+        "ANTHROPIC_DEFAULT_HAIKU_MODEL": "zai-org/glm-5.1",
+        "ANTHROPIC_DEFAULT_OPUS_MODEL": "zai-org/glm-5.1",
+        "ANTHROPIC_DEFAULT_SONNET_MODEL": "zai-org/glm-5.1",
+        "ANTHROPIC_MODEL": "zai-org/glm-5.1",
+        "CLAUDE_CODE_AUTO_MODE_SERVER": "0",
+        "CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS": "1",
+      },
+    },
+    "websiteUrl": "https://www.atlascloud.ai/console/coding-plan",
+  },
+}
+`;
+
 exports[`ProviderForm 预设新增行金标 > claude > Claude Official 1`] = `
 {
   "apiKeyLocations": [],
@@ -50,35 +83,6 @@ exports[`ProviderForm 预设新增行金标 > claude > Claude Official 1`] = `
       "env": {},
     },
     "websiteUrl": "https://www.anthropic.com/claude-code",
-  },
-}
-`;
-
-exports[`ProviderForm 预设新增行金标 > claude > E-FlowCode 1`] = `
-{
-  "apiKeyLocations": [
-    "settingsConfig.env.ANTHROPIC_AUTH_TOKEN",
-  ],
-  "row": {
-    "icon": "eflowcode",
-    "iconColor": "#000000",
-    "meta": {
-      "apiFormat": "anthropic",
-      "endpointAutoSelect": true,
-    },
-    "name": "E-FlowCode",
-    "notes": "",
-    "presetCategory": "third_party",
-    "presetId": "claude-<index>",
-    "settingsConfig": {
-      "env": {
-        "ANTHROPIC_AUTH_TOKEN": "sk-golden-test",
-        "ANTHROPIC_BASE_URL": "https://e-flowcode.cc",
-        "CLAUDE_CODE_AUTO_MODE_SERVER": "0",
-        "ENABLE_TOOL_SEARCH": "true",
-      },
-    },
-    "websiteUrl": "https://e-flowcode.cc",
   },
 }
 `;
@@ -112,7 +116,7 @@ exports[`ProviderForm 预设新增行金标 > claude > Kimi For Coding 1`] = `
         "CLAUDE_CODE_MAX_CONTEXT_TOKENS": "262144",
       },
     },
-    "websiteUrl": "https://www.kimi.com/code/?aff=cc-switch",
+    "websiteUrl": "https://www.kimi.com/code/",
   },
 }
 `;
@@ -149,68 +153,70 @@ exports[`ProviderForm 预设新增行金标 > claude > Nvidia 1`] = `
 }
 `;
 
-exports[`ProviderForm 预设新增行金标 > claude > RelaxyCode 1`] = `
+exports[`ProviderForm 预设新增行金标 > claude > OpenRouter 1`] = `
 {
   "apiKeyLocations": [
     "settingsConfig.env.ANTHROPIC_AUTH_TOKEN",
   ],
   "row": {
-    "icon": "relaxcode",
-    "iconColor": "",
+    "icon": "openrouter",
+    "iconColor": "#6566F1",
     "meta": {
       "apiFormat": "anthropic",
       "endpointAutoSelect": true,
     },
-    "name": "RelaxyCode",
+    "name": "OpenRouter",
     "notes": "",
-    "presetCategory": "third_party",
+    "presetCategory": "aggregator",
     "presetId": "claude-<index>",
     "settingsConfig": {
       "env": {
         "ANTHROPIC_AUTH_TOKEN": "sk-golden-test",
-        "ANTHROPIC_BASE_URL": "https://www.relaxycode.com",
+        "ANTHROPIC_BASE_URL": "https://openrouter.ai/api",
+        "ANTHROPIC_DEFAULT_HAIKU_MODEL": "anthropic/claude-haiku-4.5",
+        "ANTHROPIC_DEFAULT_OPUS_MODEL": "anthropic/claude-opus-5",
+        "ANTHROPIC_DEFAULT_SONNET_MODEL": "anthropic/claude-sonnet-5",
+        "ANTHROPIC_MODEL": "anthropic/claude-sonnet-5",
         "CLAUDE_CODE_AUTO_MODE_SERVER": "0",
       },
     },
-    "websiteUrl": "https://www.relaxycode.com",
+    "websiteUrl": "https://openrouter.ai",
   },
 }
 `;
 
-exports[`ProviderForm 预设新增行金标 > codex > E-FlowCode 1`] = `
+exports[`ProviderForm 预设新增行金标 > codex > CherryIN 1`] = `
 {
   "apiKeyLocations": [
     "settingsConfig.auth.OPENAI_API_KEY",
   ],
   "row": {
-    "icon": "eflowcode",
-    "iconColor": "#000000",
+    "icon": "cherryin",
+    "iconColor": "",
     "meta": {
       "apiFormat": "openai_responses",
       "endpointAutoSelect": true,
     },
-    "name": "E-FlowCode",
+    "name": "CherryIN",
     "notes": "",
-    "presetCategory": "third_party",
+    "presetCategory": "aggregator",
     "presetId": "codex-<index>",
     "settingsConfig": {
       "auth": {
         "OPENAI_API_KEY": "sk-golden-test",
       },
       "config": "model_provider = "custom"
-model = "gpt-5.6-sol"
+model = "openai/gpt-5.6-sol"
 model_reasoning_effort = "high"
 disable_response_storage = true
 
 [model_providers.custom]
-name = "E-FlowCode"
-base_url = "https://e-flowcode.cc/v1"
+name = "cherryin"
+base_url = "https://open.cherryin.net/v1"
 wire_api = "responses"
-requires_openai_auth = true
-model_context_window = 1000000
-model_auto_compact_token_limit = 9000000",
+requires_openai_auth = true",
     },
-    "websiteUrl": "https://e-flowcode.cc",
+    "websiteUrl": "https://open.cherryin.ai",
   },
 }
 `;

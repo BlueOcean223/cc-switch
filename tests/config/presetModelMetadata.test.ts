@@ -45,12 +45,12 @@ describe("preset model metadata sources", () => {
     }
   });
 
-  it("keeps a partner's own window over the vendor default", () => {
-    // FluxA 转售的百度国际 team 部署：glm-5.2 是 500K，不是原厂的 1M。
+  it("keeps a preset's own window over the vendor default", () => {
+    // 预设里核实过的窗口优先于 models.dev 的原厂值（这里故意让两者不同）。
     const modelsDev: ModelsDevResponse = {
       zhipuai: {
         api: "https://open.bigmodel.cn/api/paas/v4",
-        models: { "glm-5.2": { limit: { context: 1000000 } } },
+        models: { "glm-5.2": { limit: { context: 200000 } } },
       },
       openrouter: {
         models: {
@@ -60,11 +60,11 @@ describe("preset model metadata sources", () => {
     };
     expect(
       resolveModelMetadata("glm-5.2", {
-        baseUrl: "https://api.baiduqianfan.ai/v2/tokenplan/team",
+        baseUrl: "https://qianfan.baidubce.com/v2/tokenplan/personal",
         presets: codexPresetModelSources(),
         modelsDev,
       })?.contextWindow,
-    ).toBe(500000);
+    ).toBe(1048576);
   });
 
   it("reads OpenCode limits from the preset for the same address", () => {

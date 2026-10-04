@@ -174,7 +174,7 @@ describe("新增对话框的草稿投影", () => {
       (item) => item.category !== "official",
     )!;
     let seen = bases.length;
-    clickPreset(preset.name);
+    clickPreset(preset.nameKey ?? preset.name);
     let base = await nextBase(bases, seen);
     expect((base!.env as Record<string, unknown>).GEMINI_SANDBOX).toBe(
       "docker",

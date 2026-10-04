@@ -25,7 +25,9 @@
  *   和 CLAUDE_CODE_AUTO_COMPACT_WINDOW）；
  * - Codex「原生 Responses 第三方」：xAI (Grok)（category=third_party、显式
  *   apiFormat=openai_responses、目录带原生 Responses 专用字段）；
- * - Codex「openai_chat + 模型目录」：Nvidia（另带 codexChatReasoning）。
+ * - Codex「openai_chat + 模型目录」：Nvidia（另带 codexChatReasoning）；
+ * - Claude「Anthropic 原生聚合」：OpenRouter；「额外 env 键 + 地址候选」：AtlasCloud；
+ * - Codex「原生 Responses、无模型目录 + 地址候选」：CherryIN。
  */
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClientProvider } from "@tanstack/react-query";
@@ -126,7 +128,7 @@ interface GoldenCase {
 
 const CLAUDE_CASES: GoldenCase[] = [
   { preset: "Claude Official", fillApiKey: false },
-  { preset: "RelaxyCode", fillApiKey: true },
+  { preset: "OpenRouter", fillApiKey: true },
   {
     preset: "AWS Bedrock (API Key)",
     fillApiKey: true,
@@ -134,14 +136,14 @@ const CLAUDE_CASES: GoldenCase[] = [
   },
   { preset: "Nvidia", fillApiKey: true },
   { preset: "Kimi For Coding", fillApiKey: true },
-  { preset: "E-FlowCode", fillApiKey: true },
+  { preset: "AtlasCloud", fillApiKey: true },
 ];
 
 const CODEX_CASES: GoldenCase[] = [
   { preset: "OpenAI Official", fillApiKey: false },
   { preset: "xAI (Grok)", fillApiKey: true },
   { preset: "Nvidia", fillApiKey: true },
-  { preset: "E-FlowCode", fillApiKey: true },
+  { preset: "CherryIN", fillApiKey: true },
 ];
 
 const API_KEY_INPUT_ID: Record<GoldenAppId, string> = {

@@ -22,13 +22,13 @@ describe("mcodeProviderPresets", () => {
   });
 
   it("gives adaptive-thinking Claude models effort options alongside their compat", () => {
-    const pi = piPreset("PackyCode");
-    const mcode = mcodePreset("PackyCode");
+    const pi = piPreset("OpenRouter");
+    const mcode = mcodePreset("OpenRouter");
     expect(mcode).toBeDefined();
     expect(Object.keys(mcode!.settingsConfig.models)).toEqual(
       pi.settingsConfig.models.map((model) => model.id),
     );
-    const opus = mcode!.settingsConfig.models["claude-opus-5-5"];
+    const opus = mcode!.settingsConfig.models["anthropic/claude-opus-5.5"];
     expect(opus.compat).toEqual({ forceAdaptiveThinking: true });
     expect(opus.thinking).toEqual({
       effortOptions: ["low", "medium", "high", "xhigh", "max"],

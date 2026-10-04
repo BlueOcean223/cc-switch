@@ -165,7 +165,7 @@ Backend (Tauri 2 + Rust)
 ├── tests/                    # Frontend tests (vitest)
 ├── docs/                     # User manual, guides, release notes
 ├── flatpak/                  # Flatpak manifest and build notes
-└── assets/                   # Screenshots and partner assets
+└── assets/                   # Screenshots and release-note images
 ```
 
 ## Code Style

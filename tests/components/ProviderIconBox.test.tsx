@@ -7,7 +7,9 @@ import { iconMetadata } from "@/icons/extracted/metadata";
 
 describe("ProviderIconBox", () => {
   it("lets icons with their own solid background fill the box", () => {
-    const { container } = render(<ProviderIconBox icon="88api" name="88API" />);
+    const { container } = render(
+      <ProviderIconBox icon="cherryin" name="CherryIN" />,
+    );
     const box = container.firstElementChild as HTMLElement;
     const img = box.querySelector("img") as HTMLImageElement;
 
@@ -19,7 +21,7 @@ describe("ProviderIconBox", () => {
 
   it("keeps transparent logos small and centered inside a bordered box", () => {
     const { container } = render(
-      <ProviderIconBox icon="dmxapi" name="DMXAPI" />,
+      <ProviderIconBox icon="huoshan" name="Volcengine" />,
     );
     const box = container.firstElementChild as HTMLElement;
     const img = box.querySelector("img") as HTMLImageElement;
