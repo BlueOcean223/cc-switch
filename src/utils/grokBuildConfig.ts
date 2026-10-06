@@ -25,6 +25,13 @@ const asRecord = (value: unknown): Record<string, unknown> | undefined =>
 const asString = (value: unknown, fallback = "") =>
   typeof value === "string" ? value : fallback;
 
+/** `env_key` 可以是一个变量名，也可以是数组（Grok 取第一个有值的）。 */
+const envKeyNames = (value: unknown): string[] =>
+  (Array.isArray(value) ? value : [value])
+    .filter((item): item is string => typeof item === "string")
+    .map((item) => item.trim())
+    .filter(Boolean);
+
 export function parseGrokBuildConfig(
   configToml: string | undefined,
   fallbackName = "",
@@ -55,7 +62,7 @@ export function parseGrokBuildConfig(
       baseUrl: asString(selectedModel?.base_url),
       name: asString(selectedModel?.name, fallbackName),
       apiKey: asString(selectedModel?.api_key),
-      envKey: asString(selectedModel?.env_key),
+      envKey: envKeyNames(selectedModel?.env_key)[0] ?? "",
       apiBackend: asString(
         selectedModel?.api_backend,
         GROK_BUILD_DEFAULT_API_BACKEND,
@@ -100,8 +107,8 @@ export function updateGrokBuildConfig(
     asRecord(modelTables[previousProfile]) ??
     {};
   const apiKey = values.apiKey.trim();
-  const envKey =
-    values.envKey?.trim() || asString(existingSelected.env_key).trim();
+  const envKey = values.envKey?.trim();
+  const existingEnvKeys = envKeyNames(existingSelected.env_key);
   const updatedSelected: Record<string, unknown> = {
     ...existingSelected,
     model: upstreamModel,
@@ -115,8 +122,9 @@ export function updateGrokBuildConfig(
   };
   if (apiKey) updatedSelected.api_key = apiKey;
   else delete updatedSelected.api_key;
-  if (envKey) updatedSelected.env_key = envKey;
-  else delete updatedSelected.env_key;
+  // 没传或传的就是现有第一个名字时保留原值，数组形式的 env_key 不会被缩成一个名字
+  if (envKey && envKey !== existingEnvKeys[0]) updatedSelected.env_key = envKey;
+  else if (existingEnvKeys.length === 0) delete updatedSelected.env_key;
 
   config.model = {
     ...modelTables,
@@ -138,20 +146,25 @@ export function validateGrokBuildConfig(configToml: string): string | null {
     const profile = asString(models?.default).trim();
     const selected = asRecord(asRecord(root?.model)?.[profile]);
     if (!profile || !selected) return "Missing [models] default model table";
-    for (const field of ["model", "base_url", "name", "api_backend"]) {
+    // 与后端 validate_config_toml 一致：name、api_backend、context_window 在 Grok 里可省略
+    for (const field of ["model", "base_url"]) {
       if (!asString(selected[field]).trim()) return `Missing ${field}`;
     }
     if (
       !asString(selected.api_key).trim() &&
-      !asString(selected.env_key).trim()
+      envKeyNames(selected.env_key).length === 0
     ) {
       return "Missing api_key or env_key";
     }
+    if ("api_backend" in selected && !asString(selected.api_backend).trim()) {
+      return "Missing api_backend";
+    }
     const contextWindow = selected.context_window;
     if (
-      typeof contextWindow !== "number" ||
-      !Number.isInteger(contextWindow) ||
-      contextWindow <= 0
+      contextWindow !== undefined &&
+      (typeof contextWindow !== "number" ||
+        !Number.isInteger(contextWindow) ||
+        contextWindow <= 0)
     ) {
       return "context_window must be a positive integer";
     }

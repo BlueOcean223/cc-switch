@@ -82,6 +82,28 @@ context_window = 500000
     expect(parsed.model["env-profile"]).not.toHaveProperty("api_key");
   });
 
+  it("accepts the fields Grok lets you omit and keeps env_key lists", () => {
+    const config = `[models]
+default = "relay"
+
+[model.relay]
+model = "relay-model"
+base_url = "https://api.example.com/v1"
+env_key = ["RELAY_KEY", "LC_RELAY_KEY"]
+`;
+
+    expect(validateGrokBuildConfig(config)).toBeNull();
+    expect(parseGrokBuildConfig(config).envKey).toBe("RELAY_KEY");
+
+    const updated = updateGrokBuildConfig(config, {
+      ...parseGrokBuildConfig(config),
+      baseUrl: "https://updated.example.com/v1",
+    });
+    const parsed = parseToml(updated) as any;
+    expect(parsed.model.relay.env_key).toEqual(["RELAY_KEY", "LC_RELAY_KEY"]);
+    expect(validateGrokBuildConfig(updated)).toBeNull();
+  });
+
   it("reports malformed, incomplete, and invalid-window configs", () => {
     expect(validateGrokBuildConfig("")).toBe("config.toml must not be empty");
     expect(validateGrokBuildConfig("[models")).not.toBeNull();

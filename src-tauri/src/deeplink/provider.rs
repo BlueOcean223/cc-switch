@@ -865,7 +865,7 @@ fn merge_grokbuild_config(
             .api_key
             .as_ref()
             .is_none_or(|value| value.is_empty())
-            && model.env_key.is_some()
+            && !model.env_keys.is_empty()
         {
             return Err(AppError::InvalidInput(
                 "This link supplies its API key indirectly through `env_key`, which cannot be \
