@@ -801,9 +801,9 @@ mod tests {
         std::fs::write(&summary, "{}").unwrap();
         let output = (0..40).map(|i| format!("line {i}\n")).collect::<String>();
         let lines = [
-            json!({ "type": "user", "content": "run it" }),
-            json!({ "type": "assistant", "content": "", "tool_calls": [{ "id": "c1", "function": { "name": "bash", "arguments": "{\"command\":\"ls\"}" } }] }),
-            json!({ "type": "tool", "tool_call_id": "c1", "content": output }),
+            json!({ "type": "user", "content": [{ "type": "text", "text": "run it" }] }),
+            json!({ "type": "assistant", "content": "", "tool_calls": [{ "id": "c1", "name": "bash", "arguments": "{\"command\":\"ls\"}" }] }),
+            json!({ "type": "tool_result", "tool_call_id": "c1", "content": output }),
         ];
         std::fs::write(
             dir.join(GROK_CHAT_HISTORY),
