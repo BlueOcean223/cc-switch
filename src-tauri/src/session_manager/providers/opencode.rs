@@ -7,7 +7,7 @@ use serde_json::Value;
 use crate::session_manager::{SessionMessage, SessionMeta};
 
 use super::blocks::assign_turn_ids;
-use super::opencode_blocks::{message_from_parts, PartLocator};
+use super::opencode_blocks::{message_from_parts, v2_message, PartLocator};
 use super::utils::{parse_timestamp_to_ms, path_basename, truncate_summary};
 
 const PROVIDER_ID: &str = "opencode";
@@ -467,55 +467,10 @@ fn load_messages_sqlite_v2(
         let Ok(msg_value) = serde_json::from_str::<Value>(&data) else {
             continue;
         };
-        if !matches!(msg_type.as_str(), "user" | "assistant" | "system") {
-            continue;
-        }
-
-        // user 优先取 `text`；其余取 `content[]`（结构同 v1 parts），最后退回 `text`
-        let text_part = |text: &str| {
-            (
-                PartLocator::Sqlite {
-                    table: "session_message",
-                    id: row_id.clone(),
-                    base: String::new(),
-                },
-                serde_json::json!({ "type": "text", "text": text }),
-            )
-        };
-        let parts: Vec<(PartLocator, Value)> = match (
-            msg_type.as_str(),
-            msg_value.get("text").and_then(Value::as_str),
-            msg_value.get("content"),
-        ) {
-            ("user" | "system", Some(text), _) => vec![text_part(text)],
-            (_, _, Some(Value::Array(items))) if msg_type != "system" => items
-                .iter()
-                .enumerate()
-                .map(|(i, item)| {
-                    (
-                        PartLocator::Sqlite {
-                            table: "session_message",
-                            id: row_id.clone(),
-                            base: format!("/content/{i}"),
-                        },
-                        item.clone(),
-                    )
-                })
-                .collect(),
-            (_, _, Some(Value::String(text))) if msg_type == "user" => vec![text_part(text)],
-            (_, Some(text), _) => vec![text_part(text)],
-            _ => Vec::new(),
-        };
-
-        let message = message_from_parts(
-            &msg_type,
-            Some(row_id.clone()),
-            Some(ts),
-            &msg_value,
-            &parts,
-        );
-        if !message.is_empty() {
-            messages.push(message);
+        if let Some(message) = v2_message(&row_id, &msg_type, ts, &msg_value) {
+            if !message.is_empty() {
+                messages.push(message);
+            }
         }
     }
 
@@ -893,6 +848,7 @@ fn remove_dir_all_if_exists(path: &Path) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::session_manager::model::{EventKind, SessionBlock};
     use rusqlite::Connection;
     use std::sync::{Mutex, OnceLock};
     use tempfile::tempdir;
@@ -1394,7 +1350,7 @@ mod tests {
         .expect("insert assistant message");
         conn.execute(
             "INSERT INTO session_message (id, session_id, type, seq, data, time_created, time_updated) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-            ("msg_3", "ses_v2_1", "compaction", 3_i64, r#"{"status":"completed"}"#, 2600_i64, 2600_i64),
+            ("msg_3", "ses_v2_1", "compaction", 3_i64, r#"{"status":"completed","summary":"Goal: say hello"}"#, 2600_i64, 2600_i64),
         )
         .expect("insert compaction message");
         drop(conn);
@@ -1402,7 +1358,7 @@ mod tests {
         let source = format!("sqlite:{}:ses_v2_1", db_path.display());
         let messages = load_messages_sqlite(&source).expect("load v2 sqlite messages");
 
-        assert_eq!(messages.len(), 2);
+        assert_eq!(messages.len(), 3);
         assert_eq!(messages[0].role, "user");
         assert_eq!(messages[0].content, "Hello V2");
         assert_eq!(messages[0].ts, Some(1000));
@@ -1412,6 +1368,11 @@ mod tests {
             "[Tool: shell] ls\n\na.txt\n\nAll done in V2"
         );
         assert_eq!(messages[1].ts, Some(2000));
+        assert_eq!(messages[2].role, "system");
+        assert!(matches!(
+            &messages[2].blocks[..],
+            [SessionBlock::Event { kind: EventKind::Compaction, text: Some(t), .. }] if t == "Goal: say hello"
+        ));
     }
 
     #[test]

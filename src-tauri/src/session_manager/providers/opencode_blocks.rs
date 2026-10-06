@@ -10,8 +10,9 @@ use crate::session_manager::model::{
 };
 
 use super::blocks::{
-    count_diff_lines, estimate_base64_size, parse_arguments, single_file_diff, str_field,
-    thinking_block, title_path, tool_call_block, tool_result_block, ToolSource,
+    count_diff_lines, estimate_base64_size, large_text_block, parse_arguments, single_file_diff,
+    str_field, summary_event_block, thinking_block, title_path, tool_call_block, tool_result_block,
+    ToolSource,
 };
 use super::utils::parse_timestamp_to_ms;
 
@@ -70,6 +71,251 @@ pub(super) fn message_from_parts(
         message.meta = message_meta(info);
     }
     message
+}
+
+/// v2 `session_message` 一行 → [`SessionMessage`]。`msg_type` 是行的 `type` 列，`data` 不含 id/type。
+///
+/// 展示取舍对照官方 TUI（v2.0.24 `tui/src/routes/session/index.tsx`）：`system`/`synthetic`
+/// 有 `description` 时只显示这句说明，没有时作为注入内容（默认隐藏）；`idle` 不显示，返回 None。
+pub(super) fn v2_message(
+    row_id: &str,
+    msg_type: &str,
+    ts: i64,
+    data: &Value,
+) -> Option<SessionMessage> {
+    let locator = |base: String| PartLocator::Sqlite {
+        table: "session_message",
+        id: row_id.to_string(),
+        base,
+    };
+    let root = locator(String::new());
+    let text_field = |key: &str| {
+        data.get(key)
+            .and_then(Value::as_str)
+            .filter(|text| !text.trim().is_empty())
+    };
+    let event = |kind: EventKind, text: String| vec![SessionBlock::event(kind, Some(text), None)];
+
+    let (role, blocks, injected) = match msg_type {
+        "assistant" => {
+            let parts: Vec<(PartLocator, Value)> = data
+                .get("content")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .enumerate()
+                .map(|(i, item)| (locator(format!("/content/{i}")), item.clone()))
+                .collect();
+            return Some(message_from_parts(
+                "assistant",
+                Some(row_id.to_string()),
+                Some(ts),
+                data,
+                &parts,
+            ));
+        }
+        "user" => ("user", user_blocks(data, &root), false),
+        "shell" => ("user", shell_blocks(row_id, data, &root), false),
+        "compaction" => ("system", vec![compaction_block(data, &root)], false),
+        "system" | "synthetic" => match notice_event(data) {
+            Some(notice) => ("system", vec![notice], false),
+            None => {
+                let text = text_field("text")?;
+                let role = if msg_type == "system" {
+                    "system"
+                } else {
+                    "user"
+                };
+                let block = large_text_block(text, || root.content_ref("/text"));
+                (role, vec![block], true)
+            }
+        },
+        "skill" => (
+            "system",
+            event(
+                EventKind::Other,
+                format!(
+                    "Skill {}",
+                    text_field("name").or_else(|| text_field("skill"))?
+                ),
+            ),
+            false,
+        ),
+        "agent-switched" => (
+            "system",
+            event(EventKind::Other, format!("@{}", text_field("agent")?)),
+            false,
+        ),
+        "model-switched" => {
+            let model = data.get("model")?;
+            let id = model.get("id").and_then(Value::as_str)?;
+            let text = match model.get("providerID").and_then(Value::as_str) {
+                Some(provider) if !provider.is_empty() => format!("{provider}/{id}"),
+                _ => id.to_string(),
+            };
+            ("system", event(EventKind::ModelChange, text), false)
+        }
+        "location-switched" => {
+            let directory = data
+                .pointer("/location/directory")
+                .and_then(Value::as_str)?;
+            (
+                "system",
+                event(EventKind::Other, format!("↳ {directory}")),
+                false,
+            )
+        }
+        _ => return None,
+    };
+    let mut message = SessionMessage::from_blocks(role, Some(ts), blocks);
+    message.id = Some(row_id.to_string());
+    message.injected = injected;
+    Some(message)
+}
+
+/// `user{text, files[]}`：`files[].data` 是不带 `data:` 前缀的 base64（也可能只有 `source.uri`）。
+fn user_blocks(data: &Value, locator: &PartLocator) -> Vec<SessionBlock> {
+    let mut blocks = Vec::new();
+    if let Some(text) = data
+        .get("text")
+        .and_then(Value::as_str)
+        .filter(|text| !text.trim().is_empty())
+    {
+        blocks.push(SessionBlock::text(text));
+    }
+    let files = data.get("files").and_then(Value::as_array);
+    for (i, file) in files.into_iter().flatten().enumerate() {
+        let mime = file.get("mime").and_then(Value::as_str).unwrap_or("");
+        let name = file
+            .get("name")
+            .and_then(Value::as_str)
+            .filter(|s| !s.is_empty());
+        let uri = file
+            .pointer("/source/uri")
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        let encoded = file
+            .get("data")
+            .and_then(Value::as_str)
+            .filter(|s| !s.is_empty());
+        let image = match encoded {
+            Some(encoded) if mime.starts_with("image/") => locator
+                .content_ref(&format!("/files/{i}/data"))
+                .map(|content| ImageRef {
+                    source: ImageSource::Inline { content },
+                    media_type: mime.to_string(),
+                    size: estimate_base64_size(encoded.len()),
+                    alt: name.map(str::to_string),
+                }),
+            _ => file_image(mime, uri, name, || None),
+        };
+        if let Some(image) = image {
+            blocks.push(SessionBlock::Image { image });
+        } else if let Some(label) = name.or_else(|| (!uri.is_empty()).then_some(uri)) {
+            blocks.push(SessionBlock::event(
+                EventKind::Other,
+                Some(label.to_string()),
+                None,
+            ));
+        }
+    }
+    blocks
+}
+
+/// 用户在输入框用 `!` 执行的命令：`{shellID, command, status, exit?, output?{output}, time}`。
+/// `status`：running | exited | timeout | killed。
+fn shell_blocks(row_id: &str, data: &Value, locator: &PartLocator) -> Vec<SessionBlock> {
+    let command = data.get("command").and_then(Value::as_str).unwrap_or("");
+    let id = data
+        .get("shellID")
+        .and_then(Value::as_str)
+        .unwrap_or(row_id)
+        .to_string();
+    let input = serde_json::json!({ "command": command });
+    let mut call = tool_call_block(ToolSource::OpenCode, id.clone(), "shell", &input, || {
+        locator.content_ref("/command")
+    });
+    if let SessionBlock::ToolCall { by_user, .. } = &mut call {
+        *by_user = true;
+    }
+    let exit = data
+        .get("exit")
+        .and_then(Value::as_i64)
+        .and_then(|code| i32::try_from(code).ok());
+    let status = match (data.get("status").and_then(Value::as_str), exit) {
+        (Some("exited"), Some(0)) => ToolStatus::Success,
+        (Some("exited"), Some(_)) | (Some("timeout"), _) => ToolStatus::Error,
+        (Some("killed"), _) => ToolStatus::Interrupted,
+        (Some("running"), _) => ToolStatus::Pending,
+        _ => ToolStatus::Unknown,
+    };
+    let output = data
+        .pointer("/output/output")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    let mut result =
+        tool_result_block(id, status, output, || locator.content_ref("/output/output"));
+    if let SessionBlock::ToolResult {
+        exit_code,
+        duration_ms,
+        ..
+    } = &mut result
+    {
+        *exit_code = exit;
+        *duration_ms = time_span(data);
+    }
+    vec![call, result]
+}
+
+/// `compaction{status, summary, error?}`：摘要放进压缩事件（全文按 `/summary` 取），失败时显示错误。
+fn compaction_block(data: &Value, locator: &PartLocator) -> SessionBlock {
+    if data.get("status").and_then(Value::as_str) == Some("failed") {
+        let message = data
+            .pointer("/error/message")
+            .and_then(Value::as_str)
+            .filter(|s| !s.is_empty())
+            .unwrap_or("Compaction failed");
+        return SessionBlock::event(EventKind::Error, Some(message.to_string()), None);
+    }
+    match data
+        .get("summary")
+        .and_then(Value::as_str)
+        .filter(|s| !s.trim().is_empty())
+    {
+        Some(summary) => summary_event_block(EventKind::Compaction, summary, || {
+            locator.content_ref("/summary")
+        }),
+        None => SessionBlock::event(EventKind::Compaction, None, None),
+    }
+}
+
+/// `system`/`synthetic` 的 `description` → 一行说明。子会话完成通知带 `metadata{source:"subagent", agent}`。
+fn notice_event(data: &Value) -> Option<SessionBlock> {
+    let description = data
+        .get("description")
+        .and_then(Value::as_str)
+        .filter(|s| !s.trim().is_empty())?;
+    let metadata = data.get("metadata");
+    let source = metadata
+        .and_then(|m| m.get("source"))
+        .and_then(Value::as_str);
+    let (kind, text) = match source {
+        Some("subagent") => {
+            let agent = metadata
+                .and_then(|m| m.get("agent"))
+                .and_then(Value::as_str)
+                .filter(|s| !s.is_empty())
+                .unwrap_or("subagent");
+            (EventKind::SubAgent, format!("{agent}: {description}"))
+        }
+        // 后台 shell 完成通知的说明是命令本身，官方压成一行
+        Some("shell") => (
+            EventKind::Other,
+            description.split_whitespace().collect::<Vec<_>>().join(" "),
+        ),
+        _ => (EventKind::Other, description.to_string()),
+    };
+    Some(SessionBlock::event(kind, Some(text), None))
 }
 
 fn push_part_blocks(blocks: &mut Vec<SessionBlock>, locator: &PartLocator, part: &Value) {
@@ -598,8 +844,8 @@ fn saturate(n: u64) -> u32 {
 
 #[cfg(test)]
 mod tests {
+    use super::super::blocks::starts_turn;
     use super::*;
-    use crate::session_manager::model::ToolKind;
     use serde_json::json;
 
     fn sqlite(id: &str) -> PartLocator {
@@ -1188,5 +1434,181 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    /// 非 assistant 类型，样例取自 v2.0.24 `packages/schema/src/session-message.ts`
+    #[test]
+    fn v2_message_types_follow_official_display() {
+        let message = |msg_type: &str, data: Value| v2_message("msg_9", msg_type, 1000, &data);
+        let blocks = |msg_type: &str, data: Value| message(msg_type, data).expect("message").blocks;
+
+        let user = message(
+            "user",
+            json!({"text":"看一下截图","files":[
+                {"data":"AAAAAAAA","mime":"image/png","source":{"type":"inline"},"name":"shot.png"},
+                {"data":"","mime":"application/pdf","source":{"type":"uri","uri":"file:///p/spec.pdf"},"name":"spec.pdf"}],
+                "agents":[],"time":{"created":1000}}),
+        )
+        .expect("user");
+        assert_eq!(user.role, "user");
+        assert!(matches!(&user.blocks[0], SessionBlock::Text { text, .. } if text == "看一下截图"));
+        match &user.blocks[1] {
+            SessionBlock::Image { image } => {
+                assert_eq!(image.size, 6);
+                assert!(matches!(
+                    &image.source,
+                    ImageSource::Inline { content: ContentRef::Sqlite { table, pointer, .. } }
+                        if table == "session_message" && pointer == "/files/0/data"
+                ));
+            }
+            other => panic!("{other:?}"),
+        }
+        assert!(matches!(
+            &user.blocks[2],
+            SessionBlock::Event { kind: EventKind::Other, text: Some(t), .. } if t == "spec.pdf"
+        ));
+
+        let shell = message(
+            "shell",
+            json!({"shellID":"sh_1","command":"cargo test","status":"exited","exit":101,
+                   "output":{"output":"boom\n","cursor":5,"size":5,"truncated":false},
+                   "time":{"created":1000,"completed":3500}}),
+        )
+        .expect("shell");
+        assert_eq!(shell.role, "user");
+        assert!(!starts_turn(&shell));
+        match (&shell.blocks[0], &shell.blocks[1]) {
+            (
+                SessionBlock::ToolCall {
+                    kind,
+                    title,
+                    by_user,
+                    ..
+                },
+                SessionBlock::ToolResult {
+                    call_id,
+                    status,
+                    preview,
+                    exit_code,
+                    duration_ms,
+                    ..
+                },
+            ) => {
+                assert_eq!(
+                    (*kind, title.as_str(), *by_user),
+                    (ToolKind::Shell, "cargo test", true)
+                );
+                assert_eq!(call_id, "sh_1");
+                assert_eq!(*status, ToolStatus::Error);
+                assert_eq!(preview, "boom");
+                assert_eq!((*exit_code, *duration_ms), (Some(101), Some(2500)));
+            }
+            other => panic!("{other:?}"),
+        }
+        let killed = blocks(
+            "shell",
+            json!({"shellID":"sh_2","command":"sleep 9","status":"killed","time":{"created":1}}),
+        );
+        assert!(matches!(
+            &killed[1],
+            SessionBlock::ToolResult {
+                status: ToolStatus::Interrupted,
+                ..
+            }
+        ));
+
+        let summary = "## 目标\n".to_string() + &"进度说明。".repeat(200);
+        let compaction = message(
+            "compaction",
+            json!({"status":"completed","reason":"auto","summary":summary,"recent":"[User]: …",
+                   "cost":0.004,"time":{"created":1000}}),
+        )
+        .expect("compaction");
+        assert_eq!(compaction.role, "system");
+        assert!(matches!(
+            &compaction.blocks[0],
+            SessionBlock::Event { kind: EventKind::Compaction, full: Some(ContentRef::Sqlite { pointer, .. }), .. }
+                if pointer == "/summary"
+        ));
+        assert!(matches!(
+            &blocks("compaction", json!({"status":"failed","reason":"auto",
+                "error":{"type":"aborted","message":"Compaction cancelled"},"time":{"created":1}}))[0],
+            SessionBlock::Event { kind: EventKind::Error, text: Some(t), .. } if t == "Compaction cancelled"
+        ));
+
+        let subagent = message(
+            "synthetic",
+            json!({"text":"<subagent sessionID=\"ses_c\" state=\"completed\">…</subagent>",
+                   "description":"查找配置",
+                   "metadata":{"source":"subagent","childID":"ses_c","agent":"explore","state":"completed"},
+                   "time":{"created":1000}}),
+        )
+        .expect("synthetic");
+        assert!(!subagent.injected);
+        assert!(matches!(
+            &subagent.blocks[..],
+            [SessionBlock::Event { kind: EventKind::SubAgent, text: Some(t), .. }] if t == "explore: 查找配置"
+        ));
+        let hidden = message(
+            "synthetic",
+            json!({"text":"Continue if you have next steps","time":{"created":1000}}),
+        )
+        .expect("synthetic");
+        assert!(hidden.injected);
+        assert_eq!(hidden.role, "user");
+
+        let instructions = message(
+            "system",
+            json!({"text":"Instructions from: /repo/AGENTS.md\n…","description":"Instructions updated: /repo/AGENTS.md",
+                   "metadata":{"notice":"instructions"},"time":{"created":1000}}),
+        )
+        .expect("system");
+        assert!(!instructions.injected);
+        assert_eq!(
+            instructions.content,
+            "Instructions updated: /repo/AGENTS.md"
+        );
+        let tools_changed = message(
+            "system",
+            json!({"text":"The available tools have changed.","time":{"created":1000}}),
+        )
+        .expect("system");
+        assert!(tools_changed.injected);
+        assert_eq!(tools_changed.content, "The available tools have changed.");
+
+        assert_eq!(
+            message(
+                "skill",
+                json!({"skill":"review","name":"review","text":"…","time":{"created":1}})
+            )
+            .expect("skill")
+            .content,
+            "Skill review"
+        );
+        assert_eq!(
+            message(
+                "agent-switched",
+                json!({"agent":"plan","previous":"build","time":{"created":1}})
+            )
+            .expect("agent")
+            .content,
+            "@plan"
+        );
+        assert!(matches!(
+            &blocks("model-switched", json!({"model":{"id":"gpt-5","providerID":"openai","variant":"high"},
+                "time":{"created":1}}))[0],
+            SessionBlock::Event { kind: EventKind::ModelChange, text: Some(t), .. } if t == "openai/gpt-5"
+        ));
+        assert_eq!(
+            message(
+                "location-switched",
+                json!({"location":{"directory":"/Users/me/repo-b"},
+                "projectID":"prj_1","time":{"created":1}})
+            )
+            .expect("location")
+            .content,
+            "↳ /Users/me/repo-b"
+        );
+        assert!(message("idle", json!({"outcome":"succeeded","time":{"created":1}})).is_none());
     }
 }
