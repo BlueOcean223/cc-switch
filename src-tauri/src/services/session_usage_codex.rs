@@ -10,8 +10,10 @@
 //!
 //! ## 解析的事件类型
 //! - `session_meta` → 提取唯一 thread_id（子代理的 session_id 指向父线程）
-//! - `turn_context` → 提取当前 model
-//! - `event_msg` (type=token_count) → 提取累计 token 用量，计算 delta
+//! - `turn_context`、`event_msg` (type=thread_settings_applied) → 提取当前 model
+//! - `token_usage_record` → 本线程每次响应的用量（Codex 0.153 起），有它时以它计费
+//! - `event_msg` (type=token_count) → 提取累计 token 用量，计算 delta；只补 record
+//!   覆盖不到的部分（0.153 之前写的、复制来的历史）
 
 use crate::codex_config::get_codex_config_dir;
 use crate::database::{lock_conn, Database};
@@ -25,7 +27,7 @@ use crate::services::usage_stats::find_model_pricing;
 use crate::token_usage::calculator::{CostBreakdown, CostCalculator, ModelPricing, ServiceTier};
 use crate::token_usage::parser::TokenUsage;
 use chrono::{DateTime, Utc};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs;
 use std::io::{BufRead, BufReader};
 #[cfg(unix)]
@@ -40,10 +42,13 @@ use windows_sys::Win32::Storage::FileSystem::{
     FileIdInfo, GetFileInformationByHandleEx, FILE_ID_INFO,
 };
 
+/// `token_count` 行：`{前缀}:{文件名 UUID}:{计费 token_count 的序号}`
 const CODEX_THREAD_REQUEST_ID_PREFIX: &str = "codex_session:thread-v1";
+/// `token_usage_record` 行：`{前缀}:{线程 ID}:{response_id}`（见 [`record_request_ids`]）
+const CODEX_RESPONSE_REQUEST_ID_PREFIX: &str = "codex_session:resp-v1";
 
 /// 累计 token 用量（跟踪 total_token_usage 字段）
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
 struct CumulativeTokens {
     input: u64,
     cached_input: u64,
@@ -53,7 +58,7 @@ struct CumulativeTokens {
 }
 
 /// 单次 API 调用的 token 增量
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 struct DeltaTokens {
     /// 含缓存读和缓存写的全部输入（Codex 日志的口径）
     input: u32,
@@ -63,6 +68,26 @@ struct DeltaTokens {
 }
 
 impl DeltaTokens {
+    /// 单次请求的用量（`last_token_usage` 或 record 的 `usage`）直接当作增量
+    fn from_usage(usage: &CumulativeTokens) -> Self {
+        DeltaTokens {
+            input: usage.input as u32,
+            cached_input: usage.cached_input as u32,
+            cache_write: usage.cache_write as u32,
+            output: usage.output as u32,
+        }
+    }
+
+    /// 缓存读、缓存写都含在 input 里，异常数据里超出 input 的部分截掉
+    fn clamped(self) -> Self {
+        let cached_input = self.cached_input.min(self.input);
+        DeltaTokens {
+            cached_input,
+            cache_write: self.cache_write.min(self.input - cached_input),
+            ..self
+        }
+    }
+
     fn is_zero(&self) -> bool {
         self.input == 0 && self.cached_input == 0 && self.cache_write == 0 && self.output == 0
     }
@@ -230,6 +255,10 @@ struct CachedReplayPrefix {
 #[derive(Debug)]
 struct ParsedTokenEvent {
     line_offset: i64,
+    /// 分页 rollout 每行的外层 `ordinal`；legacy 文件没有
+    ordinal: Option<i64>,
+    /// 同一次响应已经有本线程的 `token_usage_record`：由 record 计费，这一条不再入库
+    covered_by_record: bool,
     signature: TokenUsageSignature,
     delta: DeltaTokens,
     event_index: Option<u32>,
@@ -307,8 +336,10 @@ fn classify_timing_line(line: &str) -> Option<(i64, TimingLine)> {
 /// 按事件顺序估每次请求的耗时。Codex 日志没有请求级计时，而且各版本的
 /// 事件顺序不一样：
 ///
-/// - 结束时刻：新版在响应结束时写 `token_usage_record`，直接用它。旧版只有
-///   `token_count`，有的版本在响应结束时写，有的要等工具跑完才写；后一种
+/// - 结束时刻：新版在响应结束时写 `token_usage_record`，本线程的 record 在
+///   record 行上结算（[`RequestTimer::finish_record`]），与它配对的
+///   `token_count` 只当作下一次请求的起点。旧版只有 `token_count`，有的版本
+///   在响应结束时写，有的要等工具跑完才写；后一种
 ///   表现为「最后一个输出项之后先出现工具结果，`token_count` 紧跟着工具结果
 ///   写出」，这时改用最后一个输出项的时刻（略早于真正结束，速度会略偏高）。
 /// - 开始时刻：看到这次请求第一个输出项时，在它之前最近的一个起点行
@@ -331,6 +362,8 @@ struct RequestTimer {
     last_model_output_ms: Option<i64>,
     /// 最后一个输出项之后出现的工具结果里最晚的一个；之后再有输出项就清空。
     tool_output_after_model_output_ms: Option<i64>,
+    /// 不属于本线程的 record（复制来的父线程记录，或缺 `thread_id`）：用量与
+    /// 下一条 `token_count` 一致时拿它的时刻当结束时刻
     usage_record: Option<(i64, CumulativeTokens)>,
 }
 
@@ -367,18 +400,9 @@ impl RequestTimer {
                 self.last_model_output_ms = Some(timestamp_ms);
                 self.tool_output_after_model_output_ms = None;
             }
-            TimingLine::UsageRecord => {
-                // 行头只够判断种类，用量要解析整行；这类行很短
-                let usage = serde_json::from_str::<serde_json::Value>(line)
-                    .ok()
-                    .and_then(|value| {
-                        value
-                            .get("payload")
-                            .and_then(|payload| payload.get("usage"))
-                            .and_then(parse_cumulative_tokens)
-                    });
-                self.usage_record = usage.map(|usage| (timestamp_ms, usage));
-            }
+            // 要看 thread_id 才知道怎么用，由 parse_codex_file 整行解析后调用
+            // finish_record 或 note_usage_record
+            TimingLine::UsageRecord => {}
             TimingLine::TurnReset => {
                 *self = RequestTimer {
                     last_boundary_ms: self.last_boundary_ms.max(Some(timestamp_ms)),
@@ -423,12 +447,35 @@ impl RequestTimer {
             token_count_ms
         });
 
+        self.skip_finished_request(token_count_ms);
+        estimated_latency_ms(start_ms?, end_ms?)
+    }
+
+    /// 本线程的 record：响应在这一刻结束，结算这次请求的耗时。下一次请求不会
+    /// 早于它开始（远程压缩之后可能没有别的起点行）。
+    fn finish_record(&mut self, record_ms: Option<i64>) -> Option<i64> {
+        let start_ms = self.request_start_ms.or(self.last_boundary_ms);
+        *self = RequestTimer {
+            last_boundary_ms: self.last_boundary_ms.max(record_ms),
+            last_token_count_ms: self.last_token_count_ms,
+            ..RequestTimer::default()
+        };
+        estimated_latency_ms(start_ms?, record_ms?)
+    }
+
+    /// 记下不属于本线程的 record，留给下一条 `token_count` 核对（见 `usage_record`）
+    fn note_usage_record(&mut self, record_ms: Option<i64>, usage: CumulativeTokens) {
+        self.usage_record = record_ms.map(|record_ms| (record_ms, usage));
+    }
+
+    /// 这次请求已经结算（`finish_request` 刚算完，或在 record 行算过）：只把这条
+    /// `token_count` 记成下一次请求的起点
+    fn skip_finished_request(&mut self, token_count_ms: Option<i64>) {
         *self = RequestTimer {
             last_boundary_ms: self.last_boundary_ms.max(token_count_ms),
             last_token_count_ms: token_count_ms,
             ..RequestTimer::default()
         };
-        estimated_latency_ms(start_ms?, end_ms?)
     }
 }
 
@@ -448,7 +495,18 @@ struct ParsedCodexFile {
     root_meta_seen: bool,
     root_timestamp: Option<DateTime<Utc>>,
     parent: ParentResolution,
+    /// root meta 带 `history_base`（引用式 fork、revert）：继承的历史在另一个
+    /// rollout 里，本文件没有
+    has_history_base: bool,
+    /// root meta 的 `subagent_history_start_ordinal`。迁移来的子代理把它设在文件
+    /// 末尾，不能拿它丢弃之前的行（见 [`structural_replay_prefix`]）
+    subagent_history_start_ordinal: Option<i64>,
+    /// 本线程第一条 `thread_settings_applied`（`thread_id` 等于 root meta 的 id）
+    /// 的行号和时间戳
+    own_settings: Option<(i64, Option<DateTime<Utc>>)>,
     token_events: Vec<ParsedTokenEvent>,
+    /// 本线程的 `token_usage_record`，按文件顺序
+    records: Vec<UsageRecordEvent>,
     line_offset: i64,
     /// Bytes actually read, including an incomplete final record. Persisted in
     /// `last_byte_offset` only to detect file changes, never used as a seek
@@ -499,6 +557,13 @@ fn non_empty_string(value: Option<&serde_json::Value>) -> Option<String> {
         .and_then(serde_json::Value::as_str)
         .filter(|value| !value.is_empty())
         .map(str::to_owned)
+}
+
+/// 线程 ID 统一成小写带连字符的 UUID；不是 UUID 的原样返回
+fn normalize_thread_id(id: String) -> String {
+    uuid::Uuid::parse_str(&id)
+        .map(|value| value.hyphenated().to_string())
+        .unwrap_or(id)
 }
 
 fn thread_id_from_filename(path: &Path) -> Option<String> {
@@ -897,6 +962,103 @@ fn collect_jsonl_recursive(dir: &Path, files: &mut Vec<PathBuf>, depth: u32, max
     }
 }
 
+// ── token_usage_record ──
+//
+// Codex 0.153 起每次响应结束时先写一条 `token_usage_record`（`usage` 是这一次的
+// 用量），再把同一份用量计入累计值、发出 `token_count`。远程压缩只写 record，随后
+// 的 `token_count` 输入输出都是 0，只看 `token_count` 会漏掉压缩请求。
+//
+// - 只计 `payload.thread_id` 等于 root meta id 的 record。复制式 fork 会把父线程的
+//   record 一起复制进来，那些 `thread_id` 是父线程。
+// - 每条计费的 `token_count` 前面如果有还没配对的本线程 record，就算被覆盖，不再
+//   单独入库（[`take_pending_record`]）。
+// - `compacted.latest_token_usage_record` 是最近一条 record 的副本，不计。
+
+/// 本线程的一条 `token_usage_record`
+#[derive(Debug)]
+struct UsageRecordEvent {
+    line_offset: i64,
+    /// 已规范化，等于 root meta 的 id
+    thread_id: String,
+    turn_id: String,
+    response_id: String,
+    /// `thread_token_usage.total_tokens`：线程内单调递增，只用来区分去重键。fork 出来
+    /// 的线程里它含父线程的累计，不能拿来计费
+    thread_total_tokens: Option<u64>,
+    /// 这一次响应的用量
+    usage: CumulativeTokens,
+    model: String,
+    service_tier: ServiceTier,
+    timestamp: Option<String>,
+    latency_ms: Option<i64>,
+    /// 同一次响应的 `token_count`：(行号, event_index)
+    paired_token: Option<(i64, u32)>,
+}
+
+impl UsageRecordEvent {
+    /// 这几项都相同就是同一行写了两遍
+    fn identity(&self) -> (String, String, Option<u64>, CumulativeTokens) {
+        (
+            self.response_id.clone(),
+            self.turn_id.clone(),
+            self.thread_total_tokens,
+            self.usage.clone(),
+        )
+    }
+}
+
+/// 给一条计费的 `token_count` 找同一次响应的 record，返回 `records` 的下标。
+///
+/// record 写在它的 `token_count` 之前，用量完全相同。从最近的一条往前找用量相同的；
+/// 排在它前面、还没配上的 record（远程压缩）不会再有自己的 `token_count`，一并移出
+/// 队列，免得后面的响应错位配对。都对不上时按顺序取最早的一条。
+fn take_pending_record(
+    pending: &mut VecDeque<usize>,
+    records: &[UsageRecordEvent],
+    usage: Option<&CumulativeTokens>,
+) -> Option<usize> {
+    let matched = usage.and_then(|usage| {
+        pending
+            .iter()
+            .rposition(|&record| records[record].usage == *usage)
+    });
+    match matched {
+        Some(position) => pending.drain(..=position).next_back(),
+        None => pending.pop_front(),
+    }
+}
+
+/// 每条 record 的 request_id：`codex_session:resp-v1:{thread_id}:{response_id}`。
+///
+/// 按线程而不是按文件命名：归档移动、revert 新建的 rollout、原地迁移都不会产生新键。
+/// 第三方 Responses 兼容服务可能返回空的或重复的 response_id：为空，或同一个
+/// response_id 在文件里出现不止一次（完全相同的重复行在解析时已去掉）时，后面加上
+/// `#{turn_id}#{thread_token_usage.total_tokens}`。
+fn record_request_ids(records: &[UsageRecordEvent]) -> Vec<String> {
+    let mut occurrences: HashMap<&str, usize> = HashMap::new();
+    for record in records {
+        *occurrences.entry(record.response_id.as_str()).or_default() += 1;
+    }
+    records
+        .iter()
+        .map(|record| {
+            let request_id = format!(
+                "{CODEX_RESPONSE_REQUEST_ID_PREFIX}:{}:{}",
+                record.thread_id, record.response_id
+            );
+            if record.response_id.is_empty() || occurrences[record.response_id.as_str()] > 1 {
+                let total = record
+                    .thread_total_tokens
+                    .map(|total| total.to_string())
+                    .unwrap_or_default();
+                format!("{request_id}#{}#{total}", record.turn_id)
+            } else {
+                request_id
+            }
+        })
+        .collect()
+}
+
 fn parse_codex_file(
     file_path: &Path,
     root_thread_id: Option<String>,
@@ -908,6 +1070,13 @@ fn parse_codex_file(
     let mut root_timestamp = None;
     let mut meta_thread_id = None;
     let mut parent = ParentResolution::None;
+    let mut has_history_base = false;
+    let mut subagent_history_start_ordinal = None;
+    let mut own_settings = None;
+    let mut records: Vec<UsageRecordEvent> = Vec::new();
+    // 还没配上 token_count 的 record（`records` 的下标），见 [`take_pending_record`]
+    let mut pending_records = VecDeque::new();
+    let mut seen_records = HashSet::new();
     let mut current_model = "unknown".to_string();
     let mut current_tier = ServiceTier::Standard;
     // `total_token_usage` is session-cumulative, including across model and
@@ -959,7 +1128,10 @@ fn parse_codex_file(
         let is_event_msg = line.contains("\"event_msg\"");
         let is_turn_context = line.contains("\"turn_context\"");
         let is_session_meta = line.contains("\"session_meta\"");
-        if !is_event_msg && !is_turn_context && !is_session_meta {
+        // 只是预筛；是不是 record 看解析后的外层 type（`compacted` 行里有
+        // `latest_token_usage_record`，是快照副本，不能再计一次）
+        let is_usage_record = line.contains("\"token_usage_record\"");
+        if !is_event_msg && !is_turn_context && !is_session_meta && !is_usage_record {
             continue;
         }
         if is_event_msg
@@ -983,6 +1155,12 @@ fn parse_codex_file(
                 root_timestamp = parse_timestamp(value.get("timestamp"));
                 let payload = value.get("payload").unwrap_or(&serde_json::Value::Null);
                 parent = explicit_parent_from_meta(payload);
+                has_history_base = payload
+                    .get("history_base")
+                    .is_some_and(|base| !base.is_null());
+                subagent_history_start_ordinal = payload
+                    .get("subagent_history_start_ordinal")
+                    .and_then(serde_json::Value::as_i64);
 
                 meta_thread_id = non_empty_string(
                     payload
@@ -990,11 +1168,7 @@ fn parse_codex_file(
                         .or_else(|| payload.get("thread_id"))
                         .or_else(|| payload.get("threadId")),
                 )
-                .map(|id| {
-                    uuid::Uuid::parse_str(&id)
-                        .map(|value| value.hyphenated().to_string())
-                        .unwrap_or(id)
-                });
+                .map(normalize_thread_id);
                 if let (Some(filename_id), Some(meta_id)) =
                     (&root_thread_id, meta_thread_id.as_ref())
                 {
@@ -1036,6 +1210,51 @@ fn parse_codex_file(
                     }
                 }
             }
+            "token_usage_record" => {
+                let timestamp = value
+                    .get("timestamp")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_owned);
+                let timestamp_ms = timestamp.as_deref().and_then(parse_timestamp_millis);
+                let payload = value.get("payload").unwrap_or(&serde_json::Value::Null);
+                let Some(usage) = payload.get("usage").and_then(parse_cumulative_tokens) else {
+                    continue;
+                };
+                let own_thread_id = non_empty_string(payload.get("thread_id"))
+                    .map(normalize_thread_id)
+                    .filter(|thread_id| meta_thread_id.as_ref() == Some(thread_id));
+                let Some(thread_id) = own_thread_id else {
+                    // 复制来的父线程 record：不计费，也不参与配对
+                    timer.note_usage_record(timestamp_ms, usage);
+                    continue;
+                };
+                let mut record = UsageRecordEvent {
+                    line_offset,
+                    thread_id,
+                    turn_id: non_empty_string(payload.get("turn_id")).unwrap_or_default(),
+                    response_id: non_empty_string(payload.get("response_id")).unwrap_or_default(),
+                    thread_total_tokens: payload
+                        .get("thread_token_usage")
+                        .and_then(|usage| usage.get("total_tokens"))
+                        .and_then(serde_json::Value::as_u64),
+                    usage,
+                    model: current_model.clone(),
+                    service_tier: current_tier,
+                    timestamp,
+                    latency_ms: None,
+                    paired_token: None,
+                };
+                // 用量全为 0 的不算一次请求（与 token_count 一致）；完全相同的
+                // 重复行只算一次
+                if DeltaTokens::from_usage(&record.usage).is_zero()
+                    || !seen_records.insert(record.identity())
+                {
+                    continue;
+                }
+                record.latency_ms = timer.finish_record(timestamp_ms);
+                pending_records.push_back(records.len());
+                records.push(record);
+            }
             "event_msg" => {
                 let Some(payload) = value.get("payload") else {
                     continue;
@@ -1045,6 +1264,22 @@ fn parse_codex_file(
                     Some("thread_settings_applied") => {
                         if let Some(settings) = payload.get("thread_settings") {
                             current_tier = codex_service_tier(settings);
+                            // 子代理的第一条 turn_context 可能晚于它的第一次请求（远程
+                            // 压缩），这时只有这里给出本线程的模型
+                            if let Some(model) = settings
+                                .get("model")
+                                .and_then(serde_json::Value::as_str)
+                                .filter(|model| !model.is_empty())
+                            {
+                                current_model = normalize_codex_model(model);
+                            }
+                        }
+                        let is_own = non_empty_string(payload.get("thread_id"))
+                            .map(normalize_thread_id)
+                            .is_some_and(|thread_id| meta_thread_id.as_ref() == Some(&thread_id));
+                        if is_own && own_settings.is_none() {
+                            own_settings =
+                                Some((line_offset, parse_timestamp(value.get("timestamp"))));
                         }
                         continue;
                     }
@@ -1093,16 +1328,11 @@ fn parse_codex_file(
                         cache_write: 0,
                         output: 0,
                     }
-                } else if let Some(last) = last {
+                } else if let Some(last) = last.as_ref() {
                     // Codex provides the exact per-request usage. Prefer it to
                     // subtracting cumulative snapshots, which may come from
                     // multiple independently advancing rate-limit lanes.
-                    DeltaTokens {
-                        input: last.input as u32,
-                        cached_input: last.cached_input as u32,
-                        cache_write: last.cache_write as u32,
-                        output: last.output as u32,
-                    }
+                    DeltaTokens::from_usage(last)
                 } else if let Some(total) = total.as_ref() {
                     compute_delta(&total_high_water, total)
                 } else {
@@ -1115,12 +1345,8 @@ fn parse_codex_file(
                         total_high_water = Some(total);
                     }
                 }
-                let cached_input = delta.cached_input.min(delta.input);
-                let delta = DeltaTokens {
-                    cached_input,
-                    cache_write: delta.cache_write.min(delta.input - cached_input),
-                    ..delta
-                };
+                let delta = delta.clamped();
+                // 被 record 覆盖的也照常编号：未覆盖事件的 request_id 与旧版本一致
                 let nonzero_index = if delta.is_zero() {
                     None
                 } else {
@@ -1133,16 +1359,26 @@ fn parse_codex_file(
                     .get("timestamp")
                     .and_then(serde_json::Value::as_str)
                     .map(str::to_owned);
-                // 重复快照（限额刷新时重发的）不是一次请求，不参与计时
-                let latency_ms = nonzero_index.and_then(|_| {
-                    timer.finish_request(
-                        timestamp.as_deref().and_then(parse_timestamp_millis),
-                        request_usage.as_ref(),
-                    )
+                let timestamp_ms = timestamp.as_deref().and_then(parse_timestamp_millis);
+                let covering_record = nonzero_index.and_then(|_| {
+                    take_pending_record(&mut pending_records, &records, request_usage.as_ref())
                 });
+                // 重复快照（限额刷新时重发的）不是一次请求，不参与计时；被 record
+                // 覆盖的那次已在 record 行结算
+                let latency_ms = match (nonzero_index, covering_record) {
+                    (Some(index), Some(record)) => {
+                        records[record].paired_token = Some((line_offset, index));
+                        timer.skip_finished_request(timestamp_ms);
+                        None
+                    }
+                    (Some(_), None) => timer.finish_request(timestamp_ms, request_usage.as_ref()),
+                    (None, _) => None,
+                };
 
                 token_events.push(ParsedTokenEvent {
                     line_offset,
+                    ordinal: value.get("ordinal").and_then(serde_json::Value::as_i64),
+                    covered_by_record: covering_record.is_some(),
                     signature,
                     delta,
                     event_index: nonzero_index,
@@ -1162,10 +1398,14 @@ fn parse_codex_file(
         root_meta_seen,
         root_timestamp,
         parent,
+        has_history_base,
+        subagent_history_start_ordinal,
+        own_settings,
         token_events,
+        has_billable_tokens: has_billable_tokens || !records.is_empty(),
+        records,
         line_offset,
         observed_bytes,
-        has_billable_tokens,
     })
 }
 
@@ -1333,6 +1573,58 @@ fn rewritten_burst_len(child: &[ParsedTokenEvent]) -> usize {
     }
 }
 
+/// 派生时 Codex 把继承的历史和本线程第一条 `thread_settings_applied` 一次写完，后者
+/// 与 root meta 只差几十毫秒（本机实测 11–24 毫秒）。差得更多的那条是之后 resume
+/// 时写的：0.152 之前创建的 fork 被新版本 resume 后也会有本线程的设置事件，它前面
+/// 还有 fork 自己的用量，不能当作继承段的边界。
+const FORK_SETTINGS_MAX_DELAY_MS: i64 = 10_000;
+
+/// 有父线程的文件里，不读父文件就能确定的继承段长度（`token_events` 开头要跳过的
+/// 条数）。返回 None 时退回签名对齐和突发判断（[`replay_prefix_len`]）。
+///
+/// 只影响没被 record 覆盖的 `token_count`；record 按 `thread_id` 过滤，不经过这里。
+/// 不用 `ordinal < subagent_history_start_ordinal` 丢行：迁移来的子代理把边界设在
+/// 文件末尾，子代理自己的用量也在边界之前。
+fn structural_replay_prefix(parsed: &ParsedCodexFile) -> Option<usize> {
+    // 计费的 token_count 都被 record 覆盖了：继承段多长都不影响结果
+    if !parsed
+        .token_events
+        .iter()
+        .any(|event| event.event_index.is_some() && !event.covered_by_record)
+    {
+        return Some(0);
+    }
+    // 引用式 fork、revert：继承的历史留在被引用的 rollout 里
+    if parsed.has_history_base {
+        return Some(0);
+    }
+    // 原生分页子代理：复制父历史时去掉了 token_count，边界之前没有用量
+    if let Some(start) = parsed.subagent_history_start_ordinal {
+        if parsed
+            .token_events
+            .iter()
+            .all(|event| event.ordinal.is_some_and(|ordinal| ordinal >= start))
+        {
+            return Some(0);
+        }
+    }
+    // 0.152 起的复制式继承：本线程第一条 thread_settings_applied 紧跟在复制段之后
+    let (settings_line, settings_at) = parsed.own_settings?;
+    let written_at_fork = match (parsed.root_timestamp, settings_at) {
+        (Some(root_at), Some(settings_at)) => {
+            (0..=FORK_SETTINGS_MAX_DELAY_MS).contains(&(settings_at - root_at).num_milliseconds())
+        }
+        _ => false,
+    };
+    written_at_fork.then(|| {
+        parsed
+            .token_events
+            .iter()
+            .filter(|event| event.line_offset < settings_line)
+            .count()
+    })
+}
+
 fn mark_deferred(
     file_path: &Path,
     modified: i64,
@@ -1371,6 +1663,18 @@ fn mark_deferred(
 /// 批间释放锁让读侧插队——兼顾吞吐（避免逐行 autocommit 的每行 fsync）
 /// 与大文件重导期间面板的响应性。
 const CODEX_INSERT_BATCH_SIZE: usize = 1000;
+
+/// 一次同步要写入的一行：没被 record 覆盖的 `token_count`，或本线程的 record
+struct CodexWrite<'a> {
+    request_id: String,
+    delta: DeltaTokens,
+    model: &'a str,
+    service_tier: ServiceTier,
+    timestamp: Option<&'a str>,
+    latency_ms: Option<i64>,
+    /// 写入后删掉的旧行：配对的 `token_count` 按旧规则导入时的 request_id
+    replaces: Option<String>,
+}
 
 fn update_codex_sync_state_on_conn(
     conn: &rusqlite::Connection,
@@ -1473,9 +1777,10 @@ fn sync_single_codex_file(
         ));
     }
 
-    let replay_prefix = match &parsed.parent {
-        ParentResolution::None => 0,
-        ParentResolution::Deferred(reason) => {
+    // 继承段只对没被 record 覆盖的 token_count 起作用（record 不经过这里）
+    let replay_prefix = match (&parsed.parent, structural_replay_prefix(&parsed)) {
+        (ParentResolution::None, _) => 0,
+        (ParentResolution::Deferred(reason), _) => {
             return Ok(mark_deferred(
                 file_path,
                 file_modified,
@@ -1483,7 +1788,9 @@ fn sync_single_codex_file(
                 PendingReason::Stable(reason.clone()),
             ));
         }
-        ParentResolution::Parent(parent_id) => {
+        // 结构信息能确定继承段：不读父文件，父文件缺失或仍在写都不推迟
+        (ParentResolution::Parent(_), Some(prefix)) => prefix,
+        (ParentResolution::Parent(parent_id), None) => {
             let Some(cutoff) = parsed.root_timestamp else {
                 return Ok(mark_deferred(
                     file_path,
@@ -1552,11 +1859,15 @@ fn sync_single_codex_file(
     }
 
     let mut result = CodexFileSyncResult::default();
-    let mut to_insert: Vec<(&ParsedTokenEvent, u32)> = Vec::new();
+    let mut to_insert: Vec<CodexWrite> = Vec::new();
     for (token_offset, event) in parsed.token_events.iter().enumerate() {
         let Some(event_index) = event.event_index else {
             continue;
         };
+        // 由 record 计费；旧版本导入过的行随 record 一起删掉（见下）
+        if event.covered_by_record {
+            continue;
+        }
         if token_offset < replay_prefix {
             if event.line_offset > last_offset {
                 result.skipped = result.skipped.saturating_add(1);
@@ -1566,7 +1877,45 @@ fn sync_single_codex_file(
         if event.line_offset <= last_offset {
             continue;
         }
-        to_insert.push((event, event_index));
+        to_insert.push(CodexWrite {
+            request_id: format!("{CODEX_THREAD_REQUEST_ID_PREFIX}:{root_thread_id}:{event_index}"),
+            delta: event.delta,
+            model: &event.model,
+            service_tier: event.service_tier,
+            timestamp: event.timestamp.as_deref(),
+            latency_ms: event.latency_ms,
+            replaces: None,
+        });
+    }
+    let record_ids = record_request_ids(&parsed.records);
+    for (record, request_id) in parsed.records.iter().zip(record_ids) {
+        // 游标可能停在 record 和它的 token_count 之间：旧版本没导入 record，
+        // token_count 现在又被覆盖，所以按配对的 token_count 补上
+        let paired_after_cursor = record
+            .paired_token
+            .filter(|(token_line, _)| *token_line > last_offset);
+        if record.line_offset <= last_offset && paired_after_cursor.is_none() {
+            continue;
+        }
+        // 配对的 token_count 可能已按旧规则导入过（游标清零、文件被替换后重扫），
+        // 删掉那一行。record 低于导入下限时不会插入，旧行要留着，否则这次响应就丢了
+        let below_floor = crate::services::usage_rebuild::is_below_import_floor(codex_created_at(
+            record.timestamp.as_deref(),
+        ));
+        let replaces = paired_after_cursor
+            .filter(|_| !below_floor)
+            .map(|(_, event_index)| {
+                format!("{CODEX_THREAD_REQUEST_ID_PREFIX}:{root_thread_id}:{event_index}")
+            });
+        to_insert.push(CodexWrite {
+            request_id,
+            delta: DeltaTokens::from_usage(&record.usage).clamped(),
+            model: &record.model,
+            service_tier: record.service_tier,
+            timestamp: record.timestamp.as_deref(),
+            latency_ms: record.latency_ms,
+            replaces,
+        });
     }
 
     // 分批事务写库：逐行 autocommit（journal_mode=delete 下每行一整套
@@ -1576,8 +1925,8 @@ fn sync_single_codex_file(
     //
     // session_id 记 root meta 的线程 ID：双段文件名（thread/revert 的替换
     // rollout）下是前置 UUID，与会话管理器侧的会话身份同口径；尾部 rollout
-    // ID 只承担 request_id 去重键（event_index 按物理文件计数，不能改用
-    // 前置 ID）。
+    // ID 只承担 token_count 行的 request_id 去重键（event_index 按物理文件
+    // 计数，不能改用前置 ID）。record 行的 request_id 用线程 ID。
     let session_thread_id = parsed.meta_thread_id.as_deref().unwrap_or(root_thread_id);
     let batch_count = to_insert.len().div_ceil(CODEX_INSERT_BATCH_SIZE);
     for (batch_index, batch) in to_insert.chunks(CODEX_INSERT_BATCH_SIZE).enumerate() {
@@ -1589,24 +1938,31 @@ fn sync_single_codex_file(
 
         let mut batch_imported = 0u32;
         let mut batch_skipped = 0u32;
-        for (event, event_index) in batch {
-            let request_id =
-                format!("{CODEX_THREAD_REQUEST_ID_PREFIX}:{root_thread_id}:{event_index}");
-            match insert_codex_session_entry_on_conn(
+        for write in batch {
+            let inserted = insert_codex_session_entry_on_conn(
                 &tx,
-                &request_id,
-                &event.delta,
-                &event.model,
-                event.service_tier,
+                &write.request_id,
+                &write.delta,
+                write.model,
+                write.service_tier,
                 Some(session_thread_id),
-                event.timestamp.as_deref(),
-                event.latency_ms,
+                write.timestamp,
+                write.latency_ms,
                 &mut pass.pricing,
-            ) {
+            );
+            // 新行写入（或早已存在）之后才删旧行；插入出错时旧行留着
+            if let (Ok(_), Some(replaced)) = (&inserted, &write.replaces) {
+                tx.prepare_cached("DELETE FROM proxy_request_logs WHERE request_id = ?1")
+                    .and_then(|mut stmt| stmt.execute([replaced]))
+                    .map_err(|e| {
+                        AppError::Database(format!("删除被 record 取代的 Codex 记录失败: {e}"))
+                    })?;
+            }
+            match inserted {
                 Ok(true) => batch_imported += 1,
                 Ok(false) => batch_skipped += 1,
                 Err(e) => {
-                    log::warn!("[CODEX-SYNC] 插入失败 ({request_id}): {e}");
+                    log::warn!("[CODEX-SYNC] 插入失败 ({}): {e}", write.request_id);
                     batch_skipped += 1;
                 }
             }
@@ -1654,6 +2010,22 @@ fn insert_codex_session_entry(
     )
 }
 
+/// 入库的 `created_at`（秒）：事件时间戳，取不到时用当前时间
+fn codex_created_at(timestamp: Option<&str>) -> i64 {
+    timestamp
+        .and_then(|ts| {
+            chrono::DateTime::parse_from_rfc3339(ts)
+                .ok()
+                .map(|dt| dt.timestamp())
+        })
+        .unwrap_or_else(|| {
+            SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .map(|d| d.as_secs() as i64)
+                .unwrap_or(0)
+        })
+}
+
 /// 插入单条 Codex 会话记录到 proxy_request_logs。
 ///
 /// 调用方负责持锁/事务；`pricing_cache` 按原始 model 字符串键控（
@@ -1672,18 +2044,7 @@ fn insert_codex_session_entry_on_conn(
     latency_ms: Option<i64>,
     pricing_cache: &mut HashMap<String, Option<ModelPricing>>,
 ) -> Result<bool, AppError> {
-    let created_at = timestamp
-        .and_then(|ts| {
-            chrono::DateTime::parse_from_rfc3339(ts)
-                .ok()
-                .map(|dt| dt.timestamp())
-        })
-        .unwrap_or_else(|| {
-            SystemTime::now()
-                .duration_since(SystemTime::UNIX_EPOCH)
-                .map(|d| d.as_secs() as i64)
-                .unwrap_or(0)
-        });
+    let created_at = codex_created_at(timestamp);
 
     // 保留期以前的日期已经汇总，再导入会在下次汇总时重复计入
     if crate::services::usage_rebuild::is_below_import_floor(created_at) {
@@ -3943,5 +4304,863 @@ mod tests {
         ];
 
         assert_eq!(parsed_latencies(&lines), vec![Some(30_090), Some(10_100)]);
+    }
+
+    // ── token_usage_record ──
+    //
+    // 样例直接写成 rollout 的 JSONL，ID 和 usage 用简写，见 [`write_fixture`]。
+
+    const MAIN_ID: &str = "00000000-0000-4000-8000-000000000010";
+    const FORK_ID: &str = "00000000-0000-4000-8000-000000000020";
+    const REVERT_THREAD_ID: &str = "00000000-0000-4000-8000-000000000030";
+    const REVERT_ROLLOUT_ID: &str = "00000000-0000-4000-8000-000000000031";
+
+    /// Codex 的 `TokenUsage`；`total_tokens = input + output`
+    fn usage_json(
+        input: u64,
+        cached: u64,
+        cache_write: u64,
+        output: u64,
+        reasoning: u64,
+    ) -> String {
+        serde_json::json!({
+            "input_tokens": input,
+            "cached_input_tokens": cached,
+            "cache_write_input_tokens": cache_write,
+            "output_tokens": output,
+            "reasoning_output_tokens": reasoning,
+            "total_tokens": input + output
+        })
+        .to_string()
+    }
+
+    fn expand_usage(line: &str) -> String {
+        let mut expanded = String::new();
+        let mut rest = line;
+        while let Some(start) = rest.find("U(") {
+            let end = start + rest[start..].find(')').expect("U( 缺少右括号");
+            let fields = rest[start + 2..end]
+                .split(',')
+                .map(|field| field.trim().parse::<u64>().unwrap())
+                .collect::<Vec<_>>();
+            expanded.push_str(&rest[..start]);
+            expanded.push_str(&usage_json(
+                fields[0], fields[1], fields[2], fields[3], fields[4],
+            ));
+            rest = &rest[end + 1..];
+        }
+        expanded.push_str(rest);
+        expanded
+    }
+
+    /// 写一份 JSONL 样例：每行去掉首尾空白，`"P"` `"C"` `"M"` `"F"` `"T"` 换成测试用的
+    /// UUID，`U(i,c,w,o,r)` 展开成 usage 对象
+    fn write_fixture(path: &Path, text: &str) {
+        let ids = [
+            ("P", PARENT_ID),
+            ("C", CHILD_A_ID),
+            ("M", MAIN_ID),
+            ("F", FORK_ID),
+            ("T", REVERT_THREAD_ID),
+        ];
+        let mut contents = String::new();
+        for line in text.lines().map(str::trim).filter(|line| !line.is_empty()) {
+            let mut line = expand_usage(line);
+            for (short, id) in ids {
+                line = line.replace(&format!("\"{short}\""), &format!("\"{id}\""));
+            }
+            contents.push_str(&line);
+            contents.push('\n');
+        }
+        fs::write(path, contents).unwrap();
+    }
+
+    fn fixture_path(dir: &Path, stamp: &str, thread_id: &str) -> PathBuf {
+        dir.join(format!("rollout-{stamp}-{thread_id}.jsonl"))
+    }
+
+    #[derive(Debug)]
+    struct StoredRow {
+        request_id: String,
+        model: String,
+        /// 不含缓存的输入
+        input: i64,
+        cache_read: i64,
+        cache_creation: i64,
+        output: i64,
+        session_id: String,
+        service_tier: String,
+        created_at: i64,
+        latency_ms: i64,
+    }
+
+    fn stored_rows(db: &Database) -> Result<Vec<StoredRow>, AppError> {
+        let conn = lock_conn!(db.conn);
+        let mut stmt = conn.prepare(
+            "SELECT request_id, model, input_tokens, cache_read_tokens, cache_creation_tokens,
+                    output_tokens, session_id, service_tier, created_at, latency_ms
+             FROM proxy_request_logs WHERE data_source = 'codex_session'
+             ORDER BY request_id",
+        )?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok(StoredRow {
+                    request_id: row.get(0)?,
+                    model: row.get(1)?,
+                    input: row.get(2)?,
+                    cache_read: row.get(3)?,
+                    cache_creation: row.get(4)?,
+                    output: row.get(5)?,
+                    session_id: row.get(6)?,
+                    service_tier: row.get(7)?,
+                    created_at: row.get(8)?,
+                    latency_ms: row.get(9)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    fn stored_request_ids(db: &Database) -> Result<Vec<String>, AppError> {
+        Ok(stored_rows(db)?
+            .into_iter()
+            .map(|row| row.request_id)
+            .collect())
+    }
+
+    fn thread_request_id(thread_id: &str, event_index: u32) -> String {
+        format!("{CODEX_THREAD_REQUEST_ID_PREFIX}:{thread_id}:{event_index}")
+    }
+
+    fn response_request_id(thread_id: &str, response_id: &str) -> String {
+        format!("{CODEX_RESPONSE_REQUEST_ID_PREFIX}:{thread_id}:{response_id}")
+    }
+
+    /// 父文件早就不写了：签名对齐按已有内容进行，不等它补上
+    fn age_file(path: &Path) {
+        fs::OpenOptions::new()
+            .append(true)
+            .open(path)
+            .unwrap()
+            .set_times(
+                fs::FileTimes::new().set_modified(SystemTime::now() - PARENT_CATCH_UP_WINDOW * 2),
+            )
+            .unwrap();
+    }
+
+    fn unix_seconds(timestamp: &str) -> i64 {
+        DateTime::parse_from_rfc3339(timestamp).unwrap().timestamp()
+    }
+
+    /// T1：远程压缩只写 record，随后的 token_count 输入输出都是 0。父文件不在也不推迟；
+    /// 模型取本线程的 thread_settings_applied，不取复制来的 turn_context
+    #[test]
+    #[serial_test::serial]
+    fn test_remote_compaction_record_is_imported_without_parent() -> Result<(), AppError> {
+        clear_codex_replay_caches();
+        let db = Database::memory()?;
+        let temp = tempdir().unwrap();
+        let child = fixture_path(temp.path(), "2026-09-16T03-30-24", CHILD_A_ID);
+        write_fixture(
+            &child,
+            r#"
+            {"timestamp":"2026-09-16T03:30:24.000Z","ordinal":0,"type":"session_meta","payload":{"id":"C","session_id":"P","forked_from_id":"P","parent_thread_id":"P","timestamp":"2026-09-16T03:30:24.000Z","cli_version":"0.153.4","source":{"subagent":{"thread_spawn":{"parent_thread_id":"P","depth":1}}},"thread_source":"subagent","history_mode":"paginated","subagent_history_start_ordinal":3}}
+            {"timestamp":"2026-09-16T03:30:24.001Z","ordinal":1,"type":"session_meta","payload":{"id":"P","session_id":"P","cli_version":"0.153.4","source":"vscode","history_mode":"paginated"}}
+            {"timestamp":"2026-09-16T03:30:24.002Z","ordinal":2,"type":"turn_context","payload":{"model":"gpt-5.6-sol"}}
+            {"timestamp":"2026-09-16T03:30:24.010Z","ordinal":3,"type":"event_msg","payload":{"type":"thread_settings_applied","thread_id":"C","thread_settings":{"model":"gpt-5.6-terra","service_tier":"priority"}}}
+            {"timestamp":"2026-09-16T03:30:24.020Z","ordinal":4,"type":"event_msg","payload":{"type":"task_started","turn_id":"tc1"}}
+            {"timestamp":"2026-09-16T03:30:51.000Z","ordinal":5,"type":"token_usage_record","payload":{"thread_id":"C","turn_id":"tc1","session_id":"P","root_turn_id":"tp1","response_id":"resp_compact_1","usage":U(26705,0,0,491,0),"turn_token_usage":U(26705,0,0,491,0),"thread_token_usage":U(26705,0,0,491,0)}}
+            {"timestamp":"2026-09-16T03:30:51.010Z","ordinal":6,"type":"compacted","payload":{"message":"","compaction_response_id":"resp_compact_1","latest_token_usage_record":{"thread_id":"C","turn_id":"tc1","session_id":"P","root_turn_id":"tp1","response_id":"resp_compact_1","usage":U(26705,0,0,491,0),"turn_token_usage":U(26705,0,0,491,0),"thread_token_usage":U(26705,0,0,491,0)}}}
+            {"timestamp":"2026-09-16T03:30:51.020Z","ordinal":7,"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":U(0,0,0,0,0),"last_token_usage":{"input_tokens":0,"cached_input_tokens":0,"cache_write_input_tokens":0,"output_tokens":0,"reasoning_output_tokens":0,"total_tokens":5321},"model_context_window":272000},"rate_limits":null}}
+            "#,
+        );
+
+        let result = sync_test_file(&db, &child, &[&child])?;
+        assert_eq!((result.imported, result.deferred), (1, false));
+        let rows = stored_rows(&db)?;
+        assert_eq!(rows.len(), 1, "compacted 里的快照不能再算一行: {rows:?}");
+        let row = &rows[0];
+        assert_eq!(
+            row.request_id,
+            response_request_id(CHILD_A_ID, "resp_compact_1")
+        );
+        assert_eq!(row.session_id, CHILD_A_ID);
+        assert_eq!(row.model, "gpt-5.6-terra");
+        assert_eq!(row.service_tier, ServiceTier::Priority.as_db_str());
+        assert_eq!((row.input, row.cache_read, row.output), (26_705, 0, 491));
+        assert_eq!(row.created_at, unix_seconds("2026-09-16T03:30:51Z"));
+        Ok(())
+    }
+
+    /// T2：主线程 record 与 token_count 成对，限额刷新重发的快照不算；耗时在 record
+    /// 行结算
+    #[test]
+    fn test_records_replace_their_token_counts() -> Result<(), AppError> {
+        let db = Database::memory()?;
+        let temp = tempdir().unwrap();
+        let file = fixture_path(temp.path(), "2026-10-01T10-00-00", MAIN_ID);
+        write_fixture(
+            &file,
+            r#"
+            {"timestamp":"2026-10-01T10:00:00.000Z","ordinal":0,"type":"session_meta","payload":{"id":"M","session_id":"M","cli_version":"0.160.1","source":"cli","history_mode":"paginated"}}
+            {"timestamp":"2026-10-01T10:00:00.100Z","ordinal":1,"type":"turn_context","payload":{"model":"gpt-5.6-sol"}}
+            {"timestamp":"2026-10-01T10:00:05.000Z","ordinal":2,"type":"token_usage_record","payload":{"thread_id":"M","turn_id":"t1","session_id":"M","root_turn_id":"t1","response_id":"resp_a","usage":U(20000,15000,0,300,120),"turn_token_usage":U(20000,15000,0,300,120),"thread_token_usage":U(20000,15000,0,300,120)}}
+            {"timestamp":"2026-10-01T10:00:05.002Z","ordinal":3,"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":U(20000,15000,0,300,120),"last_token_usage":U(20000,15000,0,300,120)},"rate_limits":{"limit_id":"codex"}}}
+            {"timestamp":"2026-10-01T10:00:05.300Z","ordinal":4,"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":U(20000,15000,0,300,120),"last_token_usage":U(20000,15000,0,300,120)},"rate_limits":{"limit_id":"codex_other"}}}
+            {"timestamp":"2026-10-01T10:00:09.000Z","ordinal":5,"type":"token_usage_record","payload":{"thread_id":"M","turn_id":"t1","session_id":"M","root_turn_id":"t1","response_id":"resp_b","usage":U(21000,20000,0,50,0),"turn_token_usage":U(41000,35000,0,350,120),"thread_token_usage":U(41000,35000,0,350,120)}}
+            {"timestamp":"2026-10-01T10:00:09.001Z","ordinal":6,"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":U(41000,35000,0,350,120),"last_token_usage":U(21000,20000,0,50,0)},"rate_limits":{"limit_id":"codex"}}}
+            "#,
+        );
+
+        assert_eq!(sync_test_file(&db, &file, &[&file])?.imported, 2);
+        let rows = stored_rows(&db)?
+            .into_iter()
+            .map(|row| {
+                (
+                    row.request_id,
+                    row.input,
+                    row.cache_read,
+                    row.output,
+                    row.latency_ms,
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            rows,
+            vec![
+                (
+                    response_request_id(MAIN_ID, "resp_a"),
+                    5_000,
+                    15_000,
+                    300,
+                    4_900
+                ),
+                (
+                    response_request_id(MAIN_ID, "resp_b"),
+                    1_000,
+                    20_000,
+                    50,
+                    3_998
+                ),
+            ]
+        );
+        assert_unchanged_codex_file_is_skipped(&db, &file)?;
+        assert_eq!(stored_rows(&db)?.len(), 2);
+        Ok(())
+    }
+
+    const CROSS_VERSION_ROLLOUT: &str = r#"
+        {"timestamp":"2026-09-30T08:00:00.000Z","type":"session_meta","payload":{"id":"M","cli_version":"0.152.1","source":"cli","history_mode":"legacy"}}
+        {"timestamp":"2026-09-30T08:00:01.000Z","type":"turn_context","payload":{"model":"gpt-5.6-sol"}}
+        {"timestamp":"2026-09-30T08:00:05.000Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":U(1000,0,0,10,0),"last_token_usage":U(1000,0,0,10,0)}}}
+        {"timestamp":"2026-10-02T09:00:00.000Z","type":"turn_context","payload":{"model":"gpt-5.6-sol"}}
+        {"timestamp":"2026-10-02T09:00:04.000Z","type":"token_usage_record","payload":{"thread_id":"M","turn_id":"t2","session_id":"M","root_turn_id":"t2","response_id":"resp_c","usage":U(3000,1000,0,20,0),"turn_token_usage":U(3000,1000,0,20,0),"thread_token_usage":U(3000,1000,0,20,0)}}
+        {"timestamp":"2026-10-02T09:00:04.002Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":U(4000,1000,0,30,0),"last_token_usage":U(3000,1000,0,20,0)}}}
+    "#;
+
+    /// T3：0.153 之前写的部分没有 record，按旧规则入库，request_id 不变
+    #[test]
+    fn test_cross_version_rollout_keeps_old_ids_before_records() -> Result<(), AppError> {
+        let db = Database::memory()?;
+        let temp = tempdir().unwrap();
+        let file = fixture_path(temp.path(), "2026-09-30T08-00-00", MAIN_ID);
+        write_fixture(&file, CROSS_VERSION_ROLLOUT);
+
+        assert_eq!(sync_test_file(&db, &file, &[&file])?.imported, 2);
+        assert_eq!(
+            stored_request_ids(&db)?,
+            vec![
+                response_request_id(MAIN_ID, "resp_c"),
+                thread_request_id(MAIN_ID, 1),
+            ]
+        );
+        Ok(())
+    }
+
+    /// T3b：旧版本已按 token_count 导入过整份文件，游标清零后重扫：被 record 覆盖的
+    /// 那一行换成 record，没被覆盖的保留，每次响应只计一次
+    #[test]
+    fn test_rescan_replaces_rows_imported_from_covered_token_counts() -> Result<(), AppError> {
+        let db = Database::memory()?;
+        let temp = tempdir().unwrap();
+        let file = fixture_path(temp.path(), "2026-09-30T08-00-00", MAIN_ID);
+        write_fixture(&file, CROSS_VERSION_ROLLOUT);
+        let old_rows = [
+            (1, (1_000, 0, 10), "2026-09-30T08:00:05Z"),
+            (2, (3_000, 1_000, 20), "2026-10-02T09:00:04Z"),
+        ];
+        for (event_index, (input, cached_input, output), timestamp) in old_rows {
+            let delta = DeltaTokens {
+                input,
+                cached_input,
+                cache_write: 0,
+                output,
+            };
+            assert!(insert_codex_session_entry(
+                &db,
+                &thread_request_id(MAIN_ID, event_index),
+                &delta,
+                "gpt-5.6-sol",
+                Some(MAIN_ID),
+                Some(timestamp),
+            )?);
+        }
+
+        sync_test_file(&db, &file, &[&file])?;
+        let expected = vec![
+            response_request_id(MAIN_ID, "resp_c"),
+            thread_request_id(MAIN_ID, 1),
+        ];
+        assert_eq!(stored_request_ids(&db)?, expected);
+        let totals: (i64, i64) = {
+            let conn = lock_conn!(db.conn);
+            conn.query_row(
+                "SELECT sum(input_tokens + cache_read_tokens), sum(output_tokens)
+                 FROM proxy_request_logs",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )?
+        };
+        assert_eq!(totals, (4_000, 30));
+
+        assert_unchanged_codex_file_is_skipped(&db, &file)?;
+        {
+            let conn = lock_conn!(db.conn);
+            conn.execute("DELETE FROM session_log_sync", [])?;
+        }
+        sync_test_file(&db, &file, &[&file])?;
+        assert_eq!(stored_request_ids(&db)?, expected);
+        Ok(())
+    }
+
+    const COPIED_FORK_PARENT: &str = r#"
+        {"timestamp":"2026-10-03T11:00:00.000Z","type":"session_meta","payload":{"id":"P","cli_version":"0.157.0","source":"cli","history_mode":"legacy"}}
+        {"timestamp":"2026-10-03T11:00:01.000Z","type":"turn_context","payload":{"model":"gpt-5.6-sol"}}
+        {"timestamp":"2026-10-03T11:00:05.000Z","type":"token_usage_record","payload":{"thread_id":"P","turn_id":"tp1","session_id":"P","root_turn_id":"tp1","response_id":"resp_p1","usage":U(5000,0,0,40,0),"turn_token_usage":U(5000,0,0,40,0),"thread_token_usage":U(5000,0,0,40,0)}}
+        {"timestamp":"2026-10-03T11:00:05.002Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":U(5000,0,0,40,0),"last_token_usage":U(5000,0,0,40,0)}}}
+    "#;
+
+    /// 复制段时间戳是 fork 时刻
+    const COPIED_FORK_CHILD: &str = r#"
+        {"timestamp":"2026-10-03T12:00:00.000Z","type":"session_meta","payload":{"id":"F","forked_from_id":"P","cli_version":"0.157.0","source":"cli","history_mode":"legacy"}}
+        {"timestamp":"2026-10-03T12:00:00.001Z","type":"session_meta","payload":{"id":"P","cli_version":"0.157.0","source":"cli","history_mode":"legacy"}}
+        {"timestamp":"2026-10-03T12:00:00.002Z","type":"turn_context","payload":{"model":"gpt-5.6-sol"}}
+        {"timestamp":"2026-10-03T12:00:00.003Z","type":"token_usage_record","payload":{"thread_id":"P","turn_id":"tp1","session_id":"P","root_turn_id":"tp1","response_id":"resp_p1","usage":U(5000,0,0,40,0),"turn_token_usage":U(5000,0,0,40,0),"thread_token_usage":U(5000,0,0,40,0)}}
+        {"timestamp":"2026-10-03T12:00:00.004Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":U(5000,0,0,40,0),"last_token_usage":U(5000,0,0,40,0)}}}
+        {"timestamp":"2026-10-03T12:00:00.010Z","type":"event_msg","payload":{"type":"thread_settings_applied","thread_id":"F","thread_settings":{"model":"gpt-5.6-sol"}}}
+        {"timestamp":"2026-10-03T12:00:30.000Z","type":"token_usage_record","payload":{"thread_id":"F","turn_id":"tf1","session_id":"F","root_turn_id":"tf1","response_id":"resp_f1","usage":U(6000,5000,0,70,0),"turn_token_usage":U(6000,5000,0,70,0),"thread_token_usage":U(11000,5000,0,110,0)}}
+        {"timestamp":"2026-10-03T12:00:30.002Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":U(11000,5000,0,110,0),"last_token_usage":U(6000,5000,0,70,0)}}}
+    "#;
+
+    fn assert_only_fork_record_is_stored(db: &Database) -> Result<(), AppError> {
+        let fork_rows = stored_rows(db)?
+            .into_iter()
+            .filter(|row| row.session_id == FORK_ID)
+            .map(|row| (row.request_id, row.input, row.cache_read, row.output))
+            .collect::<Vec<_>>();
+        // thread_token_usage 含父线程的累计，计费只用这一次的 usage
+        assert_eq!(
+            fork_rows,
+            vec![(response_request_id(FORK_ID, "resp_f1"), 1_000, 5_000, 70)]
+        );
+        Ok(())
+    }
+
+    /// T4：复制式 fork 带着父线程的 record。父线程的 record 不计也不配对；复制来的
+    /// token_count 在本线程第一条 thread_settings_applied 之前，不读父文件就能跳过
+    #[test]
+    #[serial_test::serial]
+    fn test_copied_fork_skips_parent_records_and_history_without_parent_file(
+    ) -> Result<(), AppError> {
+        clear_codex_replay_caches();
+        let db = Database::memory()?;
+        let temp = tempdir().unwrap();
+        let parent = fixture_path(temp.path(), "2026-10-03T11-00-00", PARENT_ID);
+        let child = fixture_path(temp.path(), "2026-10-03T12-00-00", FORK_ID);
+        write_fixture(&parent, COPIED_FORK_PARENT);
+        write_fixture(&child, COPIED_FORK_CHILD);
+
+        sync_test_file(&db, &parent, &[&parent, &child])?;
+        assert_eq!(
+            stored_request_ids(&db)?,
+            vec![response_request_id(PARENT_ID, "resp_p1")]
+        );
+
+        // 索引里没有父文件：走签名对齐的话会推迟
+        let result = sync_test_file(&db, &child, &[&child])?;
+        assert_eq!(
+            (result.imported, result.skipped, result.deferred),
+            (1, 1, false)
+        );
+        assert_only_fork_record_is_stored(&db)
+    }
+
+    /// T4b：0.152 之前的 thread_settings_applied 没有 thread_id，退回签名对齐
+    #[test]
+    #[serial_test::serial]
+    fn test_copied_fork_without_own_settings_uses_parent_alignment() -> Result<(), AppError> {
+        clear_codex_replay_caches();
+        let db = Database::memory()?;
+        let temp = tempdir().unwrap();
+        let parent = fixture_path(temp.path(), "2026-10-03T11-00-00", PARENT_ID);
+        let child = fixture_path(temp.path(), "2026-10-03T12-00-00", FORK_ID);
+        write_fixture(&parent, COPIED_FORK_PARENT);
+        write_fixture(
+            &child,
+            &COPIED_FORK_CHILD.replace(
+                r#""thread_id":"F","thread_settings""#,
+                r#""thread_settings""#,
+            ),
+        );
+
+        assert!(sync_test_file(&db, &child, &[&child])?.deferred);
+        age_file(&parent);
+        let result = sync_test_file(&db, &child, &[&parent, &child])?;
+        assert_eq!(
+            (result.imported, result.skipped, result.deferred),
+            (1, 1, false)
+        );
+        assert_only_fork_record_is_stored(&db)
+    }
+
+    /// 0.152 之前创建的 fork 被新版本 resume：本线程的 thread_settings_applied 是 resume
+    /// 时写的，它前面还有 fork 自己的用量，不能当作继承段的边界
+    #[test]
+    #[serial_test::serial]
+    fn test_resumed_fork_settings_are_not_treated_as_the_copy_boundary() -> Result<(), AppError> {
+        clear_codex_replay_caches();
+        let db = Database::memory()?;
+        let temp = tempdir().unwrap();
+        let parent = fixture_path(temp.path(), "2026-10-03T11-00-00", PARENT_ID);
+        let child = fixture_path(temp.path(), "2026-10-03T12-00-00", FORK_ID);
+        write_fixture(
+            &parent,
+            r#"
+            {"timestamp":"2026-10-03T11:00:00.000Z","type":"session_meta","payload":{"id":"P","cli_version":"0.150.0","source":"cli"}}
+            {"timestamp":"2026-10-03T11:00:05.000Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":U(5000,0,0,40,0),"last_token_usage":U(5000,0,0,40,0)}}}
+            "#,
+        );
+        age_file(&parent);
+        write_fixture(
+            &child,
+            r#"
+            {"timestamp":"2026-10-03T12:00:00.000Z","type":"session_meta","payload":{"id":"F","forked_from_id":"P","cli_version":"0.150.0","source":"cli"}}
+            {"timestamp":"2026-10-03T12:00:00.001Z","type":"session_meta","payload":{"id":"P","cli_version":"0.150.0","source":"cli"}}
+            {"timestamp":"2026-10-03T12:00:00.004Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":U(5000,0,0,40,0),"last_token_usage":U(5000,0,0,40,0)}}}
+            {"timestamp":"2026-10-03T12:00:30.000Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":U(11000,5000,0,110,0),"last_token_usage":U(6000,5000,0,70,0)}}}
+            {"timestamp":"2026-10-04T09:00:00.000Z","type":"event_msg","payload":{"type":"thread_settings_applied","thread_id":"F","thread_settings":{"model":"gpt-5.6-sol"}}}
+            {"timestamp":"2026-10-04T09:00:10.000Z","type":"token_usage_record","payload":{"thread_id":"F","turn_id":"tf2","session_id":"F","root_turn_id":"tf2","response_id":"resp_f2","usage":U(12000,11000,0,30,0),"turn_token_usage":U(12000,11000,0,30,0),"thread_token_usage":U(23000,16000,0,140,0)}}
+            {"timestamp":"2026-10-04T09:00:10.002Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":U(23000,16000,0,140,0),"last_token_usage":U(12000,11000,0,30,0)}}}
+            "#,
+        );
+
+        let result = sync_test_file(&db, &child, &[&parent, &child])?;
+        assert_eq!(
+            (result.imported, result.skipped, result.deferred),
+            (2, 1, false)
+        );
+        assert_eq!(
+            stored_request_ids(&db)?,
+            vec![
+                response_request_id(FORK_ID, "resp_f2"),
+                thread_request_id(FORK_ID, 2),
+            ]
+        );
+        Ok(())
+    }
+
+    /// T5：原生分页子代理，复制继承段时去掉了 token_count。本线程前两条间隔不到
+    /// 1 秒，父文件也不在：都不影响导入
+    #[test]
+    #[serial_test::serial]
+    fn test_native_paginated_subagent_keeps_burst_and_ignores_missing_parent(
+    ) -> Result<(), AppError> {
+        clear_codex_replay_caches();
+        let db = Database::memory()?;
+        let temp = tempdir().unwrap();
+        let child = fixture_path(temp.path(), "2026-10-04T10-00-00", CHILD_A_ID);
+        write_fixture(
+            &child,
+            r#"
+            {"timestamp":"2026-10-04T10:00:00.000Z","ordinal":0,"type":"session_meta","payload":{"id":"C","forked_from_id":"P","parent_thread_id":"P","cli_version":"0.152.1","source":{"subagent":{"thread_spawn":{"parent_thread_id":"P","depth":1}}},"history_mode":"paginated","subagent_history_start_ordinal":2}}
+            {"timestamp":"2026-10-04T10:00:00.001Z","ordinal":1,"type":"session_meta","payload":{"id":"P","cli_version":"0.152.1","history_mode":"paginated"}}
+            {"timestamp":"2026-10-04T10:00:00.002Z","ordinal":2,"type":"event_msg","payload":{"type":"thread_settings_applied","thread_id":"C","thread_settings":{"model":"gpt-5.6-sol"}}}
+            {"timestamp":"2026-10-04T10:00:05.000Z","ordinal":3,"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":U(1000,0,0,10,0),"last_token_usage":U(1000,0,0,10,0)}}}
+            {"timestamp":"2026-10-04T10:00:05.400Z","ordinal":4,"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":U(2500,800,0,30,0),"last_token_usage":U(1500,800,0,20,0)}}}
+            "#,
+        );
+
+        let result = sync_test_file(&db, &child, &[&child])?;
+        assert_eq!(
+            (result.imported, result.skipped, result.deferred),
+            (2, 0, false)
+        );
+        assert_eq!(
+            stored_request_ids(&db)?,
+            vec![
+                thread_request_id(CHILD_A_ID, 1),
+                thread_request_id(CHILD_A_ID, 2)
+            ]
+        );
+        Ok(())
+    }
+
+    /// 引用式 fork：`history_base` 指向父文件前缀，继承的历史不在本文件里
+    #[test]
+    #[serial_test::serial]
+    fn test_referenced_fork_with_history_base_is_not_deferred() -> Result<(), AppError> {
+        clear_codex_replay_caches();
+        let db = Database::memory()?;
+        let temp = tempdir().unwrap();
+        let child = fixture_path(temp.path(), "2026-10-04T10-00-00", FORK_ID);
+        write_fixture(
+            &child,
+            r#"
+            {"timestamp":"2026-10-04T10:00:00.000Z","ordinal":40,"type":"session_meta","payload":{"id":"F","forked_from_id":"P","cli_version":"0.160.1","source":"cli","history_mode":"paginated","history_base":{"thread_id":"P","end_ordinal_exclusive":40,"end_byte_offset":9000}}}
+            {"timestamp":"2026-10-04T10:00:05.000Z","ordinal":41,"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":U(1000,0,0,10,0),"last_token_usage":U(1000,0,0,10,0)}}}
+            {"timestamp":"2026-10-04T10:00:05.400Z","ordinal":42,"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":U(2500,800,0,30,0),"last_token_usage":U(1500,800,0,20,0)}}}
+            "#,
+        );
+
+        let result = sync_test_file(&db, &child, &[&child])?;
+        assert_eq!(
+            (result.imported, result.skipped, result.deferred),
+            (2, 0, false)
+        );
+        Ok(())
+    }
+
+    /// T6：从 legacy 迁移来的子代理，边界设在文件末尾。按签名和突发跳过继承段，
+    /// 不能按 `ordinal < subagent_history_start_ordinal` 丢掉子代理自己的用量
+    #[test]
+    #[serial_test::serial]
+    fn test_migrated_subagent_boundary_does_not_drop_own_usage() -> Result<(), AppError> {
+        clear_codex_replay_caches();
+        let db = Database::memory()?;
+        let temp = tempdir().unwrap();
+        let parent = fixture_path(temp.path(), "2026-07-20T08-00-00", PARENT_ID);
+        let child = fixture_path(temp.path(), "2026-07-20T09-00-00", CHILD_A_ID);
+        write_fixture(
+            &parent,
+            r#"
+            {"timestamp":"2026-07-20T08:00:00.000Z","ordinal":0,"type":"session_meta","payload":{"id":"P","cli_version":"0.147.0-alpha.6.5","source":"vscode","history_mode":"paginated"}}
+            {"timestamp":"2026-07-20T08:30:00.000Z","ordinal":1,"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":U(1000,0,0,10,0),"last_token_usage":U(1000,0,0,10,0)}}}
+            {"timestamp":"2026-07-20T08:40:00.000Z","ordinal":2,"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":U(2000,500,0,20,0),"last_token_usage":U(1000,500,0,10,0)}}}
+            {"timestamp":"2026-07-20T09:10:00.000Z","ordinal":3,"type":"turn_context","payload":{"model":"gpt-5.6-sol"}}
+            "#,
+        );
+        write_fixture(
+            &child,
+            r#"
+            {"timestamp":"2026-07-20T09:00:00.000Z","ordinal":0,"type":"session_meta","payload":{"id":"C","forked_from_id":"P","cli_version":"0.147.0-alpha.6.5","source":{"subagent":{"thread_spawn":{"parent_thread_id":"P","depth":1}}},"history_mode":"paginated","subagent_history_start_ordinal":6}}
+            {"timestamp":"2026-07-20T09:00:00.010Z","ordinal":1,"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":U(1000,0,0,10,0),"last_token_usage":U(1000,0,0,10,0)}}}
+            {"timestamp":"2026-07-20T09:00:00.030Z","ordinal":2,"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":U(2000,500,0,20,0),"last_token_usage":U(1000,500,0,10,0)}}}
+            {"timestamp":"2026-07-20T09:00:00.040Z","ordinal":3,"type":"turn_context","payload":{"model":"gpt-5.6-sol"}}
+            {"timestamp":"2026-07-20T09:00:12.000Z","ordinal":4,"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":U(5000,1500,0,60,0),"last_token_usage":U(3000,1000,0,40,0)}}}
+            {"timestamp":"2026-07-20T09:00:30.000Z","ordinal":5,"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":U(9000,4000,0,90,0),"last_token_usage":U(4000,2500,0,30,0)}}}
+            "#,
+        );
+
+        let result = sync_test_file(&db, &child, &[&parent, &child])?;
+        assert_eq!(
+            (result.imported, result.skipped, result.deferred),
+            (2, 2, false)
+        );
+        assert_eq!(
+            stored_request_ids(&db)?,
+            vec![
+                thread_request_id(CHILD_A_ID, 3),
+                thread_request_id(CHILD_A_ID, 4)
+            ]
+        );
+        Ok(())
+    }
+
+    /// T7：response_id 为空时用 turn_id 和线程累计区分；完全相同的重复行只算一次
+    #[test]
+    fn test_empty_response_ids_fall_back_to_turn_and_thread_total() -> Result<(), AppError> {
+        let db = Database::memory()?;
+        let temp = tempdir().unwrap();
+        let file = fixture_path(temp.path(), "2026-10-01T10-00-00", MAIN_ID);
+        write_fixture(
+            &file,
+            r#"
+            {"timestamp":"2026-10-01T10:00:00.000Z","ordinal":0,"type":"session_meta","payload":{"id":"M","session_id":"M","cli_version":"0.160.1","source":"cli","history_mode":"paginated"}}
+            {"timestamp":"2026-10-01T10:00:00.100Z","ordinal":1,"type":"turn_context","payload":{"model":"gpt-5.6-sol"}}
+            {"timestamp":"2026-10-01T10:00:05.000Z","ordinal":2,"type":"token_usage_record","payload":{"thread_id":"M","turn_id":"t1","session_id":"M","root_turn_id":"t1","response_id":"","usage":U(1000,0,0,10,0),"turn_token_usage":U(1000,0,0,10,0),"thread_token_usage":U(1000,0,0,10,0)}}
+            {"timestamp":"2026-10-01T10:00:05.002Z","ordinal":3,"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":U(1000,0,0,10,0),"last_token_usage":U(1000,0,0,10,0)}}}
+            {"timestamp":"2026-10-01T10:00:05.000Z","ordinal":2,"type":"token_usage_record","payload":{"thread_id":"M","turn_id":"t1","session_id":"M","root_turn_id":"t1","response_id":"","usage":U(1000,0,0,10,0),"turn_token_usage":U(1000,0,0,10,0),"thread_token_usage":U(1000,0,0,10,0)}}
+            {"timestamp":"2026-10-01T10:00:09.000Z","ordinal":4,"type":"token_usage_record","payload":{"thread_id":"M","turn_id":"t1","session_id":"M","root_turn_id":"t1","response_id":"","usage":U(1000,0,0,20,0),"turn_token_usage":U(2000,0,0,30,0),"thread_token_usage":U(2000,0,0,30,0)}}
+            {"timestamp":"2026-10-01T10:00:09.002Z","ordinal":5,"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":U(2000,0,0,30,0),"last_token_usage":U(1000,0,0,20,0)}}}
+            "#,
+        );
+
+        assert_eq!(
+            parse_codex_file(&file, Some(MAIN_ID.to_string()))?
+                .records
+                .len(),
+            2
+        );
+        assert_eq!(sync_test_file(&db, &file, &[&file])?.imported, 2);
+        assert_eq!(
+            stored_request_ids(&db)?,
+            vec![
+                format!("{CODEX_RESPONSE_REQUEST_ID_PREFIX}:{MAIN_ID}:#t1#1010"),
+                format!("{CODEX_RESPONSE_REQUEST_ID_PREFIX}:{MAIN_ID}:#t1#2030"),
+            ]
+        );
+        Ok(())
+    }
+
+    /// 同一个 response_id 对应不同用量（第三方服务返回重复 ID）：两次都算
+    #[test]
+    fn test_conflicting_response_ids_are_disambiguated() {
+        let record = |response_id: &str, turn_id: &str, total: u64, output: u64| UsageRecordEvent {
+            line_offset: 0,
+            thread_id: MAIN_ID.to_string(),
+            turn_id: turn_id.to_string(),
+            response_id: response_id.to_string(),
+            thread_total_tokens: Some(total),
+            usage: CumulativeTokens {
+                input: 100,
+                cached_input: 0,
+                cache_write: 0,
+                output,
+            },
+            model: "gpt-5.6-sol".to_string(),
+            service_tier: ServiceTier::Standard,
+            timestamp: None,
+            latency_ms: None,
+            paired_token: None,
+        };
+        let records = [
+            record("resp_x", "t1", 110, 10),
+            record("resp_x", "t2", 230, 20),
+            record("resp_y", "t2", 330, 0),
+        ];
+        assert_eq!(
+            record_request_ids(&records),
+            vec![
+                format!("{CODEX_RESPONSE_REQUEST_ID_PREFIX}:{MAIN_ID}:resp_x#t1#110"),
+                format!("{CODEX_RESPONSE_REQUEST_ID_PREFIX}:{MAIN_ID}:resp_x#t2#230"),
+                response_request_id(MAIN_ID, "resp_y"),
+            ]
+        );
+    }
+
+    /// T8：revert 后同一线程有两个 rollout，各自的 record 按线程 ID 命名，不推迟
+    #[test]
+    fn test_reverted_thread_records_from_both_rollouts() -> Result<(), AppError> {
+        let db = Database::memory()?;
+        let temp = tempdir().unwrap();
+        let original = fixture_path(temp.path(), "2026-10-04T08-00-00", REVERT_THREAD_ID);
+        let replacement = fixture_path(
+            temp.path(),
+            "2026-10-05T09-00-00",
+            &format!("{REVERT_THREAD_ID}_{REVERT_ROLLOUT_ID}"),
+        );
+        write_fixture(
+            &original,
+            r#"
+            {"timestamp":"2026-10-04T08:00:00.000Z","ordinal":0,"type":"session_meta","payload":{"id":"T","session_id":"T","cli_version":"0.160.1","source":"cli","history_mode":"paginated"}}
+            {"timestamp":"2026-10-04T08:00:01.000Z","ordinal":1,"type":"turn_context","payload":{"model":"gpt-5.6-sol"}}
+            {"timestamp":"2026-10-04T08:00:01.100Z","ordinal":2,"type":"event_msg","payload":{"type":"task_started","turn_id":"t1"}}
+            {"timestamp":"2026-10-04T08:00:05.000Z","ordinal":3,"type":"token_usage_record","payload":{"thread_id":"T","turn_id":"t1","session_id":"T","root_turn_id":"t1","response_id":"resp_1","usage":U(500,0,0,5,0),"turn_token_usage":U(500,0,0,5,0),"thread_token_usage":U(500,0,0,5,0)}}
+            {"timestamp":"2026-10-04T08:00:05.002Z","ordinal":4,"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":U(500,0,0,5,0),"last_token_usage":U(500,0,0,5,0)}}}
+            {"timestamp":"2026-10-04T08:01:00.000Z","ordinal":5,"type":"turn_context","payload":{"model":"gpt-5.6-sol"}}
+            {"timestamp":"2026-10-04T08:01:05.000Z","ordinal":6,"type":"token_usage_record","payload":{"thread_id":"T","turn_id":"t2","session_id":"T","root_turn_id":"t2","response_id":"resp_2","usage":U(600,0,0,6,0),"turn_token_usage":U(600,0,0,6,0),"thread_token_usage":U(1100,0,0,11,0)}}
+            {"timestamp":"2026-10-04T08:01:05.002Z","ordinal":7,"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":U(1100,0,0,11,0),"last_token_usage":U(600,0,0,6,0)}}}
+            "#,
+        );
+        write_fixture(
+            &replacement,
+            r#"
+            {"timestamp":"2026-10-05T09:00:00.000Z","ordinal":4,"type":"session_meta","payload":{"id":"T","session_id":"T","cli_version":"0.160.1","history_mode":"paginated","history_base":{"thread_id":"T","end_ordinal_exclusive":4,"end_byte_offset":2048}}}
+            {"timestamp":"2026-10-05T09:00:01.000Z","ordinal":5,"type":"turn_context","payload":{"model":"gpt-5.6-sol"}}
+            {"timestamp":"2026-10-05T09:00:05.000Z","ordinal":6,"type":"token_usage_record","payload":{"thread_id":"T","turn_id":"t9","session_id":"T","root_turn_id":"t9","response_id":"resp_3","usage":U(800,0,0,8,0),"turn_token_usage":U(800,0,0,8,0),"thread_token_usage":U(800,0,0,8,0)}}
+            "#,
+        );
+
+        let all = [original.as_path(), replacement.as_path()];
+        assert_eq!(sync_test_file(&db, &original, &all)?.imported, 2);
+        let result = sync_test_file(&db, &replacement, &all)?;
+        assert_eq!((result.imported, result.deferred), (1, false));
+        let rows = stored_rows(&db)?;
+        assert_eq!(
+            rows.iter()
+                .map(|row| row.request_id.clone())
+                .collect::<Vec<_>>(),
+            vec![
+                response_request_id(REVERT_THREAD_ID, "resp_1"),
+                response_request_id(REVERT_THREAD_ID, "resp_2"),
+                response_request_id(REVERT_THREAD_ID, "resp_3"),
+            ]
+        );
+        assert!(rows.iter().all(|row| row.session_id == REVERT_THREAD_ID));
+        Ok(())
+    }
+
+    /// T9：input 含缓存读和缓存写，output 含 reasoning
+    #[test]
+    fn test_record_usage_is_split_into_exclusive_buckets() -> Result<(), AppError> {
+        let db = Database::memory()?;
+        let temp = tempdir().unwrap();
+        let file = fixture_path(temp.path(), "2026-10-01T10-00-00", MAIN_ID);
+        write_fixture(
+            &file,
+            r#"
+            {"timestamp":"2026-10-01T10:00:00.000Z","ordinal":0,"type":"session_meta","payload":{"id":"M","session_id":"M","cli_version":"0.160.1","source":"cli","history_mode":"paginated"}}
+            {"timestamp":"2026-10-01T10:00:00.100Z","ordinal":1,"type":"turn_context","payload":{"model":"gpt-5.6-sol"}}
+            {"timestamp":"2026-10-01T10:00:05.000Z","ordinal":2,"type":"token_usage_record","payload":{"thread_id":"M","turn_id":"t1","session_id":"M","root_turn_id":"t1","response_id":"resp_a","usage":U(1000,600,100,50,30),"turn_token_usage":U(1000,600,100,50,30),"thread_token_usage":U(1000,600,100,50,30)}}
+            "#,
+        );
+
+        sync_test_file(&db, &file, &[&file])?;
+        let rows = stored_rows(&db)?;
+        assert_eq!(rows.len(), 1);
+        let row = &rows[0];
+        assert_eq!(
+            (row.input, row.cache_read, row.cache_creation, row.output),
+            (300, 600, 100, 50)
+        );
+        Ok(())
+    }
+
+    /// T10：record 早于 30 天导入下限：不插入，配对的旧行也不删
+    #[test]
+    fn test_record_below_import_floor_keeps_the_old_row() -> Result<(), AppError> {
+        let db = Database::memory()?;
+        let temp = tempdir().unwrap();
+        let day = (Utc::now() - chrono::Duration::days(40))
+            .format("%Y-%m-%d")
+            .to_string();
+        let file = fixture_path(temp.path(), &format!("{day}T10-00-00"), MAIN_ID);
+        write_fixture(
+            &file,
+            &r#"
+            {"timestamp":"DAYT10:00:00.000Z","ordinal":0,"type":"session_meta","payload":{"id":"M","session_id":"M","cli_version":"0.160.1","source":"cli","history_mode":"paginated"}}
+            {"timestamp":"DAYT10:00:00.100Z","ordinal":1,"type":"turn_context","payload":{"model":"gpt-5.6-sol"}}
+            {"timestamp":"DAYT10:00:05.000Z","ordinal":2,"type":"token_usage_record","payload":{"thread_id":"M","turn_id":"t1","session_id":"M","root_turn_id":"t1","response_id":"resp_a","usage":U(1000,0,0,10,0),"turn_token_usage":U(1000,0,0,10,0),"thread_token_usage":U(1000,0,0,10,0)}}
+            {"timestamp":"DAYT10:00:05.002Z","ordinal":3,"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":U(1000,0,0,10,0),"last_token_usage":U(1000,0,0,10,0)}}}
+            "#
+            .replace("DAY", &day),
+        );
+        {
+            // 下限之前的行由汇总前的旧版本导入，这里直接写库
+            let conn = lock_conn!(db.conn);
+            conn.execute(
+                "INSERT INTO proxy_request_logs (
+                    request_id, provider_id, app_type, model, request_model,
+                    input_tokens, output_tokens, cache_read_tokens,
+                    total_cost_usd, latency_ms, status_code, session_id,
+                    created_at, data_source
+                ) VALUES (?1, '_codex_session', 'codex', 'gpt-5.6-sol', 'gpt-5.6-sol',
+                          1000, 10, 0, '0', 0, 200, ?2, ?3, 'codex_session')",
+                rusqlite::params![
+                    thread_request_id(MAIN_ID, 1),
+                    MAIN_ID,
+                    unix_seconds(&format!("{day}T10:00:05Z"))
+                ],
+            )?;
+        }
+
+        crate::services::usage_rebuild::set_test_import_floor(true);
+        let result = sync_test_file(&db, &file, &[&file]);
+        crate::services::usage_rebuild::set_test_import_floor(false);
+        assert_eq!(result?.imported, 0);
+        assert_eq!(
+            stored_request_ids(&db)?,
+            vec![thread_request_id(MAIN_ID, 1)]
+        );
+        Ok(())
+    }
+
+    /// T11：模型取 record 之前最后一次出现的 turn_context 或 thread_settings_applied
+    #[test]
+    fn test_record_model_follows_latest_turn_context_or_settings() -> Result<(), AppError> {
+        let db = Database::memory()?;
+        let temp = tempdir().unwrap();
+        let file = fixture_path(temp.path(), "2026-10-01T10-00-00", MAIN_ID);
+        write_fixture(
+            &file,
+            r#"
+            {"timestamp":"2026-10-01T10:00:00.000Z","ordinal":0,"type":"session_meta","payload":{"id":"M","session_id":"M","cli_version":"0.160.1","source":"cli","history_mode":"paginated"}}
+            {"timestamp":"2026-10-01T10:00:00.100Z","ordinal":1,"type":"turn_context","payload":{"model":"gpt-5.6-sol"}}
+            {"timestamp":"2026-10-01T10:00:00.200Z","ordinal":2,"type":"event_msg","payload":{"type":"thread_settings_applied","thread_id":"M","thread_settings":{"model":"gpt-5.6-terra"}}}
+            {"timestamp":"2026-10-01T10:00:05.000Z","ordinal":3,"type":"token_usage_record","payload":{"thread_id":"M","turn_id":"t1","session_id":"M","root_turn_id":"t1","response_id":"resp_1","usage":U(1000,0,0,10,0),"turn_token_usage":U(1000,0,0,10,0),"thread_token_usage":U(1000,0,0,10,0)}}
+            {"timestamp":"2026-10-01T10:01:00.000Z","ordinal":4,"type":"turn_context","payload":{"model":"gpt-5.6-luna"}}
+            {"timestamp":"2026-10-01T10:01:05.000Z","ordinal":5,"type":"token_usage_record","payload":{"thread_id":"M","turn_id":"t2","session_id":"M","root_turn_id":"t2","response_id":"resp_2","usage":U(2000,0,0,20,0),"turn_token_usage":U(2000,0,0,20,0),"thread_token_usage":U(3000,0,0,30,0)}}
+            "#,
+        );
+
+        sync_test_file(&db, &file, &[&file])?;
+        let models = stored_rows(&db)?
+            .into_iter()
+            .map(|row| row.model)
+            .collect::<Vec<_>>();
+        assert_eq!(models, vec!["gpt-5.6-terra", "gpt-5.6-luna"]);
+        Ok(())
+    }
+
+    /// 远程压缩的 record 没有自己的 token_count：后面那条 token_count 要配给用量相同
+    /// 的 record，不能按顺序配给压缩 record
+    #[test]
+    fn test_token_count_pairs_with_the_record_of_the_same_response() -> Result<(), AppError> {
+        let temp = tempdir().unwrap();
+        let file = fixture_path(temp.path(), "2026-10-01T10-00-00", MAIN_ID);
+        write_fixture(
+            &file,
+            r#"
+            {"timestamp":"2026-10-01T10:00:00.000Z","ordinal":0,"type":"session_meta","payload":{"id":"M","session_id":"M","cli_version":"0.160.1","source":"cli","history_mode":"paginated"}}
+            {"timestamp":"2026-10-01T10:00:00.100Z","ordinal":1,"type":"turn_context","payload":{"model":"gpt-5.6-sol"}}
+            {"timestamp":"2026-10-01T10:00:20.000Z","ordinal":2,"type":"token_usage_record","payload":{"thread_id":"M","turn_id":"t1","session_id":"M","root_turn_id":"t1","response_id":"resp_compact","usage":U(26000,0,0,400,0),"turn_token_usage":U(26000,0,0,400,0),"thread_token_usage":U(26000,0,0,400,0)}}
+            {"timestamp":"2026-10-01T10:00:20.010Z","ordinal":3,"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":U(0,0,0,0,0),"last_token_usage":U(0,0,0,0,0)}}}
+            {"timestamp":"2026-10-01T10:00:30.000Z","ordinal":4,"type":"token_usage_record","payload":{"thread_id":"M","turn_id":"t1","session_id":"M","root_turn_id":"t1","response_id":"resp_next","usage":U(9000,4000,0,60,0),"turn_token_usage":U(35000,4000,0,460,0),"thread_token_usage":U(35000,4000,0,460,0)}}
+            {"timestamp":"2026-10-01T10:00:30.002Z","ordinal":5,"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":U(9000,4000,0,60,0),"last_token_usage":U(9000,4000,0,60,0)}}}
+            "#,
+        );
+
+        let parsed = parse_codex_file(&file, Some(MAIN_ID.to_string()))?;
+        assert!(parsed.has_billable_tokens);
+        assert_eq!(
+            parsed
+                .records
+                .iter()
+                .map(|record| (record.response_id.as_str(), record.paired_token))
+                .collect::<Vec<_>>(),
+            vec![("resp_compact", None), ("resp_next", Some((6, 1)))]
+        );
+        Ok(())
+    }
+
+    /// 旧版本导入时游标停在 record 和它的 token_count 之间：record 在游标之前，
+    /// token_count 被它覆盖，要按配对的 token_count 补上 record
+    #[test]
+    fn test_record_before_cursor_is_imported_with_its_token_count() -> Result<(), AppError> {
+        use std::io::Write;
+        let db = Database::memory()?;
+        let temp = tempdir().unwrap();
+        let file = fixture_path(temp.path(), "2026-10-01T10-00-00", MAIN_ID);
+        write_fixture(
+            &file,
+            r#"
+            {"timestamp":"2026-10-01T10:00:00.000Z","ordinal":0,"type":"session_meta","payload":{"id":"M","session_id":"M","cli_version":"0.160.1","source":"cli","history_mode":"paginated"}}
+            {"timestamp":"2026-10-01T10:00:00.100Z","ordinal":1,"type":"turn_context","payload":{"model":"gpt-5.6-sol"}}
+            {"timestamp":"2026-10-01T10:00:05.000Z","ordinal":2,"type":"token_usage_record","payload":{"thread_id":"M","turn_id":"t1","session_id":"M","root_turn_id":"t1","response_id":"resp_1","usage":U(1000,200,0,10,0),"turn_token_usage":U(1000,200,0,10,0),"thread_token_usage":U(1000,200,0,10,0)}}
+            "#,
+        );
+        update_sync_state(&db, &file.to_string_lossy(), 1, 3)?;
+        let token_count = expand_usage(
+            r#"{"timestamp":"2026-10-01T10:00:05.002Z","ordinal":3,"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":U(1000,200,0,10,0),"last_token_usage":U(1000,200,0,10,0)}}}"#,
+        );
+        let mut writer = fs::OpenOptions::new().append(true).open(&file).unwrap();
+        writeln!(writer, "{token_count}").unwrap();
+
+        assert_eq!(sync_test_file(&db, &file, &[&file])?.imported, 1);
+        assert_eq!(
+            stored_request_ids(&db)?,
+            vec![response_request_id(MAIN_ID, "resp_1")]
+        );
+        Ok(())
     }
 }
