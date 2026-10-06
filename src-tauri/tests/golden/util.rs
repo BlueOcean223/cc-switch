@@ -225,9 +225,9 @@ pub fn toml_section(text: &str, header_prefix: &str) -> String {
 
 /// 把 `pointers` 指到的对象按键排序。
 ///
-/// 只用在旧代码输出顺序本身不稳定的地方：MCP 投影按 `HashMap` 遍历写
-/// `mcpServers`（`claude_mcp.rs` / `gemini_mcp.rs` 的 `set_mcp_servers_map`），
-/// Gemini 的 `.env` 解析进 `HashMap` 后再存进 `env`。这几处每次运行顺序都可能不同，
+/// 只用在输出顺序本身不稳定的地方：Claude 的 MCP 投影按 `HashMap` 遍历写
+/// `mcpServers`（`claude_mcp.rs` 的 `set_mcp_servers_map`），Gemini 的 MCP 条目
+/// 按同步顺序逐条写入，Gemini 的 `.env` 解析进 `HashMap` 后再存进 `env`。这几处每次运行顺序都可能不同，
 /// 其余内容仍按原样比对。
 pub fn sort_objects(value: &mut Value, pointers: &[&str]) {
     for pointer in pointers {

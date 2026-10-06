@@ -1129,7 +1129,7 @@ command = "echo"
 }
 
 #[test]
-fn import_mcp_from_gemini_sse_url_only_is_valid() {
+fn import_mcp_from_gemini_url_without_type_is_http() {
     let _guard = test_mutex().lock().unwrap_or_else(|e| e.into_inner());
     reset_test_fs();
     let home = ensure_test_home();
@@ -1139,11 +1139,11 @@ fn import_mcp_from_gemini_sse_url_only_is_valid() {
     fs::create_dir_all(&gemini_dir).expect("create gemini dir");
     let settings_path = gemini_dir.join("settings.json");
 
-    // Gemini SSE：只包含 url（Gemini 不使用 type 字段）
+    // Gemini CLI 对不带 type 的 url 先按 streamable HTTP 连接
     let gemini_settings = json!({
         "mcpServers": {
-            "sse-server": {
-                "url": "https://example.com/sse"
+            "url-server": {
+                "url": "https://example.com/mcp"
             }
         }
     });
@@ -1158,12 +1158,12 @@ fn import_mcp_from_gemini_sse_url_only_is_valid() {
     assert!(changed > 0, "should import at least 1 server");
 
     let servers = state.db.get_all_mcp_servers().expect("get all mcp servers");
-    let entry = servers.get("sse-server").expect("sse-server exists");
+    let entry = servers.get("url-server").expect("url-server exists");
     assert!(entry.apps.gemini, "imported server should enable Gemini");
     assert_eq!(
         entry.server.get("type").and_then(|v| v.as_str()),
-        Some("sse"),
-        "Gemini url-only server should be normalized to type=sse in unified structure"
+        Some("http"),
+        "Gemini url-only server should be normalized to type=http in unified structure"
     );
 }
 
