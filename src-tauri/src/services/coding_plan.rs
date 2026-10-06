@@ -59,8 +59,7 @@ fn detect_provider(base_url: &str) -> Option<CodingPlanProvider> {
     } else if url.contains("volces.com/api/plan") || url.contains("volces.com/api/coding") {
         // 仅匹配 Agent Plan（/api/plan[/v3]）与 Coding Plan（/api/coding[/v3]）
         // 入口；DouBaoSeed 按量付费走 /api/v3 与 /api/compatible，没有套餐
-        // 额度，不在此命中。用量探测本身是双 plan 自动探测（GetAFPUsage →
-        // GetCodingPlanUsage），无需在此区分两种订阅。
+        // 额度，不在此命中。两种订阅查不同接口，见 query_volcengine。
         Some(CodingPlanProvider::Volcengine)
     } else {
         None
@@ -1234,11 +1233,11 @@ async fn query_command_code(api_key: &str) -> Result<SubscriptionQuota, String> 
 // `POST https://open.volcengineapi.com/?Action=...&Version=2024-01-01&Region=cn-beijing`，
 // **强制火山引擎签名 V4（AK/SK）**——实测复用推理 Bearer Key 会被网关以
 // `400 InvalidAuthorization` 拒绝（格式层拒绝，非权限问题）。因此用户需在用量查询
-// 里另填火山账号的 AccessKey ID + Secret（与推理 Key 是两套凭据）。两个 plan 用
-// 同一份 AK/SK，故鉴权类错误直接停、不再试另一个 plan。
+// 里另填火山账号的 AccessKey ID + Secret（与推理 Key 是两套凭据）。
 //
-// 自动探测：先调 `GetAFPUsage`（Agent Plan，回绝对额度 Quota/Used），未订阅再调
-// `GetCodingPlanUsage`（Coding Plan，回百分比）。
+// 按 base_url 选接口（与 ark-cli `usage plan --product` 的对应关系一致）：Agent Plan
+// （`/api/plan`）调 `GetAFPUsage`，回绝对额度 Quota/Used；Coding Plan
+// （`/api/coding`）调 `GetCodingPlanUsage`，只回百分比。
 
 /// 控制面 OpenAPI 统一网关（区别于数据面推理域名 ark.cn-beijing.volces.com）。
 const VOLCENGINE_OPENAPI_HOST: &str = "open.volcengineapi.com";
@@ -1511,8 +1510,7 @@ async fn volcengine_openapi_call(
 /// 展示 5h / 周 / 月三个窗口（与控制台一致）；`AFPDaily` 被官方控制台隐藏
 /// （其 Quota 常高于周上限，属历史默认值而非强制限额），故跳过。
 /// `Quota`/`Used` 是绝对 AFP 值，已用百分比 = Used/Quota×100；`Quota<=0` 视为
-/// 该窗口未订阅/未启用，跳过——也用于把"已鉴权但无 Agent Plan"识别为空结果，
-/// 从而回落到 Coding Plan 探测。
+/// 该窗口未订阅/未启用，跳过。没有订阅时 `Result` 为空，结果也为空。
 fn parse_afp_tiers(result: &serde_json::Value) -> Vec<QuotaTier> {
     let mut tiers = Vec::new();
     for (key, name) in [
@@ -1541,63 +1539,38 @@ fn parse_afp_tiers(result: &serde_json::Value) -> Vec<QuotaTier> {
     tiers
 }
 
-/// 把 `GetCodingPlanUsage` 的 window 标签归一到 tier 名。
+/// 把 `GetCodingPlanUsage` 的窗口标签归一到 tier 名（ark-cli 文档：session / weekly / monthly）。
 fn volcengine_coding_window(label: &str) -> Option<&'static str> {
-    match label.to_lowercase().as_str() {
-        "session" | "5h" | "fivehour" | "five_hour" | "rolling_5h" => Some(TIER_FIVE_HOUR),
-        "weekly" | "week" | "7d" => Some(TIER_WEEKLY_LIMIT),
-        "monthly" | "month" => Some(TIER_MONTHLY),
+    match label {
+        "session" => Some(TIER_FIVE_HOUR),
+        "weekly" => Some(TIER_WEEKLY_LIMIT),
+        "monthly" => Some(TIER_MONTHLY),
         _ => None,
     }
 }
 
-/// 解析 `GetCodingPlanUsage` 的 `Result` 为 tier 列表（防御式）。
+/// 解析 `GetCodingPlanUsage` 的 `Result` 为 tier 列表。
 ///
-/// 该接口官方文档未给出逐字段规格，依据官方 ark-cli 描述：回 session/weekly/
-/// monthly 窗口、**只给百分比**（已用）、重置时间是秒级。这里宽松匹配
-/// `QuotaUsage`/`Usages`/`Details` 数组及多种字段名，命中即用、未命中跳过。
+/// ark-cli 文档（`arkcli-usage-plan.md`）：`QuotaUsage` 数组，只有已用百分比
+/// `Percent`，重置时间是秒；数组为空表示没有订阅。标签字段 `Level` 和重置时间
+/// 字段 `ResetTimestamp` 来自实测响应（2026-06-21），session 没有活跃窗口时为 -1。
 fn parse_coding_plan_tiers(result: &serde_json::Value) -> Vec<QuotaTier> {
-    let mut tiers = Vec::new();
-    let arr = result
-        .get("QuotaUsage")
-        .and_then(|v| v.as_array())
-        .or_else(|| result.get("Usages").and_then(|v| v.as_array()))
-        .or_else(|| result.get("Details").and_then(|v| v.as_array()));
-    let Some(arr) = arr else { return tiers };
-
-    for item in arr {
-        // 真实字段是 `Level`（实测 2026-06-21：session/weekly/monthly）；其余作防御式 fallback。
-        let label = item
-            .get("Level")
-            .and_then(|v| v.as_str())
-            .or_else(|| item.get("Type").and_then(|v| v.as_str()))
-            .or_else(|| item.get("Period").and_then(|v| v.as_str()))
-            .or_else(|| item.get("Label").and_then(|v| v.as_str()))
-            .or_else(|| item.get("Window").and_then(|v| v.as_str()))
-            .unwrap_or("");
-        let Some(name) = volcengine_coding_window(label) else {
-            continue;
-        };
-        let utilization = item
-            .get("Percent")
-            .and_then(parse_f64)
-            .or_else(|| item.get("UsedPercent").and_then(parse_f64))
-            .or_else(|| item.get("UsagePercent").and_then(parse_f64))
-            .unwrap_or(0.0);
-        // 兼容秒/毫秒/字符串（extract_reset_time 内部已区分秒与毫秒）。
-        let resets_at = item
-            .get("ResetTime")
-            .or_else(|| item.get("ResetTimestamp"))
-            .and_then(extract_reset_time);
-        tiers.push(QuotaTier {
-            name: name.to_string(),
-            utilization,
-            resets_at,
-            used_value_usd: None,
-            max_value_usd: None,
-        });
-    }
-    tiers
+    let Some(items) = result.get("QuotaUsage").and_then(|v| v.as_array()) else {
+        return Vec::new();
+    };
+    items
+        .iter()
+        .filter_map(|item| {
+            let name = volcengine_coding_window(item.get("Level")?.as_str()?)?;
+            Some(QuotaTier {
+                name: name.to_string(),
+                utilization: item.get("Percent").and_then(parse_f64).unwrap_or(0.0),
+                resets_at: item.get("ResetTimestamp").and_then(extract_reset_time),
+                used_value_usd: None,
+                max_value_usd: None,
+            })
+        })
+        .collect()
 }
 
 fn volcengine_success(tiers: Vec<QuotaTier>, plan: Option<String>) -> SubscriptionQuota {
@@ -1636,73 +1609,38 @@ async fn query_volcengine(
     secret_access_key: &str,
 ) -> Result<SubscriptionQuota, String> {
     let region = volcengine_region(base_url);
-    let mut soft_errors: Vec<String> = Vec::new();
-    // 2xx + 无 Error 信封但解析不出额度时，截断原始响应用于诊断（区分"真没订阅"
-    // 与"字段名/包裹层猜错"）。签名若不通会走 Auth/Soft 分支，到不了这里。
-    let mut empty_responses: Vec<String> = Vec::new();
-    let summarize = |action: &str, body: &serde_json::Value| -> String {
-        let raw: String = body.to_string().chars().take(700).collect();
-        format!("{action}={raw}")
+    let coding_plan = base_url.contains("/api/coding");
+    let (action, product) = if coding_plan {
+        ("GetCodingPlanUsage", "Coding Plan")
+    } else {
+        ("GetAFPUsage", "Agent Plan")
     };
 
-    // 1) Agent Plan：GetAFPUsage
-    match volcengine_openapi_call(&region, access_key_id, secret_access_key, "GetAFPUsage").await {
-        VolcCall::Auth(detail) => return Ok(volcengine_auth_error(detail)),
-        VolcCall::Transient(detail) => return Err(format!("GetAFPUsage: {detail}")),
-        VolcCall::Soft(detail) => soft_errors.push(format!("GetAFPUsage: {detail}")),
-        VolcCall::Body(body) => {
-            let result = body.get("Result").unwrap_or(&body);
-            let tiers = parse_afp_tiers(result);
-            if !tiers.is_empty() {
-                let plan = result
-                    .get("PlanType")
-                    .and_then(|v| v.as_str())
-                    .map(str::trim)
-                    .filter(|s| !s.is_empty())
-                    .map(|s| format!("Agent Plan {s}"));
-                return Ok(volcengine_success(tiers, plan));
-            }
-            empty_responses.push(summarize("GetAFPUsage", &body));
-        }
-    }
-
-    // 2) Coding Plan：GetCodingPlanUsage
-    match volcengine_openapi_call(
-        &region,
-        access_key_id,
-        secret_access_key,
-        "GetCodingPlanUsage",
-    )
-    .await
-    {
-        VolcCall::Auth(detail) => return Ok(volcengine_auth_error(detail)),
-        VolcCall::Transient(detail) => return Err(format!("GetCodingPlanUsage: {detail}")),
-        VolcCall::Soft(detail) => soft_errors.push(format!("GetCodingPlanUsage: {detail}")),
-        VolcCall::Body(body) => {
-            let result = body.get("Result").unwrap_or(&body);
-            let tiers = parse_coding_plan_tiers(result);
-            if !tiers.is_empty() {
-                return Ok(volcengine_success(tiers, Some("Coding Plan".to_string())));
-            }
-            empty_responses.push(summarize("GetCodingPlanUsage", &body));
-        }
-    }
-
-    if !soft_errors.is_empty() {
-        Ok(make_error(soft_errors.join("; ")))
-    } else if !empty_responses.is_empty() {
-        // 签名已通过、请求到达业务层，但响应里没有可解析的额度。带上原始响应，
-        // 便于核对真实字段名/包裹层，或确认确实未订阅。
-        Ok(make_error(format!(
-            "No active subscription found (signature OK). Raw: {}",
-            empty_responses.join(" || ")
-        )))
+    let body =
+        match volcengine_openapi_call(&region, access_key_id, secret_access_key, action).await {
+            VolcCall::Auth(detail) => return Ok(volcengine_auth_error(detail)),
+            VolcCall::Transient(detail) => return Err(format!("{action}: {detail}")),
+            VolcCall::Soft(detail) => return Ok(make_error(format!("{action}: {detail}"))),
+            VolcCall::Body(body) => body,
+        };
+    let result = body.get("Result").unwrap_or(&body);
+    let (tiers, plan) = if coding_plan {
+        (parse_coding_plan_tiers(result), Some(product.to_string()))
     } else {
-        Ok(make_error(
-            "No active Agent Plan or Coding Plan subscription found for this credential"
-                .to_string(),
-        ))
+        let plan = result
+            .get("PlanType")
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(|s| format!("{product} {s}"));
+        (parse_afp_tiers(result), plan)
+    };
+    if tiers.is_empty() {
+        return Ok(make_error(format!(
+            "No active {product} subscription found for this credential"
+        )));
     }
+    Ok(volcengine_success(tiers, plan))
 }
 
 // ── 公开入口 ────────────────────────────────────────────────
