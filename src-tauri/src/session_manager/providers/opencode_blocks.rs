@@ -5,13 +5,13 @@
 use serde_json::Value;
 
 use crate::session_manager::model::{
-    ContentRef, DiffOp, EventKind, ImageRef, ImageSource, MessageMeta, SessionBlock,
-    SessionMessage, StepPhase, ToolStatus,
+    ContentRef, DiffFile, DiffOp, DiffSummary, EventKind, ImageRef, ImageSource, MessageMeta,
+    SessionBlock, SessionMessage, StepPhase, ToolKind, ToolStatus,
 };
 
 use super::blocks::{
-    count_diff_lines, estimate_base64_size, single_file_diff, str_field, thinking_block,
-    title_path, tool_call_block, tool_result_block, ToolSource,
+    count_diff_lines, estimate_base64_size, parse_arguments, single_file_diff, str_field,
+    thinking_block, title_path, tool_call_block, tool_result_block, ToolSource,
 };
 use super::utils::parse_timestamp_to_ms;
 
@@ -127,7 +127,11 @@ fn push_part_blocks(blocks: &mut Vec<SessionBlock>, locator: &PartLocator, part:
     }
 }
 
-/// `tool{callID, tool, state}` → ToolCall + ToolResult（v2 的工具项字段为 `name`/`id`）。
+/// `tool` → ToolCall + ToolResult。
+///
+/// v1 part：`{callID, tool, state{status, input, output, error, title, metadata, time{start,end}}}`；
+/// v2 内容项：`{id, name, state{status, input, content[], error{type,message}, metadata},
+/// time{created, ran, completed}}`，输出在 `content[]`，没有 `output`/`title`。
 fn push_tool_blocks(blocks: &mut Vec<SessionBlock>, locator: &PartLocator, part: &Value) {
     let name = part
         .get("tool")
@@ -141,10 +145,11 @@ fn push_tool_blocks(blocks: &mut Vec<SessionBlock>, locator: &PartLocator, part:
         .unwrap_or_default()
         .to_string();
     let state = part.get("state");
+    // v2 `streaming` 状态的 input 是尚未写完的 JSON 字符串
     let input = state
         .and_then(|s| s.get("input"))
         .or_else(|| part.get("input"))
-        .cloned()
+        .map(parse_arguments)
         .unwrap_or(Value::Null);
     let metadata = state.and_then(|s| s.get("metadata"));
     let state_title = state
@@ -155,94 +160,228 @@ fn push_tool_blocks(blocks: &mut Vec<SessionBlock>, locator: &PartLocator, part:
     let mut call = tool_call_block(ToolSource::OpenCode, call_id.clone(), name, &input, || {
         locator.content_ref("/state/input")
     });
+    let mut kind = ToolKind::Other;
     if let SessionBlock::ToolCall {
-        kind, title, diff, ..
+        kind: call_kind,
+        title,
+        detail,
+        diff,
+        ..
     } = &mut call
     {
-        use crate::session_manager::model::ToolKind;
-        // edit/write 的 state.title 是相对项目的路径，比参数里的绝对路径更短
-        if matches!(kind, ToolKind::Edit | ToolKind::Write) {
-            if let Some(t) = state_title {
-                *title = title_path(t);
+        kind = *call_kind;
+        if let Some(summary) = metadata.and_then(|meta| files_diff(meta, locator)) {
+            // v2 edit/patch 与 v1 apply_patch 的逐文件统计
+            *title = title_path(&summary.files[0].path);
+            *detail = (summary.files.len() > 1).then(|| format!("{} 个文件", summary.files.len()));
+            *diff = Some(summary);
+        } else {
+            // v1 edit/write 的 state.title 是相对项目的路径，比参数里的绝对路径更短
+            if matches!(kind, ToolKind::Edit | ToolKind::Write) || title.is_empty() {
+                if let Some(t) = state_title {
+                    *title = title_path(t);
+                }
             }
-        }
-        if title.is_empty() {
-            if let Some(t) = state_title {
-                *title = title_path(t);
-            }
-        }
-        // 工具自己给的改动统计优先于参数估算（字段名待核实：filediff / diff / exists）
-        if let Some(meta) = metadata {
-            let path = str_field(&input, &["filePath", "file_path", "path"])
-                .unwrap_or(title.as_str())
-                .to_string();
-            let op = if *kind == ToolKind::Write {
-                if meta.get("exists").and_then(Value::as_bool) == Some(true) {
-                    DiffOp::Update
-                } else {
-                    DiffOp::Add
-                }
-            } else {
-                DiffOp::Update
-            };
-            let counts = match (
-                meta.pointer("/filediff/additions").and_then(Value::as_u64),
-                meta.pointer("/filediff/deletions").and_then(Value::as_u64),
-            ) {
-                (Some(a), Some(d)) => Some((saturate(a), saturate(d))),
-                _ => meta
-                    .get("diff")
-                    .and_then(Value::as_str)
-                    .map(count_diff_lines),
-            };
-            if let Some((added, removed)) = counts {
-                let mut summary = single_file_diff(&path, op, added, removed);
-                if meta.get("diff").and_then(Value::as_str).is_some() {
-                    summary.full = locator.content_ref("/state/metadata/diff");
-                }
-                *diff = Some(summary);
-            } else if let Some(d) = diff.as_mut() {
-                for file in &mut d.files {
-                    file.op = op;
-                }
+            if let Some(meta) = metadata {
+                apply_v1_diff_metadata(meta, kind, &input, title, diff, locator);
             }
         }
     }
     blocks.push(call);
 
     let status_raw = state.and_then(|s| s.get("status")).and_then(Value::as_str);
-    let error = state
-        .and_then(|s| s.get("error"))
-        .and_then(Value::as_str)
-        .unwrap_or("");
+    let error_value = state.and_then(|s| s.get("error"));
+    // v1 是字符串，v2 是 `{type, message}`
+    let (error, error_pointer) = match error_value {
+        Some(Value::String(e)) => (e.as_str(), "/state/error"),
+        Some(e) => (
+            e.get("message").and_then(Value::as_str).unwrap_or(""),
+            "/state/error/message",
+        ),
+        None => ("", "/state/error"),
+    };
+    let interrupted = matches!(
+        error_value
+            .and_then(|e| e.get("type"))
+            .and_then(Value::as_str),
+        Some("aborted" | "tool.interrupted")
+    ) || error.to_ascii_lowercase().contains("abort");
+    let exit = metadata
+        .and_then(|m| m.get("exit"))
+        .and_then(Value::as_i64)
+        .and_then(|code| i32::try_from(code).ok());
+    // 和官方桌面端一致：shell 正常结束但退出码非 0 或超时，视为失败
+    let shell_failed = kind == ToolKind::Shell
+        && (exit.is_some_and(|code| code != 0)
+            || metadata
+                .and_then(|m| m.get("timeout"))
+                .and_then(Value::as_bool)
+                == Some(true));
     let status = match status_raw {
+        Some("completed") if shell_failed => ToolStatus::Error,
         Some("completed") => ToolStatus::Success,
-        Some("error") if error.to_ascii_lowercase().contains("abort") => ToolStatus::Interrupted,
+        Some("error") if interrupted => ToolStatus::Interrupted,
         Some("error") => ToolStatus::Error,
-        Some("running" | "pending") => ToolStatus::Pending,
+        Some("running" | "pending" | "streaming") => ToolStatus::Pending,
         _ => ToolStatus::Unknown,
     };
-    let (text, pointer) = match state.and_then(|s| s.get("output")).and_then(Value::as_str) {
-        Some(output) if status != ToolStatus::Error || error.is_empty() => {
-            (output, "/state/output")
-        }
-        _ if !error.is_empty() => (error, "/state/error"),
-        _ => ("", "/state/output"),
+    let (output, output_pointer) = match state.and_then(|s| s.get("output")) {
+        Some(Value::String(output)) => (output.clone(), "/state/output"),
+        _ => (
+            state
+                .and_then(|s| s.get("content"))
+                .map(content_text)
+                .unwrap_or_default(),
+            "/state/content",
+        ),
+    };
+    let (text, pointer) = if !error.is_empty() && (status == ToolStatus::Error || output.is_empty())
+    {
+        (error, error_pointer)
+    } else {
+        (output.as_str(), output_pointer)
     };
     let mut result = tool_result_block(call_id, status, text, || locator.content_ref(pointer));
     if let SessionBlock::ToolResult {
         exit_code,
         duration_ms,
+        images,
         ..
     } = &mut result
     {
-        *exit_code = metadata
-            .and_then(|m| m.get("exit"))
-            .and_then(Value::as_i64)
-            .and_then(|code| i32::try_from(code).ok());
-        *duration_ms = state.and_then(time_span);
+        *exit_code = exit;
+        *duration_ms = state.and_then(time_span).or_else(|| time_span(part));
+        *images = content_images(state, locator);
     }
     blocks.push(result);
+}
+
+/// `metadata.files[]` → 逐文件改动摘要。v2 是 `{file, patch, additions, deletions, status}`，
+/// v1 `apply_patch` 是 `{filePath, relativePath, type, patch, additions, deletions}`。
+fn files_diff(meta: &Value, locator: &PartLocator) -> Option<DiffSummary> {
+    let entries = meta.get("files")?.as_array()?;
+    let files: Vec<DiffFile> = entries
+        .iter()
+        .filter_map(|entry| {
+            let path = str_field(entry, &["file", "relativePath", "filePath"])?;
+            let op = match entry
+                .get("status")
+                .or_else(|| entry.get("type"))
+                .and_then(Value::as_str)
+            {
+                Some("added" | "add") => DiffOp::Add,
+                Some("deleted" | "delete") => DiffOp::Delete,
+                Some("move") => DiffOp::Rename,
+                _ => DiffOp::Update,
+            };
+            let (added, removed) = match (
+                entry.get("additions").and_then(Value::as_u64),
+                entry.get("deletions").and_then(Value::as_u64),
+            ) {
+                (Some(a), Some(d)) => (saturate(a), saturate(d)),
+                _ => entry
+                    .get("patch")
+                    .and_then(Value::as_str)
+                    .map(count_diff_lines)
+                    .unwrap_or_default(),
+            };
+            Some(DiffFile {
+                path: path.to_string(),
+                op,
+                added,
+                removed,
+            })
+        })
+        .collect();
+    if files.is_empty() {
+        return None;
+    }
+    let full = if entries.len() == 1 && entries[0].get("patch").and_then(Value::as_str).is_some() {
+        locator.content_ref("/state/metadata/files/0/patch")
+    } else if meta.get("diff").and_then(Value::as_str).is_some() {
+        locator.content_ref("/state/metadata/diff")
+    } else {
+        None
+    };
+    Some(DiffSummary {
+        added: files.iter().fold(0, |sum, f| sum.saturating_add(f.added)),
+        removed: files.iter().fold(0, |sum, f| sum.saturating_add(f.removed)),
+        files,
+        full,
+    })
+}
+
+/// v1 edit/write 的 metadata：`filediff{additions, deletions}` / `diff` 字符串 / `exists`。
+fn apply_v1_diff_metadata(
+    meta: &Value,
+    kind: ToolKind,
+    input: &Value,
+    title: &str,
+    diff: &mut Option<DiffSummary>,
+    locator: &PartLocator,
+) {
+    let path = str_field(input, &["filePath", "file_path", "path"]).unwrap_or(title);
+    let op = if kind == ToolKind::Write {
+        if meta.get("exists").and_then(Value::as_bool) == Some(true) {
+            DiffOp::Update
+        } else {
+            DiffOp::Add
+        }
+    } else {
+        DiffOp::Update
+    };
+    let counts = match (
+        meta.pointer("/filediff/additions").and_then(Value::as_u64),
+        meta.pointer("/filediff/deletions").and_then(Value::as_u64),
+    ) {
+        (Some(a), Some(d)) => Some((saturate(a), saturate(d))),
+        _ => meta
+            .get("diff")
+            .and_then(Value::as_str)
+            .map(count_diff_lines),
+    };
+    if let Some((added, removed)) = counts {
+        let mut summary = single_file_diff(path, op, added, removed);
+        if meta.get("diff").and_then(Value::as_str).is_some() {
+            summary.full = locator.content_ref("/state/metadata/diff");
+        }
+        *diff = Some(summary);
+    } else if let Some(d) = diff.as_mut() {
+        for file in &mut d.files {
+            file.op = op;
+        }
+    }
+}
+
+/// v2 `content[]` 的文本项按 `\n` 拼接（与官方展示及 [`ContentRef`] 取全文的结果一致）。
+fn content_text(content: &Value) -> String {
+    content
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|item| item.get("text").and_then(Value::as_str))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// v2 `content[]` 里的图片文件项（`{type:"file", uri, mime, name?}`）。
+fn content_images(state: Option<&Value>, locator: &PartLocator) -> Vec<ImageRef> {
+    state
+        .and_then(|s| s.get("content"))
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .enumerate()
+        .filter(|(_, item)| item.get("type").and_then(Value::as_str) == Some("file"))
+        .filter_map(|(i, item)| {
+            file_image(
+                item.get("mime").and_then(Value::as_str).unwrap_or(""),
+                item.get("uri").and_then(Value::as_str).unwrap_or(""),
+                item.get("name").and_then(Value::as_str),
+                || locator.content_ref(&format!("/state/content/{i}/uri")),
+            )
+        })
+        .collect()
 }
 
 /// `patch{hash, files[]}`：一步结束时的文件快照，只有文件列表、没有行数（待核实）。
@@ -298,32 +437,9 @@ fn push_file_block(blocks: &mut Vec<SessionBlock>, locator: &PartLocator, part: 
         .get("filename")
         .and_then(Value::as_str)
         .filter(|s| !s.is_empty());
-    if mime.starts_with("image/") {
-        let source = if let Some(path) = url.strip_prefix("file://") {
-            Some((ImageSource::LocalFile { path: path.into() }, 0))
-        } else if url.starts_with("data:") {
-            let base64_len = url.split_once(',').map_or(0, |(_, data)| data.len());
-            // data URL 的 base64 在 `,` 之后，P2 解码前需去掉前缀
-            locator.content_ref("/url").map(|content| {
-                (
-                    ImageSource::Inline { content },
-                    estimate_base64_size(base64_len),
-                )
-            })
-        } else {
-            None
-        };
-        if let Some((source, size)) = source {
-            blocks.push(SessionBlock::Image {
-                image: ImageRef {
-                    source,
-                    media_type: mime.to_string(),
-                    size,
-                    alt: filename.map(str::to_string),
-                },
-            });
-            return;
-        }
+    if let Some(image) = file_image(mime, url, filename, || locator.content_ref("/url")) {
+        blocks.push(SessionBlock::Image { image });
+        return;
     }
     if let Some(text) = filename.or_else(|| (!url.is_empty()).then_some(url)) {
         blocks.push(SessionBlock::event(
@@ -334,15 +450,52 @@ fn push_file_block(blocks: &mut Vec<SessionBlock>, locator: &PartLocator, part: 
     }
 }
 
-/// 消息级 `error{name, data{message}}`：中断 → Aborted，其余 → Error。
+/// 图片文件 → [`ImageRef`]：`file://` → 本地文件；`data:` URL → 内联引用（`content` 指向整串 URL，
+/// 加载时去掉前缀）；不是图片或无法定位时返回 None。
+fn file_image(
+    mime: &str,
+    url: &str,
+    name: Option<&str>,
+    content: impl FnOnce() -> Option<ContentRef>,
+) -> Option<ImageRef> {
+    if !mime.starts_with("image/") {
+        return None;
+    }
+    let (source, size) = if let Some(path) = url.strip_prefix("file://") {
+        (ImageSource::LocalFile { path: path.into() }, 0)
+    } else if url.starts_with("data:") {
+        let base64_len = url.split_once(',').map_or(0, |(_, data)| data.len());
+        (
+            ImageSource::Inline {
+                content: content()?,
+            },
+            estimate_base64_size(base64_len),
+        )
+    } else {
+        return None;
+    };
+    Some(ImageRef {
+        source,
+        media_type: mime.to_string(),
+        size,
+        alt: name.filter(|s| !s.is_empty()).map(str::to_string),
+    })
+}
+
+/// 消息级错误：v1 `{name, data{message}}`，v2 `{type, message}`。中断 → Aborted，其余 → Error。
 fn message_error_event(info: &Value) -> Option<SessionBlock> {
     let error = info.get("error")?;
-    let name = error.get("name").and_then(Value::as_str).unwrap_or("");
-    if name == "MessageAbortedError" {
+    let name = error
+        .get("name")
+        .or_else(|| error.get("type"))
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    if matches!(name, "MessageAbortedError" | "aborted") {
         return Some(SessionBlock::event(EventKind::Aborted, None, None));
     }
     let text = error
         .pointer("/data/message")
+        .or_else(|| error.get("message"))
         .and_then(Value::as_str)
         .filter(|s| !s.is_empty())
         .unwrap_or(name);
@@ -354,6 +507,7 @@ fn message_error_event(info: &Value) -> Option<SessionBlock> {
 }
 
 /// 消息级 `cost/tokens/modelID/providerID/time/finish` → meta（0 视为缺省）。
+/// v2 的模型在 `model{id, providerID}`。
 fn message_meta(info: &Value) -> Option<MessageMeta> {
     let tokens = info.get("tokens");
     let count = |pointer: &str| {
@@ -362,8 +516,14 @@ fn message_meta(info: &Value) -> Option<MessageMeta> {
             .and_then(Value::as_u64)
             .filter(|n| *n > 0)
     };
-    let model_id = info.get("modelID").and_then(Value::as_str);
-    let provider_id = info.get("providerID").and_then(Value::as_str);
+    let model_id = info
+        .get("modelID")
+        .or_else(|| info.pointer("/model/id"))
+        .and_then(Value::as_str);
+    let provider_id = info
+        .get("providerID")
+        .or_else(|| info.pointer("/model/providerID"))
+        .and_then(Value::as_str);
     let model = match (provider_id, model_id) {
         (Some(p), Some(m)) if !p.is_empty() && !m.is_empty() => Some(format!("{p}/{m}")),
         (_, Some(m)) if !m.is_empty() => Some(m.to_string()),
@@ -416,10 +576,15 @@ fn total_tokens(tokens: &Value) -> Option<u64> {
     (sum > 0).then_some(sum)
 }
 
-/// `time{start, end}` → 毫秒时长
+/// 毫秒时长：v1 `time{start, end}`；v2 `time{created, ran?, completed?}`，工具从 `ran` 起算。
 fn time_span(value: &Value) -> Option<u64> {
-    let start = value.pointer("/time/start").and_then(Value::as_i64)?;
-    let end = value.pointer("/time/end").and_then(Value::as_i64)?;
+    let time = value.get("time")?;
+    let at = |keys: &[&str]| {
+        keys.iter()
+            .find_map(|key| time.get(*key).and_then(Value::as_i64))
+    };
+    let start = at(&["start", "ran", "created"])?;
+    let end = at(&["end", "completed"])?;
     u64::try_from(end - start).ok()
 }
 
@@ -737,11 +902,291 @@ mod tests {
         };
         let parts = vec![(locator, json!({"type":"tool","name":"shell","id":"call_1"}))];
         let msg = message_from_parts("assistant", None, None, &json!({}), &parts);
-        // 内置表之外、不含 `_` 的名字归为 other，标题就是原名
-        assert_eq!(msg.content, "[Tool: shell] shell");
+        assert!(matches!(
+            &msg.blocks[0],
+            SessionBlock::ToolCall { kind: ToolKind::Shell, title, .. } if title.is_empty()
+        ));
         assert!(matches!(
             &msg.blocks[1],
             SessionBlock::ToolResult { call_id, status: ToolStatus::Unknown, .. } if call_id == "call_1"
+        ));
+    }
+
+    fn v2(i: usize) -> PartLocator {
+        PartLocator::Sqlite {
+            table: "session_message",
+            id: "msg_2".into(),
+            base: format!("/content/{i}"),
+        }
+    }
+
+    /// 字段形状取自 v2.0.24 `packages/schema/src/session-message.ts` 与各工具插件的返回值
+    #[test]
+    fn v2_assistant_content_follows_session_message_schema() {
+        let long_output: String = (1..=40).map(|i| format!("file_{i:02}.rs\n")).collect();
+        let items = vec![
+            json!({"type":"reasoning","text":"先列目录","state":{"anthropic":{"signature":"sig"}},
+                   "time":{"created":1791014401000_i64,"completed":1791014402500_i64}}),
+            json!({"type":"tool","id":"t_ls","name":"shell","executed":false,
+                   "state":{"status":"completed","input":{"command":"ls src"},
+                            "content":[{"type":"text","text":long_output}],
+                            "metadata":{"status":"completed","truncated":false,"exit":0}},
+                   "time":{"created":1791014402600_i64,"ran":1791014402700_i64,"completed":1791014403100_i64}}),
+            json!({"type":"tool","id":"t_edit","name":"edit",
+                   "state":{"status":"completed","input":{"path":"src/a.ts","oldString":"a","newString":"b"},
+                            "content":[{"type":"text","text":"Edited src/a.ts (1 replacement)"}],
+                            "metadata":{"files":[{"file":"src/a.ts","patch":"--- a\n+++ b\n-a\n+b\n",
+                                                  "additions":1,"deletions":1,"status":"modified"}]}},
+                   "time":{"created":1791014403200_i64,"completed":1791014403500_i64}}),
+            json!({"type":"tool","id":"t_sleep","name":"shell",
+                   "state":{"status":"error","input":{"command":"sleep 100"},
+                            "error":{"type":"aborted","message":"Tool execution interrupted"},
+                            "metadata":{"shellID":"sh_1"}},
+                   "time":{"created":1791014403600_i64}}),
+            json!({"type":"tool","id":"t_test","name":"shell",
+                   "state":{"status":"completed","input":{"command":"cargo test"},
+                            "content":[{"type":"text","text":"boom"},{"type":"text","text":"Exited with code 101"}],
+                            "metadata":{"truncated":false,"exit":101}},
+                   "time":{"created":1791014404000_i64}}),
+            json!({"type":"tool","id":"t_patch","name":"patch",
+                   "state":{"status":"completed","input":{"patchText":"*** Begin Patch\n…"},
+                            "content":[{"type":"text","text":"Applied patch"}],
+                            "metadata":{"files":[
+                                {"file":"src/new.ts","patch":"+x\n+y\n","additions":2,"deletions":0,"status":"added"},
+                                {"file":"src/old.ts","patch":"-z\n","additions":0,"deletions":1,"status":"deleted"}]}},
+                   "time":{"created":1791014405000_i64}}),
+            json!({"type":"tool","id":"t_read","name":"read",
+                   "state":{"status":"completed","input":{"path":"shot.png"},
+                            "content":[{"type":"text","text":"Image read"},
+                                       {"type":"file","uri":"data:image/png;base64,AAAAAAAA","mime":"image/png","name":"shot.png"}]},
+                   "time":{"created":1791014406000_i64}}),
+            json!({"type":"tool","id":"t_missing","name":"read",
+                   "state":{"status":"error","input":{"path":"nope.ts"},
+                            "error":{"type":"tool.execution","message":"File not found: nope.ts"}},
+                   "time":{"created":1791014407000_i64}}),
+            json!({"type":"tool","id":"t_sub","name":"subagent",
+                   "state":{"status":"running","input":{"agent":"explore","description":"Find configs","prompt":"…"},
+                            "metadata":{}},
+                   "time":{"created":1791014408000_i64}}),
+            json!({"type":"tool","id":"t_stream","name":"write",
+                   "state":{"status":"streaming","input":"{\"path\":\"src/b.ts\",\"cont"},
+                   "time":{"created":1791014409000_i64}}),
+        ];
+        let parts: Vec<_> = items
+            .into_iter()
+            .enumerate()
+            .map(|(i, item)| (v2(i), item))
+            .collect();
+        let info = json!({
+            "agent":"build","model":{"id":"claude-sonnet-4-5","providerID":"anthropic","variant":"default"},
+            "finish":"tool-calls","cost":0.0123,
+            "tokens":{"input":812,"output":210,"reasoning":96,"cache":{"read":22300,"write":0}},
+            "error":{"type":"aborted","message":"Step interrupted"},
+            "time":{"created":1791014401000_i64,"completed":1791014409100_i64}
+        });
+        let msg = message_from_parts("assistant", Some("msg_2".into()), None, &info, &parts);
+        let b = &msg.blocks;
+        let result = |i: usize| match &b[i] {
+            SessionBlock::ToolResult {
+                status,
+                preview,
+                full,
+                exit_code,
+                duration_ms,
+                images,
+                ..
+            } => (
+                *status,
+                preview.as_str(),
+                full.clone(),
+                *exit_code,
+                *duration_ms,
+                images.clone(),
+            ),
+            other => panic!("{other:?}"),
+        };
+
+        assert!(matches!(
+            &b[0],
+            SessionBlock::Thinking {
+                duration_ms: Some(1500),
+                ..
+            }
+        ));
+
+        assert!(
+            matches!(&b[1], SessionBlock::ToolCall { kind: ToolKind::Shell, title, .. } if title == "ls src")
+        );
+        let (status, preview, full, exit, duration, _) = result(2);
+        assert_eq!(status, ToolStatus::Success);
+        assert!(preview.starts_with("file_01.rs\nfile_02.rs"));
+        assert_eq!(
+            full,
+            Some(ContentRef::Sqlite {
+                table: "session_message".into(),
+                id: "msg_2".into(),
+                column: "data".into(),
+                pointer: "/content/1/state/content".into(),
+            })
+        );
+        assert_eq!((exit, duration), (Some(0), Some(400)));
+
+        match &b[3] {
+            SessionBlock::ToolCall {
+                kind, title, diff, ..
+            } => {
+                assert_eq!(*kind, ToolKind::Edit);
+                assert_eq!(title, "src/a.ts");
+                let diff = diff.as_ref().expect("diff");
+                assert_eq!((diff.added, diff.removed), (1, 1));
+                assert_eq!(diff.files[0].op, DiffOp::Update);
+                assert!(matches!(
+                    &diff.full,
+                    Some(ContentRef::Sqlite { pointer, .. }) if pointer == "/content/2/state/metadata/files/0/patch"
+                ));
+            }
+            other => panic!("{other:?}"),
+        }
+        let (status, preview, ..) = result(4);
+        assert_eq!(
+            (status, preview),
+            (ToolStatus::Success, "Edited src/a.ts (1 replacement)")
+        );
+
+        let (status, preview, ..) = result(6);
+        assert_eq!(
+            (status, preview),
+            (ToolStatus::Interrupted, "Tool execution interrupted")
+        );
+
+        let (status, preview, _, exit, ..) = result(8);
+        assert_eq!(status, ToolStatus::Error);
+        assert_eq!(preview, "boom\nExited with code 101");
+        assert_eq!(exit, Some(101));
+
+        match &b[9] {
+            SessionBlock::ToolCall {
+                kind,
+                title,
+                detail,
+                diff,
+                ..
+            } => {
+                assert_eq!(*kind, ToolKind::Edit);
+                assert_eq!(title, "src/new.ts");
+                assert_eq!(detail.as_deref(), Some("2 个文件"));
+                let diff = diff.as_ref().expect("diff");
+                let ops: Vec<_> = diff.files.iter().map(|f| f.op).collect();
+                assert_eq!(ops, [DiffOp::Add, DiffOp::Delete]);
+                assert_eq!((diff.added, diff.removed), (2, 1));
+                assert_eq!(diff.full, None);
+            }
+            other => panic!("{other:?}"),
+        }
+
+        let (status, preview, .., images) = result(12);
+        assert_eq!((status, preview), (ToolStatus::Success, "Image read"));
+        assert_eq!(images.len(), 1);
+        assert_eq!(images[0].alt.as_deref(), Some("shot.png"));
+        assert!(matches!(
+            &images[0].source,
+            ImageSource::Inline { content: ContentRef::Sqlite { pointer, .. } } if pointer == "/content/6/state/content/1/uri"
+        ));
+
+        let (status, preview, ..) = result(14);
+        assert_eq!(
+            (status, preview),
+            (ToolStatus::Error, "File not found: nope.ts")
+        );
+
+        match &b[15] {
+            SessionBlock::ToolCall {
+                kind,
+                title,
+                detail,
+                ..
+            } => {
+                assert_eq!(*kind, ToolKind::Agent);
+                assert_eq!(title, "Find configs");
+                assert_eq!(detail.as_deref(), Some("explore"));
+            }
+            other => panic!("{other:?}"),
+        }
+        assert_eq!(result(16).0, ToolStatus::Pending);
+
+        // 写到一半的参数保持原字符串
+        assert!(matches!(
+            &b[17],
+            SessionBlock::ToolCall { kind: ToolKind::Write, input_preview, .. } if input_preview.starts_with("{\"path\"")
+        ));
+        assert_eq!(result(18).0, ToolStatus::Pending);
+
+        assert!(matches!(
+            b.last(),
+            Some(SessionBlock::Event {
+                kind: EventKind::Aborted,
+                ..
+            })
+        ));
+        let meta = msg.meta.expect("meta");
+        assert_eq!(meta.model.as_deref(), Some("anthropic/claude-sonnet-4-5"));
+        assert_eq!(meta.duration_ms, Some(8100));
+
+        let failed = json!({"error":{"type":"provider.error","message":"Overloaded"}});
+        let msg = message_from_parts("assistant", None, None, &failed, &[]);
+        assert_eq!(msg.content, "Overloaded");
+    }
+
+    #[test]
+    fn v1_apply_patch_and_failed_bash() {
+        let parts = vec![
+            (
+                sqlite("p1"),
+                json!({"type":"tool","callID":"ap","tool":"apply_patch","state":{
+                    "status":"completed","input":{"patchText":"*** Begin Patch"},
+                    "output":"Success. Updated the following files:\nM a.ts\nR b.ts",
+                    "title":"Success. Updated the following files:\nM a.ts\nR b.ts",
+                    "metadata":{"diff":"--- a\n+++ b\n-a\n+a2\n+a3\n","files":[
+                        {"filePath":"/p/a.ts","relativePath":"a.ts","type":"update","patch":"-a\n+a2\n+a3\n","additions":2,"deletions":1},
+                        {"filePath":"/p/b.ts","relativePath":"c.ts","type":"move","movePath":"/p/c.ts","patch":"","additions":0,"deletions":0}]},
+                    "time":{"start":1,"end":5}}}),
+            ),
+            (
+                sqlite("p2"),
+                json!({"type":"tool","callID":"bt","tool":"bash","state":{
+                    "status":"completed","input":{"command":"false"},"output":"",
+                    "metadata":{"exit":1},"time":{"start":1,"end":3}}}),
+            ),
+        ];
+        let msg = message_from_parts("assistant", None, None, &json!({}), &parts);
+        match &msg.blocks[0] {
+            SessionBlock::ToolCall {
+                kind,
+                title,
+                detail,
+                diff,
+                ..
+            } => {
+                assert_eq!(*kind, ToolKind::Edit);
+                assert_eq!(title, "a.ts");
+                assert_eq!(detail.as_deref(), Some("2 个文件"));
+                let diff = diff.as_ref().expect("diff");
+                let ops: Vec<_> = diff.files.iter().map(|f| f.op).collect();
+                assert_eq!(ops, [DiffOp::Update, DiffOp::Rename]);
+                assert!(matches!(
+                    &diff.full,
+                    Some(ContentRef::Sqlite { pointer, .. }) if pointer == "/state/metadata/diff"
+                ));
+            }
+            other => panic!("{other:?}"),
+        }
+        assert!(matches!(
+            &msg.blocks[3],
+            SessionBlock::ToolResult {
+                status: ToolStatus::Error,
+                exit_code: Some(1),
+                ..
+            }
         ));
     }
 }

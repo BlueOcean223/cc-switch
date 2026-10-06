@@ -1386,7 +1386,7 @@ mod tests {
                 "ses_v2_1",
                 "assistant",
                 2_i64,
-                r#"{"content":[{"type":"reasoning","text":"thinking"},{"type":"tool","name":"shell","id":"call_1"},{"type":"text","text":"All done in V2"}]}"#,
+                r#"{"content":[{"type":"reasoning","text":"thinking"},{"type":"tool","name":"shell","id":"call_1","state":{"status":"completed","input":{"command":"ls"},"content":[{"type":"text","text":"a.txt"}]},"time":{"created":2100}},{"type":"text","text":"All done in V2"}]}"#,
                 2000_i64,
                 2500_i64,
             ),
@@ -1407,7 +1407,10 @@ mod tests {
         assert_eq!(messages[0].content, "Hello V2");
         assert_eq!(messages[0].ts, Some(1000));
         assert_eq!(messages[1].role, "assistant");
-        assert_eq!(messages[1].content, "[Tool: shell] shell\n\nAll done in V2");
+        assert_eq!(
+            messages[1].content,
+            "[Tool: shell] ls\n\na.txt\n\nAll done in V2"
+        );
         assert_eq!(messages[1].ts, Some(2000));
     }
 
