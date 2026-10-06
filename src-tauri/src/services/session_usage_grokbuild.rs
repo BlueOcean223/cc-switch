@@ -25,6 +25,8 @@
 //!   修复路径，所以定价漂移窗口不能押在本地价上）；本地定价负责分项成本与
 //!   漂移告警。`costIsPartial` 标记自报为下界：有本地价回退本地全额复算并
 //!   抑制漂移告警，无价才用下界入账（分项记 0）。
+//! - 子代理会话不导入：它的用量已并入父会话当轮的 turn_completed。fork 会话
+//!   复制了源会话的全部事件，源会话已有的 prompt_id 跳过（见 [`GrokSessionOrigin`]）。
 
 use crate::database::{lock_conn, Database};
 use crate::error::AppError;
@@ -35,7 +37,10 @@ use crate::services::sql_helpers::INPUT_TOKEN_SEMANTICS_FRESH;
 use crate::services::usage_stats::find_model_pricing;
 use crate::token_usage::calculator::{CostCalculator, ModelPricing, ServiceTier};
 use crate::token_usage::parser::TokenUsage;
+use rusqlite::OptionalExtension;
 use rust_decimal::Decimal;
+use serde::Deserialize;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
@@ -75,9 +80,52 @@ struct GrokUsageEvent {
     per_model: Vec<(String, GrokCounters)>,
 }
 
+/// summary.json 里决定用量归属的字段（grok-build `Summary`）
+#[derive(Debug, Default, Deserialize)]
+struct GrokSessionOrigin {
+    /// `subagent*` / `fork` / `worktree` 等；普通会话缺省
+    #[serde(default)]
+    session_kind: Option<String>,
+    /// fork 出来的会话指向源会话
+    #[serde(default)]
+    parent_session_id: Option<String>,
+}
+
+impl GrokSessionOrigin {
+    fn read(session_dir: &Path) -> Self {
+        fs::read_to_string(session_dir.join("summary.json"))
+            .ok()
+            .and_then(|text| serde_json::from_str(&text).ok())
+            .unwrap_or_default()
+    }
+
+    /// 子代理的用量在结束时并入父会话当轮（grok-build `record_subagent_usage` →
+    /// `SubagentUsageApply::AttributedToPrompt`），父会话的 turn_completed 已经含这部分。
+    /// 父会话那一轮已结束时只记进父会话的会话总账（`SessionOnly`），不进任何
+    /// turn_completed，这部分会少记；本机 25 份 usage.json 里会话总账都等于逐轮之和，
+    /// 未观测到。
+    fn is_subagent(&self) -> bool {
+        self.session_kind
+            .as_deref()
+            .is_some_and(|kind| kind.starts_with("subagent"))
+    }
+
+    /// fork 会逐行复制源会话的 updates.jsonl（只改会话 ID，prompt_id 不变，见 grok-build
+    /// `session/storage/jsonl/copy.rs`），复制来的轮次源会话已经记过
+    fn parent(&self) -> Option<&str> {
+        self.parent_session_id
+            .as_deref()
+            .filter(|id| !id.is_empty())
+    }
+}
+
 /// 同步 Grok Build 使用数据（从 updates.jsonl 会话日志）
 pub fn sync_grokbuild_usage(db: &Database) -> Result<SessionSyncResult, AppError> {
     let files = collect_grok_updates_files();
+    let files_by_session: HashMap<&str, &Path> = files
+        .iter()
+        .filter_map(|path| Some((session_id_of(path)?, path.as_path())))
+        .collect();
 
     let mut result = SessionSyncResult {
         files_scanned: files.len() as u32,
@@ -87,7 +135,7 @@ pub fn sync_grokbuild_usage(db: &Database) -> Result<SessionSyncResult, AppError
     let cursors = crate::services::session_usage::load_sync_cursors(db)?;
 
     for file_path in &files {
-        match sync_single_grok_file(db, file_path, &cursors) {
+        match sync_single_grok_file(db, file_path, &cursors, &files_by_session) {
             Ok(file_result) => result.merge(file_result),
             Err(e) => {
                 let msg = format!("Grok Build 会话文件解析失败 {}: {e}", file_path.display());
@@ -156,11 +204,24 @@ fn collect_files_named(root: &Path, name: &str, files: &mut Vec<PathBuf>, depth:
     }
 }
 
+/// 会话 ID = 会话目录名（与 summary.json 的 info.id 一致）
+fn session_id_of(updates_path: &Path) -> Option<&str> {
+    updates_path.parent()?.file_name()?.to_str()
+}
+
+fn read_usage_events(path: &Path) -> Result<Vec<GrokUsageEvent>, AppError> {
+    // 逐行读：长会话的 updates.jsonl 可以有上百 MB（大部分是流式消息块）
+    let file = fs::File::open(path).map_err(|e| AppError::Config(format!("无法打开文件: {e}")))?;
+    parse_grok_usage_events(BufReader::new(file))
+        .map_err(|e| AppError::Config(format!("无法读取文件: {e}")))
+}
+
 /// 同步单个 updates.jsonl 文件。游标来自调用方批量预取。
 fn sync_single_grok_file(
     db: &Database,
     file_path: &Path,
-    cursors: &std::collections::HashMap<String, crate::services::session_usage::SyncCursor>,
+    cursors: &HashMap<String, crate::services::session_usage::SyncCursor>,
+    files_by_session: &HashMap<&str, &Path>,
 ) -> Result<SessionSyncResult, AppError> {
     let file_path_str = file_path.to_string_lossy().to_string();
 
@@ -173,22 +234,28 @@ fn sync_single_grok_file(
         return Ok(SessionSyncResult::default());
     }
 
-    // 文件变更时全量重读，UPSERT 幂等使重读无害。逐行读：长会话的
-    // updates.jsonl 可以有上百 MB（大部分是流式消息块）。
-    let file =
-        fs::File::open(file_path).map_err(|e| AppError::Config(format!("无法打开文件: {e}")))?;
-    let events = parse_grok_usage_events(BufReader::new(file))
-        .map_err(|e| AppError::Config(format!("无法读取文件: {e}")))?;
-
-    // 会话 ID = 会话目录名（与 summary.json 的 info.id 一致）。request_id
-    // 唯一性押在该 UUIDv7 全局唯一上：同 ID 的归档/活跃副本经 UPSERT 幂等
-    // 收敛（有意），不同 <enc-cwd> 下撞 ID 视为不可能。
-    let session_id = file_path
+    let origin = file_path
         .parent()
-        .and_then(|dir| dir.file_name())
-        .and_then(|n| n.to_str())
-        .unwrap_or("unknown")
-        .to_string();
+        .map(GrokSessionOrigin::read)
+        .unwrap_or_default();
+    if origin.is_subagent() {
+        update_sync_state(db, &file_path_str, file_modified, 0)?;
+        return Ok(SessionSyncResult::default());
+    }
+
+    // 文件变更时全量重读，UPSERT 幂等使重读无害
+    let events = read_usage_events(file_path)?;
+
+    // request_id 唯一性押在会话 ID（UUIDv7）全局唯一上：同 ID 的归档/活跃副本经
+    // UPSERT 幂等收敛（有意），不同 <enc-cwd> 下撞 ID 视为不可能。
+    let session_id = session_id_of(file_path).unwrap_or("unknown").to_string();
+
+    // fork：源会话日志还在时取它的全部 prompt_id；源会话已删时逐条查库里有没有源会话的同一行
+    let parent = origin.parent();
+    let parent_prompts: Option<HashSet<String>> = parent
+        .and_then(|id| files_by_session.get(id))
+        .and_then(|path| read_usage_events(path).ok())
+        .map(|events| events.into_iter().map(|e| e.prompt_id).collect());
 
     let mut result = SessionSyncResult::default();
 
@@ -196,6 +263,19 @@ fn sync_single_grok_file(
         for (model, turn) in &event.per_model {
             if turn.is_zero() {
                 continue;
+            }
+            if let Some(parent) = parent.filter(|_| !event.prompt_id.is_empty()) {
+                let inherited = match &parent_prompts {
+                    Some(prompts) => prompts.contains(&event.prompt_id),
+                    None => grok_row_exists(
+                        db,
+                        &format!("grok_session:{parent}:{}:{model}", event.prompt_id),
+                    )?,
+                };
+                if inherited {
+                    result.skipped += 1;
+                    continue;
+                }
             }
             // 幂等键锚定上游稳定 ID（prompt_id 是每轮唯一的 UUID），不含文件
             // 内序号：updates.jsonl 前缀被改写（如 rewind 截断）导致事件序号
@@ -346,6 +426,18 @@ fn parse_event_timestamp(value: Option<&serde_json::Value>) -> Option<i64> {
 }
 
 /// 插入单条 Grok 会话记录到 proxy_request_logs
+fn grok_row_exists(db: &Database, request_id: &str) -> Result<bool, AppError> {
+    let conn = lock_conn!(db.conn);
+    conn.query_row(
+        "SELECT 1 FROM proxy_request_logs WHERE request_id = ?1",
+        [request_id],
+        |_| Ok(()),
+    )
+    .optional()
+    .map(|row| row.is_some())
+    .map_err(|e| AppError::Database(format!("查询 Grok 用量记录失败: {e}")))
+}
+
 fn insert_grok_session_entry(
     db: &Database,
     request_id: &str,
@@ -573,6 +665,15 @@ mod tests {
         )
     }
 
+    fn sync_file(db: &Database, path: &Path) -> Result<SessionSyncResult, AppError> {
+        sync_single_grok_file(
+            db,
+            path,
+            &crate::services::session_usage::load_sync_cursors(db).unwrap(),
+            &HashMap::new(),
+        )
+    }
+
     fn write_session_file(dir: &Path, session_id: &str, lines: &[String]) -> PathBuf {
         let session_dir = dir.join("sessions").join("enc-project").join(session_id);
         std::fs::create_dir_all(&session_dir).expect("create session dir");
@@ -692,11 +793,7 @@ mod tests {
         ];
         let path = write_session_file(temp.path(), "sess-two-turns", &lines);
 
-        let result = sync_single_grok_file(
-            &db,
-            &path,
-            &crate::services::session_usage::load_sync_cursors(&db).unwrap(),
-        )?;
+        let result = sync_file(&db, &path)?;
         assert_eq!(result.imported, 2);
         assert_eq!(result.deferred_files, 0);
 
@@ -737,11 +834,7 @@ mod tests {
         ];
         let path = write_session_file(temp.path(), "sess-resume", &lines);
 
-        let result = sync_single_grok_file(
-            &db,
-            &path,
-            &crate::services::session_usage::load_sync_cursors(&db).unwrap(),
-        )?;
+        let result = sync_file(&db, &path)?;
         assert_eq!(result.imported, 2);
 
         let rows = query_rows(&db)?;
@@ -771,11 +864,7 @@ mod tests {
         ];
         let path = write_session_file(temp.path(), "sess-identical", &lines);
 
-        let result = sync_single_grok_file(
-            &db,
-            &path,
-            &crate::services::session_usage::load_sync_cursors(&db).unwrap(),
-        )?;
+        let result = sync_file(&db, &path)?;
         assert_eq!(result.imported, 2, "相同数值的两轮都是真实用量");
         assert_eq!(query_rows(&db)?.len(), 2);
         Ok(())
@@ -793,11 +882,7 @@ mod tests {
         let lines = vec![usage_event_line(OLD_EPOCH, "p1", &both)];
         let path = write_session_file(temp.path(), "sess-multi", &lines);
 
-        let result = sync_single_grok_file(
-            &db,
-            &path,
-            &crate::services::session_usage::load_sync_cursors(&db).unwrap(),
-        )?;
+        let result = sync_file(&db, &path)?;
         assert_eq!(result.imported, 2);
         let rows = query_rows(&db)?;
         assert!(rows[0].0.ends_with(":grok-4.3"));
@@ -820,11 +905,7 @@ mod tests {
         )];
         let path = write_session_file(temp.path(), "sess-recent", &lines);
 
-        let result = sync_single_grok_file(
-            &db,
-            &path,
-            &crate::services::session_usage::load_sync_cursors(&db).unwrap(),
-        )?;
+        let result = sync_file(&db, &path)?;
         assert_eq!(result.imported, 1);
         assert_eq!(result.deferred_files, 0);
 
@@ -851,19 +932,11 @@ mod tests {
         ];
         let path = write_session_file(temp.path(), "sess-idem", &lines);
 
-        let first = sync_single_grok_file(
-            &db,
-            &path,
-            &crate::services::session_usage::load_sync_cursors(&db).unwrap(),
-        )?;
+        let first = sync_file(&db, &path)?;
         assert_eq!(first.imported, 2);
 
         // mtime 未变 → 短路
-        let second = sync_single_grok_file(
-            &db,
-            &path,
-            &crate::services::session_usage::load_sync_cursors(&db).unwrap(),
-        )?;
+        let second = sync_file(&db, &path)?;
         assert_eq!(second.imported + second.skipped, 0);
 
         // 强制重读（清同步状态）→ UPSERT 全部无变化
@@ -871,11 +944,7 @@ mod tests {
             let conn = lock_conn!(db.conn);
             conn.execute("DELETE FROM session_log_sync", [])?;
         }
-        let third = sync_single_grok_file(
-            &db,
-            &path,
-            &crate::services::session_usage::load_sync_cursors(&db).unwrap(),
-        )?;
+        let third = sync_file(&db, &path)?;
         assert_eq!(third.imported, 0);
         assert_eq!(third.skipped, 2);
         assert_eq!(query_rows(&db)?.len(), 2);
@@ -908,15 +977,7 @@ mod tests {
             ),
         ];
         let path = write_session_file(temp.path(), "sess-rewind", &full);
-        assert_eq!(
-            sync_single_grok_file(
-                &db,
-                &path,
-                &crate::services::session_usage::load_sync_cursors(&db).unwrap()
-            )?
-            .imported,
-            3
-        );
+        assert_eq!(sync_file(&db, &path)?.imported, 3);
 
         // 模拟 rewind 截掉 p2：p3 从 idx2 前移到 idx1
         let truncated = vec![full[0].clone(), full[2].clone()];
@@ -926,11 +987,7 @@ mod tests {
             conn.execute("DELETE FROM session_log_sync", [])?;
         }
 
-        let rescan = sync_single_grok_file(
-            &db,
-            &path,
-            &crate::services::session_usage::load_sync_cursors(&db).unwrap(),
-        )?;
+        let rescan = sync_file(&db, &path)?;
         assert_eq!(rescan.imported, 0, "幸存轮不得因序号前移重新入账");
 
         let rows = query_rows(&db)?;
@@ -952,15 +1009,7 @@ mod tests {
         )];
         let path = write_session_file(temp.path(), "sess-noprompt", &lines);
 
-        assert_eq!(
-            sync_single_grok_file(
-                &db,
-                &path,
-                &crate::services::session_usage::load_sync_cursors(&db).unwrap()
-            )?
-            .imported,
-            1
-        );
+        assert_eq!(sync_file(&db, &path)?.imported, 1);
         let rows = query_rows(&db)?;
         assert!(rows[0].0.contains(":idx0:"), "空 prompt_id 回退序号键");
         Ok(())
@@ -982,11 +1031,7 @@ mod tests {
         )];
         let path = write_session_file(temp.path(), "sess-ticks", &lines);
 
-        let result = sync_single_grok_file(
-            &db,
-            &path,
-            &crate::services::session_usage::load_sync_cursors(&db).unwrap(),
-        )?;
+        let result = sync_file(&db, &path)?;
         assert_eq!(result.imported, 1);
 
         let conn = lock_conn!(db.conn);
@@ -1015,11 +1060,7 @@ mod tests {
         )];
         let path = write_session_file(temp.path(), "sess-ticks-cache", &lines);
 
-        let result = sync_single_grok_file(
-            &db,
-            &path,
-            &crate::services::session_usage::load_sync_cursors(&db).unwrap(),
-        )?;
+        let result = sync_file(&db, &path)?;
         assert_eq!(result.imported, 1);
 
         let conn = lock_conn!(db.conn);
@@ -1048,11 +1089,7 @@ mod tests {
         )];
         let path = write_session_file(temp.path(), "sess-drift", &lines);
 
-        let result = sync_single_grok_file(
-            &db,
-            &path,
-            &crate::services::session_usage::load_sync_cursors(&db).unwrap(),
-        )?;
+        let result = sync_file(&db, &path)?;
         assert_eq!(result.imported, 1);
 
         let conn = lock_conn!(db.conn);
@@ -1089,11 +1126,7 @@ mod tests {
         )];
         let path = write_session_file(temp.path(), "sess-partial", &lines);
 
-        let result = sync_single_grok_file(
-            &db,
-            &path,
-            &crate::services::session_usage::load_sync_cursors(&db).unwrap(),
-        )?;
+        let result = sync_file(&db, &path)?;
         assert_eq!(result.imported, 1);
 
         let conn = lock_conn!(db.conn);
@@ -1121,11 +1154,7 @@ mod tests {
         )];
         let path = write_session_file(temp.path(), "sess-unpriced", &lines);
 
-        let result = sync_single_grok_file(
-            &db,
-            &path,
-            &crate::services::session_usage::load_sync_cursors(&db).unwrap(),
-        )?;
+        let result = sync_file(&db, &path)?;
         assert_eq!(result.imported, 1);
 
         let conn = lock_conn!(db.conn);
@@ -1169,5 +1198,128 @@ mod tests {
             1,
             "only the real updates.jsonl should be collected; symlink cycle must not crash"
         );
+    }
+
+    fn write_summary(updates_path: &Path, json: &str) {
+        std::fs::write(updates_path.with_file_name("summary.json"), json).expect("write summary");
+    }
+
+    fn row_ids(db: &Database) -> Vec<String> {
+        let mut ids: Vec<String> = query_rows(db)
+            .expect("query rows")
+            .into_iter()
+            .map(|row| row.0)
+            .collect();
+        ids.sort();
+        ids
+    }
+
+    #[test]
+    fn subagent_sessions_are_not_imported() -> Result<(), AppError> {
+        // 子代理用量已并入父会话当轮的 turn_completed（本机实测：父会话各轮
+        // modelCalls - numTurns 之和 311 = 子代理 modelCalls 之和 311）
+        let db = Database::memory()?;
+        let temp = tempdir().expect("tempdir");
+        let line = usage_event_line(
+            OLD_EPOCH,
+            "p1",
+            &model_counters("grok-4.5-build", 100, 10, 0, 1),
+        );
+        let path = write_session_file(temp.path(), "sess-sub", &[line]);
+        write_summary(
+            &path,
+            r#"{"info":{"id":"sess-sub"},"session_kind":"subagent"}"#,
+        );
+
+        let result = sync_file(&db, &path)?;
+        assert_eq!(result.imported, 0);
+        assert!(row_ids(&db).is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn fork_skips_turns_copied_from_its_source_session() -> Result<(), AppError> {
+        let db = Database::memory()?;
+        let temp = tempdir().expect("tempdir");
+        let counters = model_counters("grok-4.5-build", 100, 10, 0, 1);
+        let parent = write_session_file(
+            temp.path(),
+            "sess-parent",
+            &[
+                usage_event_line(OLD_EPOCH, "p1", &counters),
+                usage_event_line(OLD_EPOCH + 60, "p2", &counters),
+            ],
+        );
+        // fork 复制源会话的事件（prompt_id 不变），之后追加自己的轮次
+        let fork = write_session_file(
+            temp.path(),
+            "sess-fork",
+            &[
+                usage_event_line(OLD_EPOCH + 120, "p1", &counters),
+                usage_event_line(OLD_EPOCH + 120, "p2", &counters),
+                usage_event_line(OLD_EPOCH + 180, "p3", &counters),
+            ],
+        );
+        write_summary(
+            &fork,
+            r#"{"info":{"id":"sess-fork"},"session_kind":"fork","parent_session_id":"sess-parent"}"#,
+        );
+        let files: HashMap<&str, &Path> = HashMap::from([
+            ("sess-parent", parent.as_path()),
+            ("sess-fork", fork.as_path()),
+        ]);
+        let cursors = crate::services::session_usage::load_sync_cursors(&db).unwrap();
+
+        // 先同步 fork：源会话还没入库，靠源会话日志里的 prompt_id 识别
+        let forked = sync_single_grok_file(&db, &fork, &cursors, &files)?;
+        assert_eq!((forked.imported, forked.skipped), (1, 2));
+        sync_single_grok_file(&db, &parent, &cursors, &files)?;
+
+        assert_eq!(
+            row_ids(&db),
+            vec![
+                "grok_session:sess-fork:p3:grok-4.5-build",
+                "grok_session:sess-parent:p1:grok-4.5-build",
+                "grok_session:sess-parent:p2:grok-4.5-build",
+            ]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn fork_of_a_deleted_session_skips_turns_already_recorded_for_it() -> Result<(), AppError> {
+        let db = Database::memory()?;
+        let temp = tempdir().expect("tempdir");
+        let counters = model_counters("grok-4.5-build", 100, 10, 0, 1);
+        let parent = write_session_file(
+            temp.path(),
+            "sess-gone",
+            &[usage_event_line(OLD_EPOCH, "p1", &counters)],
+        );
+        sync_file(&db, &parent)?;
+        std::fs::remove_dir_all(parent.parent().unwrap()).expect("delete source session");
+
+        let fork = write_session_file(
+            temp.path(),
+            "sess-fork",
+            &[
+                usage_event_line(OLD_EPOCH + 120, "p1", &counters),
+                usage_event_line(OLD_EPOCH + 180, "p2", &counters),
+            ],
+        );
+        write_summary(
+            &fork,
+            r#"{"info":{"id":"sess-fork"},"session_kind":"fork","parent_session_id":"sess-gone"}"#,
+        );
+
+        sync_file(&db, &fork)?;
+        assert_eq!(
+            row_ids(&db),
+            vec![
+                "grok_session:sess-fork:p2:grok-4.5-build",
+                "grok_session:sess-gone:p1:grok-4.5-build",
+            ]
+        );
+        Ok(())
     }
 }
