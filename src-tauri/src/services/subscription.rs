@@ -371,8 +371,8 @@ pub const TIER_MONTHLY: &str = "monthly";
 pub const TIER_THIRTY_DAY: &str = "30_day";
 
 /// Grok credit 额度窗口的兜底 tier 名。Grok 账单接口只返回一个 credit 用量
-/// 窗口，`subscription_grok::tier_name_for_reset` 按重置距离优先映射到
-/// `weekly_limit` / `monthly`，两者都不匹配时用此标识；前端 `TIER_I18N_KEYS`
+/// 窗口，`subscription_grok::tier_name_for_period` 按账单周期类型映射到
+/// `weekly_limit` / `monthly`，类型未知或缺省时用此标识；前端 `TIER_I18N_KEYS`
 /// 映射到 `subscription.credits`，tray 归入 "c" 分组。
 pub const TIER_CREDITS: &str = "credits";
 
