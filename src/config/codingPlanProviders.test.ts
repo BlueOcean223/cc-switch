@@ -33,6 +33,15 @@ describe("detectCodingPlanProvider (OpenCode Go)", () => {
   });
 });
 
+describe("detectCodingPlanProvider (Kimi)", () => {
+  it.each(["https://api.kimi.com/coding/", "https://api.kimi.ai/coding/v1"])(
+    "recognizes Kimi For Coding for %s",
+    (baseUrl) => {
+      expect(detectCodingPlanProvider(baseUrl)).toBe("kimi");
+    },
+  );
+});
+
 describe("detectCodingPlanProvider (MiniMax)", () => {
   it.each([
     "https://api.minimax.cn/v1",

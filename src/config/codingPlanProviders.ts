@@ -29,7 +29,11 @@ export interface CodingPlanProviderEntry {
 }
 
 export const CODING_PLAN_PROVIDERS: readonly CodingPlanProviderEntry[] = [
-  { id: "kimi", label: "Kimi For Coding", pattern: /api\.kimi\.com\/coding/i },
+  {
+    id: "kimi",
+    label: "Kimi For Coding",
+    pattern: /api\.kimi\.(?:com|ai)\/coding/i,
+  },
   {
     id: "zhipu",
     label: "Zhipu GLM (智谱)",

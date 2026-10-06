@@ -11,7 +11,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 // ── 供应商检测 ──────────────────────────────────────────────
 
 enum CodingPlanProvider {
-    Kimi,
+    /// Kimi For Coding，国内 base `api.kimi.com/coding`，国际 `api.kimi.ai/coding`。
+    KimiCn,
+    KimiEn,
     ZhipuCn,
     ZhipuEn,
     MiniMaxCn,
@@ -32,7 +34,9 @@ enum CodingPlanProvider {
 fn detect_provider(base_url: &str) -> Option<CodingPlanProvider> {
     let url = base_url.to_lowercase();
     if url.contains("api.kimi.com/coding") {
-        Some(CodingPlanProvider::Kimi)
+        Some(CodingPlanProvider::KimiCn)
+    } else if url.contains("api.kimi.ai/coding") {
+        Some(CodingPlanProvider::KimiEn)
     } else if url.contains("open.bigmodel.cn") || url.contains("bigmodel.cn") {
         Some(CodingPlanProvider::ZhipuCn)
     } else if url.contains("api.z.ai") {
@@ -119,11 +123,17 @@ fn make_error(msg: String) -> SubscriptionQuota {
 
 // ── Kimi For Coding ─────────────────────────────────────────
 
-async fn query_kimi(api_key: &str) -> Result<SubscriptionQuota, String> {
+async fn query_kimi(api_key: &str, is_cn: bool) -> Result<SubscriptionQuota, String> {
     let client = crate::http_client::get();
 
+    // 与官方 CLI（MoonshotAI/kimi-code `packages/oauth/src/managed-usage.ts`）一致
+    let url = if is_cn {
+        "https://api.kimi.com/coding/v1/usages"
+    } else {
+        "https://api.kimi.ai/coding/v1/usages"
+    };
     let resp = client
-        .get("https://api.kimi.com/coding/v1/usages")
+        .get(url)
         .header("Authorization", format!("Bearer {api_key}"))
         .header("Accept", "application/json")
         .timeout(std::time::Duration::from_secs(15))
@@ -167,53 +177,9 @@ async fn query_kimi(api_key: &str) -> Result<SubscriptionQuota, String> {
         Err(e) => return Ok(make_error(format!("Failed to parse response: {e}"))),
     };
 
-    let mut tiers = Vec::new();
-
-    // 5 小时窗口限额（优先显示）
-    if let Some(limits) = body.get("limits").and_then(|v| v.as_array()) {
-        for limit_item in limits {
-            if let Some(detail) = limit_item.get("detail") {
-                let limit = detail.get("limit").and_then(parse_f64).unwrap_or(1.0);
-                let remaining = detail.get("remaining").and_then(parse_f64).unwrap_or(0.0);
-                let resets_at = detail.get("resetTime").and_then(extract_reset_time);
-
-                let used = (limit - remaining).max(0.0);
-                let utilization = if limit > 0.0 {
-                    (used / limit) * 100.0
-                } else {
-                    0.0
-                };
-                tiers.push(QuotaTier {
-                    name: "five_hour".to_string(),
-                    utilization,
-                    resets_at,
-                    used_value_usd: None,
-                    max_value_usd: None,
-                });
-            }
-        }
-    }
-
-    // 总体用量（周限额）
-    if let Some(usage) = body.get("usage") {
-        let limit = usage.get("limit").and_then(parse_f64).unwrap_or(1.0);
-        let remaining = usage.get("remaining").and_then(parse_f64).unwrap_or(0.0);
-        let resets_at = usage.get("resetTime").and_then(extract_reset_time);
-
-        let used = (limit - remaining).max(0.0);
-        let utilization = if limit > 0.0 {
-            (used / limit) * 100.0
-        } else {
-            0.0
-        };
-        tiers.push(QuotaTier {
-            name: "weekly_limit".to_string(),
-            utilization,
-            resets_at,
-            used_value_usd: None,
-            max_value_usd: None,
-        });
-    }
+    let Some(tiers) = parse_kimi_tiers(&body) else {
+        return Ok(make_error("Unrecognized Kimi usage response".to_string()));
+    };
 
     Ok(SubscriptionQuota {
         tool: "coding_plan".to_string(),
@@ -227,6 +193,83 @@ async fn query_kimi(api_key: &str) -> Result<SubscriptionQuota, String> {
         error: None,
         queried_at: Some(now_millis()),
     })
+}
+
+/// 解析 Kimi `/coding/v1/usages` 响应，形态不认识时返回 None。
+///
+/// 当前形态（kimi-code `managed-usage.ts`，2026-09-15 起）：
+/// `usages.{limit_5h,limit_7d,limit_month_total,limit_month_code}` 各为
+/// `{used_ratio, reset_time}`，`used_ratio` 是 0–1 的已用比例，可能是数字字符串。
+/// `limit_month_code` 是月额度里编程部分的占比，没有对应的 tier，不展示。
+///
+/// 旧形态：`limits[].detail` 是 5h 窗口、`usage` 是周额度，各带 `limit`、
+/// `resetTime` 以及 `used` 或 `remaining`。用 API key 调用时平台是否已换成新形态
+/// 没有出处，两种都认。
+fn parse_kimi_tiers(body: &serde_json::Value) -> Option<Vec<QuotaTier>> {
+    if let Some(usages) = body.get("usages").and_then(|v| v.as_object()) {
+        const WINDOWS: [(&str, &str); 3] = [
+            ("limit_5h", TIER_FIVE_HOUR),
+            ("limit_7d", TIER_WEEKLY_LIMIT),
+            ("limit_month_total", TIER_MONTHLY),
+        ];
+        let tiers = WINDOWS
+            .iter()
+            .filter_map(|(key, name)| {
+                let window = usages.get(*key)?;
+                let ratio = window
+                    .get("used_ratio")
+                    .and_then(parse_f64)
+                    .filter(|r| r.is_finite())?;
+                let resets_at = window
+                    .get("reset_time")
+                    .and_then(|v| v.as_str())
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_string);
+                // 不裁剪到 0–100，与智谱、MiniMax 一致交给 UI
+                Some(QuotaTier {
+                    name: name.to_string(),
+                    utilization: ratio * 100.0,
+                    resets_at,
+                    used_value_usd: None,
+                    max_value_usd: None,
+                })
+            })
+            .collect();
+        return Some(tiers);
+    }
+
+    let legacy_tier = |detail: &serde_json::Value, name: &str| {
+        let limit = detail.get("limit").and_then(parse_f64).unwrap_or(1.0);
+        let used = detail.get("used").and_then(parse_f64).unwrap_or_else(|| {
+            let remaining = detail.get("remaining").and_then(parse_f64).unwrap_or(0.0);
+            (limit - remaining).max(0.0)
+        });
+        QuotaTier {
+            name: name.to_string(),
+            utilization: if limit > 0.0 {
+                (used / limit) * 100.0
+            } else {
+                0.0
+            },
+            resets_at: detail.get("resetTime").and_then(extract_reset_time),
+            used_value_usd: None,
+            max_value_usd: None,
+        }
+    };
+
+    let limits = body.get("limits").and_then(|v| v.as_array());
+    let usage = body.get("usage").filter(|v| v.is_object());
+    if limits.is_none() && usage.is_none() {
+        return None;
+    }
+    let mut tiers: Vec<QuotaTier> = limits
+        .into_iter()
+        .flatten()
+        .filter_map(|item| item.get("detail"))
+        .map(|detail| legacy_tier(detail, TIER_FIVE_HOUR))
+        .collect();
+    tiers.extend(usage.map(|usage| legacy_tier(usage, TIER_WEEKLY_LIMIT)));
+    Some(tiers)
 }
 
 // ── 智谱 GLM ────────────────────────────────────────────────
@@ -1801,7 +1844,8 @@ pub async fn get_coding_plan_quota(
     }
 
     match provider {
-        CodingPlanProvider::Kimi => query_kimi(api_key).await,
+        CodingPlanProvider::KimiCn => query_kimi(api_key, true).await,
+        CodingPlanProvider::KimiEn => query_kimi(api_key, false).await,
         CodingPlanProvider::ZhipuCn | CodingPlanProvider::ZhipuEn => {
             query_zhipu(base_url, api_key).await
         }
@@ -1821,7 +1865,7 @@ pub async fn get_coding_plan_quota(
 mod tests {
     use super::{
         detect_provider, minimax_quota_from_body, parse_afp_tiers, parse_coding_plan_tiers,
-        parse_command_code_quota, parse_minimax_tiers, parse_opencode_go_tiers,
+        parse_command_code_quota, parse_kimi_tiers, parse_minimax_tiers, parse_opencode_go_tiers,
         parse_zhipu_token_tiers, query_command_code_at, query_zhipu_team_at,
         volcengine_canonical_query, volcengine_is_auth_error_code, volcengine_region,
         volcengine_response_error, volcengine_sign, zhipu_quota_base, CodingPlanProvider,
@@ -2546,6 +2590,88 @@ mod tests {
         assert_eq!(tiers.len(), 2);
         assert_eq!(tiers[0].name, TIER_FIVE_HOUR);
         assert_eq!(tiers[1].name, TIER_WEEKLY_LIMIT);
+    }
+
+    // ── Kimi ──
+
+    #[test]
+    fn kimi_detects_cn_and_global_hosts() {
+        assert!(matches!(
+            detect_provider("https://api.kimi.com/coding/"),
+            Some(CodingPlanProvider::KimiCn)
+        ));
+        assert!(matches!(
+            detect_provider("https://api.kimi.ai/coding/v1"),
+            Some(CodingPlanProvider::KimiEn)
+        ));
+    }
+
+    #[test]
+    fn kimi_usages_ratios_map_to_tiers() {
+        // 形态按 kimi-code managed-usage 测试构造;used_ratio 可能是数字字符串
+        let body = json!({
+            "goods_version": 2,
+            "usages": {
+                "limit_5h": { "used_ratio": 0.3, "reset_time": "2026-10-07T18:00:00Z" },
+                "limit_7d": { "used_ratio": "0.2", "reset_time": "2026-10-12T00:00:00Z" },
+                "limit_month_total": { "used_ratio": 0.4, "reset_time": "2026-11-01T00:00:00Z" },
+                "limit_month_code": { "used_ratio": 0.25, "reset_time": "2026-11-01T00:00:00Z" }
+            },
+            "boosterWallet": null
+        });
+        let tiers = parse_kimi_tiers(&body).expect("recognized");
+        let summary: Vec<_> = tiers
+            .iter()
+            .map(|t| (t.name.as_str(), (t.utilization * 100.0).round() / 100.0))
+            .collect();
+        assert_eq!(
+            summary,
+            [
+                (TIER_FIVE_HOUR, 30.0),
+                (TIER_WEEKLY_LIMIT, 20.0),
+                (TIER_MONTHLY, 40.0)
+            ]
+        );
+        assert_eq!(tiers[0].resets_at.as_deref(), Some("2026-10-07T18:00:00Z"));
+    }
+
+    #[test]
+    fn kimi_usages_skip_windows_without_a_ratio() {
+        let body = json!({
+            "usages": {
+                "limit_5h": { "reset_time": "2026-10-07T18:00:00Z" },
+                "limit_7d": { "used_ratio": "abc" },
+                "limit_month_total": { "used_ratio": 1, "reset_time": "" }
+            }
+        });
+        let tiers = parse_kimi_tiers(&body).expect("recognized");
+        assert_eq!(tiers.len(), 1);
+        assert_eq!(tiers[0].name, TIER_MONTHLY);
+        assert_eq!(tiers[0].utilization, 100.0);
+        assert!(tiers[0].resets_at.is_none());
+    }
+
+    #[test]
+    fn kimi_legacy_limits_accept_used_or_remaining() {
+        let body = json!({
+            "usage": { "limit": "100", "used": "25", "resetTime": "2026-10-12T00:00:00Z" },
+            "limits": [{
+                "window": { "duration": 300, "timeUnit": "TIME_UNIT_MINUTE" },
+                "detail": { "limit": 50, "remaining": 40, "resetTime": "2026-10-07T18:00:00Z" }
+            }]
+        });
+        let tiers = parse_kimi_tiers(&body).expect("recognized");
+        assert_eq!(tiers.len(), 2);
+        assert_eq!(tiers[0].name, TIER_FIVE_HOUR);
+        assert_eq!(tiers[0].utilization, 20.0);
+        assert_eq!(tiers[1].name, TIER_WEEKLY_LIMIT);
+        assert_eq!(tiers[1].utilization, 25.0);
+    }
+
+    #[test]
+    fn kimi_unrecognized_response_is_none() {
+        assert!(parse_kimi_tiers(&json!({})).is_none());
+        assert!(parse_kimi_tiers(&json!({ "usage": null, "data": {} })).is_none());
     }
 
     // ── MiniMax ──
