@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 use std::path::Path;
+use std::sync::LazyLock;
 
+use regex::Regex;
 use serde_json::Value;
 
 use crate::openclaw_config::get_openclaw_dir;
@@ -18,13 +20,61 @@ use super::utils::{
 
 const PROVIDER_ID: &str = "openclaw";
 
-/// Strip trailing `\n[message_id: ...]` metadata injected by OpenClaw gateway.
-fn strip_message_id_suffix(text: &str) -> &str {
-    if let Some(pos) = text.rfind("\n[message_id:") {
-        text[..pos].trim_end()
-    } else {
-        text
+/// 渠道/时间信封前缀，如 `[Telegram 2026-03-01 10:14] `。
+static ENVELOPE_PREFIX_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^\[([^\]]+)\]\s*").unwrap());
+static ENVELOPE_TIMESTAMP_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}Z\b|\d{4}-\d{2}-\d{2} \d{2}:\d{2}\b").unwrap()
+});
+const ENVELOPE_CHANNELS: [&str; 12] = [
+    "WebChat",
+    "WhatsApp",
+    "Telegram",
+    "Signal",
+    "Slack",
+    "Discord",
+    "Google Chat",
+    "iMessage",
+    "Teams",
+    "Matrix",
+    "Zalo",
+    "Zalo Personal",
+];
+static MESSAGE_ID_LINE_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?i)^\s*\[message_id:\s*[^\]]+\]\s*$").unwrap());
+
+/// 去掉 OpenClaw 网关写进用户消息的元数据，规则同官方展示时用的
+/// `stripEnvelope` 与 `stripMessageIdHints`（openclaw/openclaw
+/// `src/shared/chat-envelope.ts`、`src/shared/text/message-id-hints.ts`）：
+/// - 开头的渠道/时间信封，只认带时间戳或已知渠道名的，其他 `[...]` 可能是用户原文；
+/// - 独立成行的 `[message_id: …]`（飞书放在开头，其他渠道放在末尾），代码块里的不动。
+fn strip_gateway_metadata(text: &str) -> String {
+    let text = match ENVELOPE_PREFIX_RE.captures(text) {
+        Some(caps)
+            if ENVELOPE_TIMESTAMP_RE.is_match(&caps[1])
+                || ENVELOPE_CHANNELS
+                    .iter()
+                    .any(|label| caps[1].starts_with(&format!("{label} "))) =>
+        {
+            &text[caps[0].len()..]
+        }
+        _ => text,
+    };
+    if !text.to_ascii_lowercase().contains("[message_id:") {
+        return text.to_string();
     }
+    let mut in_fence = false;
+    text.replace("\r\n", "\n")
+        .split('\n')
+        .filter(|line| {
+            let trimmed = line.trim_start();
+            if trimmed.starts_with("```") || trimmed.starts_with("~~~") {
+                in_fence = !in_fence;
+            }
+            in_fence || !MESSAGE_ID_LINE_RE.is_match(line)
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 pub fn scan_sessions() -> Vec<SessionMeta> {
@@ -77,12 +127,37 @@ pub fn scan_sessions() -> Vec<SessionMeta> {
 /// OpenClaw 与 Pi 同构，复用 Pi 的 block 映射；没有树形分支，按文件顺序全取。
 pub fn load_messages(path: &Path) -> Result<Vec<SessionMessage>, String> {
     let mut transcript = PiTranscript::new();
-    for_each_jsonl_value(path, |span, value| {
+    for_each_jsonl_value(path, |span, mut value| {
+        strip_user_text_metadata(&mut value);
         let id = value.get("id").and_then(Value::as_str).map(str::to_string);
         transcript.push_entry(&value, span, id);
         Ok(())
     })?;
     Ok(transcript.finish())
+}
+
+/// 对用户消息记录的正文（字符串或 `{type:"text"}` 项）就地执行
+/// [`strip_gateway_metadata`]，再交给 Pi 的映射。
+fn strip_user_text_metadata(value: &mut Value) {
+    let Some(message) = value.get_mut("message") else {
+        return;
+    };
+    if message.get("role").and_then(Value::as_str) != Some("user") {
+        return;
+    }
+    match message.get_mut("content") {
+        Some(Value::String(text)) => *text = strip_gateway_metadata(text),
+        Some(Value::Array(items)) => {
+            for item in items {
+                if item.get("type").and_then(Value::as_str) == Some("text") {
+                    if let Some(Value::String(text)) = item.get_mut("text") {
+                        *text = strip_gateway_metadata(text);
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
 }
 
 pub fn delete_session(_root: &Path, path: &Path, session_id: &str) -> Result<bool, String> {
@@ -190,7 +265,7 @@ fn parse_session(
         if event_type == "message" {
             if let Some(message) = value.get("message") {
                 let text = message.get("content").map(extract_text).unwrap_or_default();
-                let cleaned = strip_message_id_suffix(&text);
+                let cleaned = strip_gateway_metadata(&text);
                 if !cleaned.trim().is_empty() {
                     if first_user_message.is_none()
                         && message.get("role").and_then(Value::as_str) == Some("user")
@@ -304,6 +379,53 @@ fn prune_sessions_index(
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    #[test]
+    fn strip_gateway_metadata_follows_openclaw_display_rules() {
+        // 末尾（多数渠道）与开头（飞书）的 message_id 行
+        assert_eq!(
+            strip_gateway_metadata("hello\n[message_id: abc123]"),
+            "hello"
+        );
+        assert_eq!(
+            strip_gateway_metadata("[message_id: om_x1]\nPlease review"),
+            "Please review"
+        );
+        // 信封前缀只认带时间戳或已知渠道名的
+        assert_eq!(
+            strip_gateway_metadata(
+                "[Telegram 2026-03-01 10:14] Hello there\n[message_id: abc-123]\nActual message"
+            ),
+            "Hello there\nActual message"
+        );
+        assert_eq!(strip_gateway_metadata("[draft] keep me"), "[draft] keep me");
+        // 行内提到、代码块里的都保留
+        assert_eq!(
+            strip_gateway_metadata("I typed [message_id: 123] on purpose"),
+            "I typed [message_id: 123] on purpose"
+        );
+        let fenced = "```\n[message_id: literal]\n```";
+        assert_eq!(strip_gateway_metadata(fenced), fenced);
+    }
+
+    #[test]
+    fn load_messages_strips_gateway_metadata_from_user_text() {
+        let temp = tempdir().expect("tempdir");
+        let path = temp.path().join("s.jsonl");
+        std::fs::write(
+            &path,
+            concat!(
+                "{\"type\":\"session\",\"id\":\"s\",\"timestamp\":\"2026-03-06T10:00:00Z\"}\n",
+                "{\"type\":\"message\",\"id\":\"m1\",\"message\":{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"[message_id: om_1]\\nHow do I deploy?\"}]}}\n",
+                "{\"type\":\"message\",\"id\":\"m2\",\"message\":{\"role\":\"user\",\"content\":\"Thanks\\n[message_id: om_2]\"}}\n"
+            ),
+        )
+        .expect("write");
+
+        let messages = load_messages(&path).expect("load");
+        let texts: Vec<_> = messages.iter().map(|m| m.content.as_str()).collect();
+        assert_eq!(texts, ["How do I deploy?", "Thanks"]);
+    }
 
     #[test]
     fn parse_session_uses_first_user_message_as_title() {
