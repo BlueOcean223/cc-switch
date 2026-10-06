@@ -994,7 +994,7 @@
     "changeTerminalAction": "Change terminal",
     "codexResumeNote": "Older sessions may not resume after switching providers: Codex keeps history separately per provider.",
     "noResumeOpenclaw": "OpenClaw sessions are managed by its gateway and can’t be resumed in a terminal",
-    "noResumeHermes": "Resuming Hermes sessions from the command line isn’t supported yet",
+    "noResumeHermes": "This Hermes session only exists as a JSONL transcript, not in state.db, so hermes --resume can’t open it",
     "launchedIn": "Ran the resume command in {{terminal}}",
     "launchFailed": "Couldn’t open {{terminal}}: {{error}}. The resume command was copied; paste it into any terminal.",
     "onlyChat": "Chat only",

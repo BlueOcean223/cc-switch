@@ -234,6 +234,9 @@ fn sqlite_row_to_session_meta(row: &Value, db_source: &str) -> Option<SessionMet
         .and_then(parse_timestamp_to_ms);
 
     let source_path = format!("{}#{}", db_source, session_id);
+    // hermes-agent 按 ID 从 state.db 恢复（`hermes --resume <id>`）；只在 JSONL
+    // 里的旧会话不在库里，恢复不了，那边不给命令
+    let resume_command = format!("hermes --resume {session_id}");
 
     Some(SessionMeta {
         provider_id: PROVIDER_ID.to_string(),
@@ -244,7 +247,7 @@ fn sqlite_row_to_session_meta(row: &Value, db_source: &str) -> Option<SessionMet
         created_at: started_at,
         last_active_at: ended_at.or(started_at),
         source_path: Some(source_path),
-        resume_command: None,
+        resume_command: Some(resume_command),
     })
 }
 
@@ -837,6 +840,8 @@ mod tests {
         assert_eq!(meta.project_dir.as_deref(), Some("/home/user/project"));
         assert!(meta.created_at.is_some());
         assert!(meta.last_active_at.is_some());
+        // 只在 JSONL 里的会话不在 state.db，`hermes --resume` 找不到
+        assert!(meta.resume_command.is_none());
     }
 
     /// JSONL 行和 SQLite 行并排显示：摘要同样取最后一条 user/assistant，首条只做标题回退。
@@ -1149,6 +1154,10 @@ mod tests {
         assert_eq!(titled.title.as_deref(), Some("Hermes title"));
         assert_eq!(titled.summary.as_deref(), Some("titled question"));
         assert_eq!(titled.last_active_at, Some(200_000));
+        assert_eq!(
+            titled.resume_command.as_deref(),
+            Some("hermes --resume titled")
+        );
 
         let untitled = sessions
             .iter()

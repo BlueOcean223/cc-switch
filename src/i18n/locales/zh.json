@@ -994,7 +994,7 @@
     "changeTerminalAction": "更换终端",
     "codexResumeNote": "切换过供应商后，旧会话可能无法继续：Codex 按供应商分开保存历史。",
     "noResumeOpenclaw": "OpenClaw 会话由网关管理，不能在终端恢复",
-    "noResumeHermes": "暂不支持从命令行恢复 Hermes 会话",
+    "noResumeHermes": "这个 Hermes 会话只有 JSONL 记录，不在 state.db 里，无法用 hermes --resume 恢复",
     "launchedIn": "已在 {{terminal}} 中运行恢复命令",
     "launchFailed": "无法打开 {{terminal}}：{{error}}。恢复命令已复制，可以粘贴到任意终端运行。",
     "onlyChat": "只看对话",

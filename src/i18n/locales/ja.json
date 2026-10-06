@@ -994,7 +994,7 @@
     "changeTerminalAction": "ターミナルを変更",
     "codexResumeNote": "プロバイダーを切り替えた後は、古いセッションを再開できない場合があります。Codex は履歴をプロバイダーごとに保存します。",
     "noResumeOpenclaw": "OpenClaw のセッションはゲートウェイが管理しているため、ターミナルで再開できません",
-    "noResumeHermes": "Hermes のセッションはまだコマンドラインから再開できません",
+    "noResumeHermes": "この Hermes セッションは JSONL の記録だけで state.db にないため、hermes --resume では再開できません",
     "launchedIn": "{{terminal}} で再開コマンドを実行しました",
     "launchFailed": "{{terminal}} を開けませんでした：{{error}}。再開コマンドをコピーしたので、任意のターミナルに貼り付けて実行できます。",
     "onlyChat": "会話のみ",

@@ -994,7 +994,7 @@
     "changeTerminalAction": "更換終端機",
     "codexResumeNote": "切換過供應商後，舊工作階段可能無法繼續：Codex 按供應商分開保存歷史。",
     "noResumeOpenclaw": "OpenClaw 工作階段由閘道管理，不能在終端機繼續",
-    "noResumeHermes": "暫不支援從命令列繼續 Hermes 工作階段",
+    "noResumeHermes": "這個 Hermes 工作階段只有 JSONL 記錄，不在 state.db 裡，無法用 hermes --resume 繼續",
     "launchedIn": "已在 {{terminal}} 中執行繼續指令",
     "launchFailed": "無法開啟 {{terminal}}：{{error}}。繼續指令已複製，可以貼到任意終端機執行。",
     "onlyChat": "只看對話",
