@@ -1,6 +1,11 @@
-import type { ModelPricing, ModelsDevSyncConfig } from "@/types/usage";
+import type {
+  LongContextTier,
+  ModelPricing,
+  ModelsDevSyncConfig,
+} from "@/types/usage";
 import {
   normalizeModelsDevModelId,
+  type ModelsDevCost,
   type ModelsDevModel,
   type ModelsDevResponse,
 } from "./modelsDev";
@@ -17,6 +22,7 @@ export interface ModelsDevEntry {
   output: number;
   cacheRead: number;
   cacheWrite: number;
+  longContext?: LongContextTier;
 }
 
 const NON_TEXT_MODEL_MARKERS = [
@@ -61,6 +67,48 @@ export function formatPrice(value: number): string {
   return trimmed || "0";
 }
 
+const ratio = (tierPrice: number | undefined, base: number | undefined) =>
+  typeof tierPrice === "number" && typeof base === "number" && base > 0
+    ? tierPrice / base
+    : undefined;
+
+/**
+ * 把 models.dev 的 `cost.tiers` 换成用量统计用的超长上下文倍率。
+ *
+ * 库里每个模型只能存一档、输入侧一个倍率，所以取门槛最低的一档；缓存读写的
+ * 倍率与输入不一致时这一档表示不了，不导入（主流厂商都一致，不一致的多是聚合商
+ * 的个别条目）。
+ */
+export function longContextTier(
+  cost: ModelsDevCost | undefined,
+): LongContextTier | undefined {
+  const tier = cost?.tiers
+    ?.filter(
+      (candidate) =>
+        candidate.tier?.type === "context" &&
+        typeof candidate.tier.size === "number" &&
+        candidate.tier.size > 0,
+    )
+    .sort((a, b) => (a.tier?.size ?? 0) - (b.tier?.size ?? 0))[0];
+  const input = ratio(tier?.input, cost?.input);
+  if (!tier?.tier?.size || input === undefined) return undefined;
+  const output = ratio(tier.output, cost?.output) ?? 1;
+  for (const cacheRatio of [
+    ratio(tier.cache_read, cost?.cache_read),
+    ratio(tier.cache_write, cost?.cache_write),
+  ]) {
+    if (cacheRatio !== undefined && Math.abs(cacheRatio - input) > 1e-6) {
+      return undefined;
+    }
+  }
+  if (input === 1 && output === 1) return undefined;
+  return {
+    thresholdTokens: tier.tier.size,
+    inputMultiplier: formatPrice(input),
+    outputMultiplier: formatPrice(output),
+  };
+}
+
 export function flattenModels(data: ModelsDevResponse): ModelsDevEntry[] {
   const entries: ModelsDevEntry[] = [];
   for (const [providerId, provider] of Object.entries(data)) {
@@ -88,6 +136,7 @@ export function flattenModels(data: ModelsDevResponse): ModelsDevEntry[] {
         cacheRead: typeof cost?.cache_read === "number" ? cost.cache_read : 0,
         cacheWrite:
           typeof cost?.cache_write === "number" ? cost.cache_write : 0,
+        longContext: longContextTier(cost),
       });
     }
   }
@@ -215,6 +264,7 @@ export function toModelPricing(entries: ModelsDevEntry[]): ModelPricing[] {
       outputCostPerMillion: formatPrice(entry.output),
       cacheReadCostPerMillion: formatPrice(entry.cacheRead),
       cacheCreationCostPerMillion: formatPrice(entry.cacheWrite),
+      ...(entry.longContext ? { longContext: entry.longContext } : {}),
     });
   }
   return Array.from(byModelId.values());

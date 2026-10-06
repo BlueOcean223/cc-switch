@@ -57,6 +57,14 @@ export interface ModelPricing {
   outputCostPerMillion: string;
   cacheReadCostPerMillion: string;
   cacheCreationCostPerMillion: string;
+  longContext?: LongContextTier;
+}
+
+/** 提示超过 thresholdTokens 时，整次请求输入侧（含缓存读写）和输出分别乘的倍率。 */
+export interface LongContextTier {
+  thresholdTokens: number;
+  inputMultiplier: string;
+  outputMultiplier: string;
 }
 
 export interface ModelsDevSyncConfig {

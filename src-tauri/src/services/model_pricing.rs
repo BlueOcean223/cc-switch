@@ -36,6 +36,20 @@ pub struct ModelPricingInfo {
     pub output_cost_per_million: String,
     pub cache_read_cost_per_million: String,
     pub cache_creation_cost_per_million: String,
+    /// 超长上下文档位，来自 models.dev 的 `cost.tiers`。没有时不改库里已有的档位
+    /// （内置模型的档位由代码写入，手动编辑价格也不会清掉它）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub long_context: Option<LongContextTier>,
+}
+
+/// 提示长度超过 `threshold_tokens` 时，整次请求的输入侧（输入、缓存读写）乘
+/// `input_multiplier`，输出乘 `output_multiplier`（见 `token_usage::LongContextPricing`）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LongContextTier {
+    pub threshold_tokens: i64,
+    pub input_multiplier: String,
+    pub output_multiplier: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -153,6 +167,28 @@ fn normalize_pricing(entry: ModelPricingInfo) -> Result<ModelPricingInfo, AppErr
             "cache_creation_cost",
             &entry.cache_creation_cost_per_million,
         )?,
+        long_context: entry
+            .long_context
+            .map(|tier| -> Result<LongContextTier, AppError> {
+                if tier.threshold_tokens <= 0 {
+                    return Err(AppError::Message(format!(
+                        "long_context threshold must be positive: {}",
+                        tier.threshold_tokens
+                    )));
+                }
+                Ok(LongContextTier {
+                    threshold_tokens: tier.threshold_tokens,
+                    input_multiplier: normalize_decimal(
+                        "long_context_input_multiplier",
+                        &tier.input_multiplier,
+                    )?,
+                    output_multiplier: normalize_decimal(
+                        "long_context_output_multiplier",
+                        &tier.output_multiplier,
+                    )?,
+                })
+            })
+            .transpose()?,
     })
 }
 
@@ -241,30 +277,56 @@ fn upsert_pricing(
     transaction: &Transaction<'_>,
     entry: &ModelPricingInfo,
 ) -> Result<usize, AppError> {
+    let (threshold, input_multiplier, output_multiplier) = match &entry.long_context {
+        Some(tier) => (
+            Some(tier.threshold_tokens),
+            tier.input_multiplier.as_str(),
+            tier.output_multiplier.as_str(),
+        ),
+        None => (None, "1", "1"),
+    };
+    // ?7 为 NULL（条目没带档位）时保留库里已有的档位
     transaction
         .execute(
             "INSERT INTO model_pricing (
                 model_id, display_name, input_cost_per_million, output_cost_per_million,
-                cache_read_cost_per_million, cache_creation_cost_per_million
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+                cache_read_cost_per_million, cache_creation_cost_per_million,
+                long_context_threshold, long_context_input_multiplier,
+                long_context_output_multiplier
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
             ON CONFLICT(model_id) DO UPDATE SET
                 display_name = excluded.display_name,
                 input_cost_per_million = excluded.input_cost_per_million,
                 output_cost_per_million = excluded.output_cost_per_million,
                 cache_read_cost_per_million = excluded.cache_read_cost_per_million,
-                cache_creation_cost_per_million = excluded.cache_creation_cost_per_million
+                cache_creation_cost_per_million = excluded.cache_creation_cost_per_million,
+                long_context_threshold =
+                    COALESCE(excluded.long_context_threshold, long_context_threshold),
+                long_context_input_multiplier = CASE
+                    WHEN excluded.long_context_threshold IS NULL THEN long_context_input_multiplier
+                    ELSE excluded.long_context_input_multiplier END,
+                long_context_output_multiplier = CASE
+                    WHEN excluded.long_context_threshold IS NULL THEN long_context_output_multiplier
+                    ELSE excluded.long_context_output_multiplier END
             WHERE display_name <> excluded.display_name
                OR input_cost_per_million <> excluded.input_cost_per_million
                OR output_cost_per_million <> excluded.output_cost_per_million
                OR cache_read_cost_per_million <> excluded.cache_read_cost_per_million
-               OR cache_creation_cost_per_million <> excluded.cache_creation_cost_per_million",
+               OR cache_creation_cost_per_million <> excluded.cache_creation_cost_per_million
+               OR (excluded.long_context_threshold IS NOT NULL AND (
+                    long_context_threshold IS NOT excluded.long_context_threshold
+                    OR long_context_input_multiplier <> excluded.long_context_input_multiplier
+                    OR long_context_output_multiplier <> excluded.long_context_output_multiplier))",
             params![
                 entry.model_id,
                 entry.display_name,
                 entry.input_cost_per_million,
                 entry.output_cost_per_million,
                 entry.cache_read_cost_per_million,
-                entry.cache_creation_cost_per_million
+                entry.cache_creation_cost_per_million,
+                threshold,
+                input_multiplier,
+                output_multiplier
             ],
         )
         .map_err(|error| AppError::Database(format!("更新模型定价失败: {error}")))
@@ -395,7 +457,14 @@ fn update_model_pricing_batch_inner(
             .map(|entry| entry.model_id.clone())
             .collect::<BTreeSet<_>>();
         for entry in &entries {
-            file_models.insert(entry.model_id.clone(), entry.clone());
+            let mut entry = entry.clone();
+            // 手动编辑不带档位，沿用文件里同步来的那一份
+            if entry.long_context.is_none() {
+                entry.long_context = file_models
+                    .get(&entry.model_id)
+                    .and_then(|existing| existing.long_context.clone());
+            }
+            file_models.insert(entry.model_id.clone(), entry);
         }
         file.models = file_models.into_values().collect();
         file.deleted_model_ids
@@ -499,6 +568,7 @@ mod tests {
             output_cost_per_million: "5".to_string(),
             cache_read_cost_per_million: "0.1".to_string(),
             cache_creation_cost_per_million: "1.5".to_string(),
+            long_context: None,
         }
     }
 
@@ -606,6 +676,53 @@ mod tests {
                 .find(|entry| entry.model_id == "custom-model")
                 .expect("saved synced pricing");
             assert_eq!(saved, &synced);
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn synced_long_context_tier_survives_manual_price_edits() {
+        with_test_home(|db, path| {
+            let mut synced = sample_pricing();
+            synced.long_context = Some(LongContextTier {
+                threshold_tokens: 272_000,
+                input_multiplier: "2".to_string(),
+                output_multiplier: "1.5".to_string(),
+            });
+            update_model_pricing_batch(db, vec![synced]).expect("sync models.dev pricing");
+
+            let mut manual = sample_pricing();
+            manual.input_cost_per_million = "9".to_string();
+            update_model_pricing(db, manual).expect("edit price by hand");
+
+            let conn = db.conn.lock().expect("lock test database");
+            let tier: (Option<i64>, String, String, String) = conn
+                .query_row(
+                    "SELECT long_context_threshold, long_context_input_multiplier,
+                            long_context_output_multiplier, input_cost_per_million
+                     FROM model_pricing WHERE model_id = ?1",
+                    params!["custom-model"],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+                )
+                .expect("query pricing");
+            drop(conn);
+            assert_eq!(tier, (Some(272_000), "2".into(), "1.5".into(), "9".into()));
+
+            let content = fs::read_to_string(path).expect("read pricing file");
+            let file: ModelPricingFile = serde_json::from_str(&content).expect("parse file");
+            let saved = file
+                .models
+                .iter()
+                .find(|entry| entry.model_id == "custom-model")
+                .expect("saved pricing");
+            assert_eq!(saved.input_cost_per_million, "9");
+            assert_eq!(
+                saved
+                    .long_context
+                    .as_ref()
+                    .map(|tier| tier.threshold_tokens),
+                Some(272_000)
+            );
         });
     }
 

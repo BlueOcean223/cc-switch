@@ -1,7 +1,9 @@
 //! 使用统计相关命令
 
 use crate::error::AppError;
-use crate::services::model_pricing::{ModelPricingInfo, ModelsDevSyncConfig, ModelsDevSyncState};
+use crate::services::model_pricing::{
+    LongContextTier, ModelPricingInfo, ModelsDevSyncConfig, ModelsDevSyncState,
+};
 use crate::services::usage_stats::*;
 use crate::store::AppState;
 use tauri::State;
@@ -189,12 +191,15 @@ pub fn get_model_pricing(state: State<'_, AppState>) -> Result<Vec<ModelPricingI
 
     let mut stmt = conn.prepare(
         "SELECT model_id, display_name, input_cost_per_million, output_cost_per_million,
-                cache_read_cost_per_million, cache_creation_cost_per_million
+                cache_read_cost_per_million, cache_creation_cost_per_million,
+                long_context_threshold, long_context_input_multiplier,
+                long_context_output_multiplier
          FROM model_pricing
          ORDER BY display_name",
     )?;
 
     let rows = stmt.query_map([], |row| {
+        let threshold: Option<i64> = row.get(6)?;
         Ok(ModelPricingInfo {
             model_id: row.get(0)?,
             display_name: row.get(1)?,
@@ -202,6 +207,14 @@ pub fn get_model_pricing(state: State<'_, AppState>) -> Result<Vec<ModelPricingI
             output_cost_per_million: row.get(3)?,
             cache_read_cost_per_million: row.get(4)?,
             cache_creation_cost_per_million: row.get(5)?,
+            long_context: match threshold {
+                Some(threshold_tokens) if threshold_tokens > 0 => Some(LongContextTier {
+                    threshold_tokens,
+                    input_multiplier: row.get(7)?,
+                    output_multiplier: row.get(8)?,
+                }),
+                _ => None,
+            },
         })
     })?;
 
@@ -234,6 +247,7 @@ pub fn update_model_pricing(
             output_cost_per_million: output_cost,
             cache_read_cost_per_million: cache_read_cost,
             cache_creation_cost_per_million: cache_creation_cost,
+            long_context: None,
         },
     )?;
     Ok(())

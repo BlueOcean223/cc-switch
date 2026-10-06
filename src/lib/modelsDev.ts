@@ -7,11 +7,21 @@ export const MODELS_DEV_API_URL = "https://models.dev/api.json";
 const MODELS_DEV_STALE_TIME_MS = 60 * 60 * 1000;
 const MODELS_DEV_FETCH_TIMEOUT_MS = 15_000;
 
+export interface ModelsDevCostTier {
+  input?: number;
+  output?: number;
+  cache_read?: number;
+  cache_write?: number;
+  // 目前只有 { type: "context", size }：提示超过 size 个 token 时整次请求按这一档计费
+  tier?: { type?: string; size?: number };
+}
+
 export interface ModelsDevCost {
   input?: number;
   output?: number;
   cache_read?: number;
   cache_write?: number;
+  tiers?: ModelsDevCostTier[];
 }
 
 export interface ModelsDevModalities {

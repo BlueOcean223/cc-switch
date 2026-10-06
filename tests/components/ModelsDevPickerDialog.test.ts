@@ -7,6 +7,7 @@ import {
 import { normalizeModelsDevModelId } from "@/lib/modelsDev";
 import {
   getCommonModelKeys,
+  longContextTier,
   resolveModelsDevSelection,
   toModelPricing,
 } from "@/lib/modelsDevPricing";
@@ -323,6 +324,89 @@ describe("flattenModels", () => {
       modelId: "gpt-5",
       displayName: "GPT-5 Official",
       inputCostPerMillion: "1",
+    });
+  });
+});
+
+describe("longContextTier", () => {
+  it("turns the lowest context tier into multipliers", () => {
+    // gpt-5.5 on models.dev: prompts over 272K bill input x2, output x1.5
+    expect(
+      longContextTier({
+        input: 5,
+        output: 30,
+        cache_read: 0.5,
+        tiers: [
+          {
+            input: 10,
+            output: 45,
+            cache_read: 1,
+            tier: { type: "context", size: 272000 },
+          },
+        ],
+      }),
+    ).toEqual({
+      thresholdTokens: 272000,
+      inputMultiplier: "2",
+      outputMultiplier: "1.5",
+    });
+
+    const tiered = longContextTier({
+      input: 1.2,
+      output: 6,
+      tiers: [
+        { input: 3, output: 15, tier: { type: "context", size: 128000 } },
+        { input: 2.4, output: 12, tier: { type: "context", size: 32000 } },
+      ],
+    });
+    expect(tiered?.thresholdTokens).toBe(32000);
+    expect(tiered?.inputMultiplier).toBe("2");
+  });
+
+  it("skips tiers one input-side multiplier cannot express", () => {
+    expect(longContextTier({ input: 1, output: 2 })).toBeUndefined();
+    expect(
+      longContextTier({
+        input: 0.1,
+        output: 0.4,
+        cache_read: 0.02,
+        tiers: [
+          {
+            input: 0.2,
+            output: 0.8,
+            cache_read: 0.2,
+            tier: { type: "context", size: 128000 },
+          },
+        ],
+      }),
+    ).toBeUndefined();
+  });
+
+  it("is passed to the synced pricing", () => {
+    const [entry] = flattenModels({
+      google: {
+        models: {
+          "gemini-2.5-pro": {
+            name: "Gemini 2.5 Pro",
+            cost: {
+              input: 1.25,
+              output: 10,
+              tiers: [
+                {
+                  input: 2.5,
+                  output: 15,
+                  tier: { type: "context", size: 200000 },
+                },
+              ],
+            },
+          },
+        },
+      },
+    });
+    expect(toModelPricing([entry])[0].longContext).toEqual({
+      thresholdTokens: 200000,
+      inputMultiplier: "2",
+      outputMultiplier: "1.5",
     });
   });
 });
