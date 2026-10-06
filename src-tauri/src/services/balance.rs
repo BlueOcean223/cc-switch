@@ -17,6 +17,7 @@ use std::time::Duration;
 enum BalanceProvider {
     DeepSeek,
     StepFun,
+    StepFunIntl,
     SiliconFlow,
     SiliconFlowEn,
     OpenRouter,
@@ -27,8 +28,10 @@ fn detect_provider(base_url: &str) -> Option<BalanceProvider> {
     let url = base_url.to_lowercase();
     if url.contains("api.deepseek.com") {
         Some(BalanceProvider::DeepSeek)
-    } else if url.contains("api.stepfun.ai") || url.contains("api.stepfun.com") {
+    } else if url.contains("api.stepfun.com") {
         Some(BalanceProvider::StepFun)
+    } else if url.contains("api.stepfun.ai") {
+        Some(BalanceProvider::StepFunIntl)
     } else if url.contains("api.siliconflow.cn") {
         Some(BalanceProvider::SiliconFlow)
     } else if url.contains("api.siliconflow.com") {
@@ -146,14 +149,24 @@ async fn query_deepseek(api_key: &str) -> Result<UsageResult, String> {
 }
 
 // ── StepFun ─────────────────────────────────────────────────
-// GET https://api.stepfun.com/v1/accounts
+// GET https://api.stepfun.com/v1/accounts（国内）/ https://api.stepfun.ai/v1/accounts（国际）
 // Response: { object, type, balance, total_cash_balance, total_voucher_balance }
+// 两站账号与 key 各自独立。接口文档没写币种，按两站定价页：国内按元、国际按美元。
 
-async fn query_stepfun(api_key: &str) -> Result<UsageResult, String> {
+async fn query_stepfun(api_key: &str, intl: bool) -> Result<UsageResult, String> {
     let client = crate::http_client::get();
 
+    let (url, plan_name, unit) = if intl {
+        (
+            "https://api.stepfun.ai/v1/accounts",
+            "StepFun (Intl)",
+            "USD",
+        )
+    } else {
+        ("https://api.stepfun.com/v1/accounts", "StepFun", "CNY")
+    };
     let resp = client
-        .get("https://api.stepfun.com/v1/accounts")
+        .get(url)
         .header("Authorization", format!("Bearer {api_key}"))
         .header("Accept", "application/json")
         .timeout(Duration::from_secs(15))
@@ -190,11 +203,11 @@ async fn query_stepfun(api_key: &str) -> Result<UsageResult, String> {
     Ok(UsageResult {
         success: true,
         data: Some(vec![UsageData {
-            plan_name: Some("StepFun".to_string()),
+            plan_name: Some(plan_name.to_string()),
             remaining: Some(balance),
             total: None,
             used: None,
-            unit: Some("CNY".to_string()),
+            unit: Some(unit.to_string()),
             is_valid: Some(true),
             invalid_message: None,
             extra: None,
@@ -357,16 +370,17 @@ fn openrouter_key_usage(key: &serde_json::Value) -> UsageResult {
 }
 
 // ── Novita AI ───────────────────────────────────────────────
-// GET https://api.novita.ai/v3/user/balance
-// Response: { availableBalance, cashBalance, creditLimit, outstandingInvoices }
-// 金额单位：0.0001 USD
+// GET https://api.novita.ai/openapi/v1/billing/balance/detail（官方 "User Balance Info"）
+// Response: { availableBalance, cashBalance, creditLimit, pendingCharges, outstandingInvoices }
+// 金额都是字符串，单位 0.0001 USD；availableBalance = cashBalance + creditLimit
 
 async fn query_novita(api_key: &str) -> Result<UsageResult, String> {
     let client = crate::http_client::get();
 
     let resp = client
-        .get("https://api.novita.ai/v3/user/balance")
+        .get("https://api.novita.ai/openapi/v1/billing/balance/detail")
         .header("Authorization", format!("Bearer {api_key}"))
+        .header("Content-Type", "application/json")
         .header("Accept", "application/json")
         .timeout(Duration::from_secs(15))
         .send()
@@ -397,10 +411,24 @@ async fn query_novita(api_key: &str) -> Result<UsageResult, String> {
         Err(e) => return Ok(make_error(format!("Failed to parse response: {e}"))),
     };
 
-    // Novita 金额单位为 0.0001 USD，需除以 10000 转为 USD
-    let available = parse_f64_field(&body, "availableBalance").unwrap_or(0.0) / 10000.0;
+    Ok(novita_balance(&body))
+}
 
-    Ok(UsageResult {
+fn novita_balance(body: &serde_json::Value) -> UsageResult {
+    // 金额单位为 0.0001 USD
+    let usd = |field| parse_f64_field(body, field).map(|v| v / 10000.0);
+    let Some(available) = usd("availableBalance") else {
+        return make_error("Unrecognized Novita balance response".to_string());
+    };
+    // 可用余额含信用额度，拆开写进说明
+    let extra = match (usd("cashBalance"), usd("creditLimit")) {
+        (Some(cash), Some(credit)) if credit > 0.0 => {
+            Some(format!("Top-up {cash:.2} + credit limit {credit:.2} USD"))
+        }
+        _ => None,
+    };
+
+    UsageResult {
         success: true,
         data: Some(vec![UsageData {
             plan_name: Some("Novita AI".to_string()),
@@ -409,15 +437,11 @@ async fn query_novita(api_key: &str) -> Result<UsageResult, String> {
             used: None,
             unit: Some("USD".to_string()),
             is_valid: Some(available > 0.0),
-            invalid_message: if available <= 0.0 {
-                Some("No balance remaining".to_string())
-            } else {
-                None
-            },
-            extra: None,
+            invalid_message: (available <= 0.0).then(|| "No balance remaining".to_string()),
+            extra,
         }]),
         error: None,
-    })
+    }
 }
 
 // ── 工具函数 ────────────────────────────────────────────────
@@ -456,7 +480,8 @@ pub async fn get_balance(base_url: &str, api_key: &str) -> Result<UsageResult, S
 
     match provider {
         BalanceProvider::DeepSeek => query_deepseek(api_key).await,
-        BalanceProvider::StepFun => query_stepfun(api_key).await,
+        BalanceProvider::StepFun => query_stepfun(api_key, false).await,
+        BalanceProvider::StepFunIntl => query_stepfun(api_key, true).await,
         BalanceProvider::SiliconFlow => Ok(make_error(SILICONFLOW_CN_RETIRED.to_string())),
         BalanceProvider::SiliconFlowEn => query_siliconflow(api_key).await,
         BalanceProvider::OpenRouter => query_openrouter(api_key).await,
@@ -493,6 +518,36 @@ mod tests {
         let spent = serde_json::json!({ "limit": 10, "limit_remaining": 0, "usage": 10 });
         let data = &openrouter_key_usage(&spent).data.unwrap()[0];
         assert_eq!(data.is_valid, Some(false));
+    }
+
+    #[test]
+    fn novita_balance_converts_units_and_shows_credit_limit() {
+        // 官方示例原样
+        let body = serde_json::json!({
+            "availableBalance": "1000000", "cashBalance": "800000", "creditLimit": "200000",
+            "pendingCharges": "0", "outstandingInvoices": "0"
+        });
+        let data = &novita_balance(&body).data.unwrap()[0];
+        assert_eq!(data.remaining, Some(100.0));
+        assert_eq!(
+            data.extra.as_deref(),
+            Some("Top-up 80.00 + credit limit 20.00 USD")
+        );
+
+        let result = novita_balance(&serde_json::json!({ "balance": 1 }));
+        assert!(!result.success);
+    }
+
+    #[test]
+    fn stepfun_hosts_pick_their_own_site() {
+        assert!(matches!(
+            detect_provider("https://api.stepfun.ai/v1"),
+            Some(BalanceProvider::StepFunIntl)
+        ));
+        assert!(matches!(
+            detect_provider("https://api.stepfun.com/step_plan/v1"),
+            Some(BalanceProvider::StepFun)
+        ));
     }
 
     #[test]
