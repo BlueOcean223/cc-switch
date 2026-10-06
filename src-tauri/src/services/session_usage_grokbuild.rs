@@ -23,8 +23,10 @@
 //!   样本与本地定价 grok-4.5-build 2/6/0.30 分毫不差。**有自报且完整时
 //!   total_cost 以自报为准**（回填只补 total<=0 的行、不修正错价，入账后无
 //!   修复路径，所以定价漂移窗口不能押在本地价上）；本地定价负责分项成本与
-//!   漂移告警。`costIsPartial` 标记自报为下界：有本地价回退本地全额复算并
-//!   抑制漂移告警，无价才用下界入账（分项记 0）。
+//!   漂移告警。费用不完整（`costIsPartial` / `usageIsIncomplete`）时 grok-build
+//!   写出前已删掉 costUsdTicks（`scrub_untrustworthy_costs`），按本地定价复算。
+//! - `cacheCreationTokens` 和 `cachedReadTokens` 都含在 `inputTokens` 里，缓存写
+//!   按缓存写价格单独计。
 //! - 子代理会话不导入：它的用量已并入父会话当轮的 turn_completed。fork 会话
 //!   复制了源会话的全部事件，源会话已有的 prompt_id 跳过（见 [`GrokSessionOrigin`]）。
 
@@ -48,15 +50,18 @@ use std::path::{Path, PathBuf};
 /// 单个模型的本轮用量（从 `modelUsage` 或顶层 usage 提取，均为逐轮口径）
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 struct GrokCounters {
+    /// 含缓存读和缓存写的全部输入
     input: u64,
     output: u64,
     cached: u64,
+    /// `cacheCreationTokens`，含在 `input` 里（grok-build `PromptUsageModel`）
+    cache_write: u64,
     api_ms: u64,
     model_calls: u64,
-    /// CLI 自报本轮成本，1 tick = 1e-10 USD；0 = 上游未提供
+    /// CLI 自报本轮成本，1 tick = 1e-10 USD；0 = 上游未提供。费用不完整
+    /// （`costIsPartial` / `usageIsIncomplete`）时 grok-build 写出前就清掉了它
+    /// （`scrub_untrustworthy_costs`），所以有值就是完整的
     cost_ticks: u64,
-    /// 上游标记 cost_ticks 只是部分费用（`costIsPartial`）：此时它是下界
-    cost_partial: bool,
 }
 
 impl GrokCounters {
@@ -75,8 +80,6 @@ impl GrokCounters {
 struct GrokUsageEvent {
     created_at: i64,
     prompt_id: String,
-    /// 事件级 `costIsPartial`（顶层 usage 上观测到的位置；对本事件全部模型生效）
-    cost_is_partial: bool,
     per_model: Vec<(String, GrokCounters)>,
 }
 
@@ -294,7 +297,6 @@ fn sync_single_grok_file(
                 db,
                 &request_id,
                 turn,
-                event.cost_is_partial || turn.cost_partial,
                 model,
                 &session_id,
                 event.created_at,
@@ -384,10 +386,6 @@ fn parse_grok_usage_events(reader: impl BufRead) -> std::io::Result<Vec<GrokUsag
         events.push(GrokUsageEvent {
             created_at,
             prompt_id,
-            cost_is_partial: usage
-                .get("costIsPartial")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(false),
             per_model,
         });
     }
@@ -401,13 +399,10 @@ fn parse_grok_counters(value: &serde_json::Value) -> GrokCounters {
         input: get("inputTokens"),
         output: get("outputTokens"),
         cached: get("cachedReadTokens"),
+        cache_write: get("cacheCreationTokens"),
         api_ms: get("apiDurationMs"),
         model_calls: get("modelCalls"),
         cost_ticks: get("costUsdTicks"),
-        cost_partial: value
-            .get("costIsPartial")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false),
     }
 }
 
@@ -442,7 +437,6 @@ fn insert_grok_session_entry(
     db: &Database,
     request_id: &str,
     turn: &GrokCounters,
-    cost_is_partial: bool,
     model: &str,
     session_id: &str,
     created_at: i64,
@@ -454,13 +448,15 @@ fn insert_grok_session_entry(
 
     let conn = lock_conn!(db.conn);
 
-    // xAI 的 inputTokens 含缓存读；入库换成未命中缓存的输入
+    // inputTokens 含缓存读和缓存写；入库换成未命中缓存的输入，缓存写单独计价
     let clamp = |v: u64| v.min(u32::MAX as u64) as u32;
+    let cached = turn.cached.min(turn.input);
+    let cache_write = turn.cache_write.min(turn.input - cached);
     let usage = TokenUsage {
-        input_tokens: clamp(turn.input.saturating_sub(turn.cached)),
+        input_tokens: clamp(turn.input - cached - cache_write),
         output_tokens: clamp(turn.output),
-        cache_read_tokens: clamp(turn.cached),
-        cache_creation_tokens: 0,
+        cache_read_tokens: clamp(cached),
+        cache_creation_tokens: clamp(cache_write),
         cache_creation_1h_tokens: 0,
     };
 
@@ -468,22 +464,20 @@ fn insert_grok_session_entry(
     let pricing = find_model_pricing(&conn, model).map(ModelPricing::without_long_context);
     let reported = turn.reported_cost_usd();
     // 合计取 CLI 自报的费用时标记 native_cost，按定价重算时不覆盖它
-    let native_cost = reported.is_some() && (pricing.is_none() || !cost_is_partial);
+    let native_cost = reported.is_some();
     // 插入成功（changed）后才发，避免重扫时重复刷日志
     let mut deferred_warn: Option<String> = None;
 
     // total_cost 取值优先级：
-    // 1. 有自报且完整 → 以自报为准（上游 ground truth，定价漂移窗口内也准确；
+    // 1. 有自报 → 以自报为准（上游 ground truth，定价漂移窗口内也准确；
     //    本地定价负责分项与漂移告警，漂移时分项与 total 允许暂不自洽）；
-    // 2. 自报不完整（costIsPartial）→ 有本地价用本地全额复算（token 数完整），
-    //    并抑制此时无意义的漂移告警；无价则仍用自报下界（好过记 0）；
-    // 3. 无自报 → 本地复算；彻底无价才整单记 0。
+    // 2. 无自报（含费用不完整被清掉的）→ 本地复算；彻底无价才整单记 0。
     let (input_cost, output_cost, cache_read_cost, cache_creation_cost, total_cost) = match pricing
     {
         Some(p) => {
             let cost = CostCalculator::calculate(&usage, &p, ServiceTier::Standard, created_at);
             let total = match reported {
-                Some(reported) if !cost_is_partial => {
+                Some(reported) => {
                     // 偏差超 1%（微额下限 1e-6）即本地定价漂移——xAI 调价时
                     // 最早的可观测信号，提醒更新 seed/repair。
                     let tolerance = (reported * Decimal::new(1, 2)).max(Decimal::new(1, 6));
@@ -512,13 +506,8 @@ fn insert_grok_session_entry(
             let total = match reported {
                 Some(reported) => {
                     if model != "unknown" {
-                        let partial_note = if cost_is_partial {
-                            "（上游标记为部分费用，实际为下界）"
-                        } else {
-                            ""
-                        };
                         deferred_warn = Some(format!(
-                            "模型定价未找到，采用 CLI 自报成本入账{partial_note}: model={model} total={reported} request_id={request_id}"
+                            "模型定价未找到，采用 CLI 自报成本入账: model={model} total={reported} request_id={request_id}"
                         ));
                     }
                     reported.to_string()
@@ -560,6 +549,7 @@ fn insert_grok_session_entry(
             input_tokens = excluded.input_tokens,
             output_tokens = excluded.output_tokens,
             cache_read_tokens = excluded.cache_read_tokens,
+            cache_creation_tokens = excluded.cache_creation_tokens,
             input_cost_usd = excluded.input_cost_usd,
             output_cost_usd = excluded.output_cost_usd,
             cache_read_cost_usd = excluded.cache_read_cost_usd,
@@ -572,6 +562,7 @@ fn insert_grok_session_entry(
           AND (input_tokens != excluded.input_tokens
            OR output_tokens != excluded.output_tokens
            OR cache_read_tokens != excluded.cache_read_tokens
+           OR cache_creation_tokens != excluded.cache_creation_tokens
            OR latency_ms != excluded.latency_ms
            OR model != excluded.model
            OR total_cost_usd != excluded.total_cost_usd
@@ -585,7 +576,7 @@ fn insert_grok_session_entry(
             usage.input_tokens,
             usage.output_tokens,
             usage.cache_read_tokens,
-            0i64,                // cache_creation_tokens
+            usage.cache_creation_tokens,
             input_cost,
             output_cost,
             cache_read_cost,
@@ -638,13 +629,6 @@ mod tests {
     fn usage_event_line(epoch: i64, prompt_id: &str, model_usage: &str) -> String {
         format!(
             r#"{{"timestamp":{epoch},"method":"_x.ai/session/update","params":{{"update":{{"sessionUpdate":"turn_completed","prompt_id":"{prompt_id}","stop_reason":"end_turn","usage":{{"modelUsage":{{{model_usage}}}}}}}}}}}"#
-        )
-    }
-
-    /// 带事件级 costIsPartial 标记的变体
-    fn usage_event_line_partial(epoch: i64, prompt_id: &str, model_usage: &str) -> String {
-        format!(
-            r#"{{"timestamp":{epoch},"method":"_x.ai/session/update","params":{{"update":{{"sessionUpdate":"turn_completed","prompt_id":"{prompt_id}","stop_reason":"end_turn","usage":{{"costIsPartial":true,"modelUsage":{{{model_usage}}}}}}}}}}}"#
         )
     }
 
@@ -748,10 +732,10 @@ mod tests {
                 input: 16632,
                 output: 104,
                 cached: 0,
+                cache_write: 0,
                 api_ms: 5342,
                 model_calls: 0,
                 cost_ticks: 338_880_000,
-                cost_partial: false,
             }
         );
     }
@@ -1113,30 +1097,26 @@ mod tests {
     }
 
     #[test]
-    fn partial_reported_cost_prefers_local_pricing_when_priced() -> Result<(), AppError> {
-        use std::str::FromStr;
-        // costIsPartial=true：自报只是下界，不可作 total。token 数是完整的，
-        // 有本地价时用本地全额复算（此处应得 338880000 ticks 等值）。
+    fn cache_writes_are_split_out_of_input() -> Result<(), AppError> {
+        // inputTokens 含缓存读和缓存写（grok-build: cache_creation_tokens 是
+        // input_tokens 的子集）
         let db = Database::memory()?;
         let temp = tempdir().expect("tempdir");
-        let lines = vec![usage_event_line_partial(
-            OLD_EPOCH,
-            "p1",
-            &model_counters_with_ticks("grok-4.5-build", 16632, 104, 0, 1, 1_000),
-        )];
-        let path = write_session_file(temp.path(), "sess-partial", &lines);
+        let counters = r#""grok-4.5-build":{"inputTokens":1000,"outputTokens":10,"cachedReadTokens":300,"cacheCreationTokens":200,"modelCalls":1}"#;
+        let lines = vec![usage_event_line(OLD_EPOCH, "p1", counters)];
+        let path = write_session_file(temp.path(), "sess-cache-write", &lines);
 
         let result = sync_file(&db, &path)?;
         assert_eq!(result.imported, 1);
 
         let conn = lock_conn!(db.conn);
-        let total: String = conn.query_row(
-            "SELECT total_cost_usd FROM proxy_request_logs WHERE data_source = 'grok_session'",
+        let tokens: (i64, i64, i64) = conn.query_row(
+            "SELECT input_tokens, cache_read_tokens, cache_creation_tokens
+             FROM proxy_request_logs WHERE data_source = 'grok_session'",
             [],
-            |row| row.get(0),
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         )?;
-        let expected = Decimal::from(338_880_000u64) / Decimal::from(10_000_000_000u64);
-        assert_eq!(Decimal::from_str(&total).expect("decimal"), expected);
+        assert_eq!(tokens, (500, 300, 200));
         Ok(())
     }
 
