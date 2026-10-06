@@ -431,7 +431,7 @@ struct AgentsLockFile {
     skills: HashMap<String, AgentsLockSkill>,
 }
 
-/// lock 文件中单个 skill 的信息
+/// lock 文件中单个 skill 的信息（字段见 vercel-labs/skills 的 `SkillLockEntry`）
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct AgentsLockSkill {
@@ -439,8 +439,9 @@ struct AgentsLockSkill {
     source_type: Option<String>,
     source_url: Option<String>,
     skill_path: Option<String>,
-    branch: Option<String>,
-    source_branch: Option<String>,
+    /// 安装时用的分支或 tag
+    #[serde(rename = "ref")]
+    git_ref: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -545,8 +546,7 @@ fn parse_agents_lock() -> HashMap<String, LockRepoInfo> {
                 return None;
             }
             let (owner, repo) = source.split_once('/')?;
-            let branch = normalize_optional_branch(skill.branch)
-                .or_else(|| normalize_optional_branch(skill.source_branch))
+            let branch = normalize_optional_branch(skill.git_ref)
                 .or_else(|| parse_branch_from_source_url(skill.source_url.as_deref()));
             Some((
                 name,
@@ -3190,8 +3190,8 @@ impl SkillService {
     /// 前者会把 URL 后半截变成 fragment，后者可用百分号编码绕过字符检查。
     fn is_valid_git_branch(branch: &str) -> bool {
         // 空串和 "HEAD" 都是 `download_repo` 的哨兵，语义都是「用仓库默认分支」：
-        // 分支候选表对两者一视同仁地跳过，改试 main / master，所以它们**永远不会
-        // 被拼进 URL**，也就没有可校验的攻击面。空串必须放行——`skill_repos` 的
+        // 分支候选表对两者一视同仁地跳过，改试 main / master 和固定写法的
+        // `archive/HEAD.zip`，所以它们**永远不会被拼进 URL**，也就没有可校验的攻击面。空串必须放行——`skill_repos` 的
         // 存量行可以是空 branch（建表默认值是 'main'，但不禁止空串），前端两处
         // `repo.branch || "main"` 就是照着这个前提写的。把它当非法会让那些仓库
         // 在 download_repo 第一行就报 INVALID_REPO_REF，技能面板直接列不出来。
@@ -3254,11 +3254,11 @@ impl SkillService {
     /// 分隔符语义等），这里也能拦住落点被改写的请求。
     fn assert_github_archive_url(url: &str, owner: &str, name: &str) -> Result<()> {
         let parsed = url::Url::parse(url).map_err(|e| anyhow!("Invalid archive URL: {e}"))?;
-        let expected_prefix = format!("/{owner}/{name}/archive/refs/heads/");
-        if parsed.scheme() != "https"
-            || parsed.host_str() != Some("github.com")
-            || !parsed.path().starts_with(&expected_prefix)
-        {
+        let archive = format!("/{owner}/{name}/archive/");
+        let allowed = parsed.path().strip_prefix(&archive).is_some_and(|rest| {
+            rest == "HEAD.zip" || rest.starts_with("refs/heads/") || rest.starts_with("refs/tags/")
+        });
+        if parsed.scheme() != "https" || parsed.host_str() != Some("github.com") || !allowed {
             return Err(anyhow!(format_skill_error(
                 "INVALID_REPO_REF",
                 &[("owner", owner), ("name", name)],
@@ -3480,22 +3480,11 @@ impl SkillService {
             return Ok((temp_dir, repo.branch.clone()));
         }
 
-        let mut branches = Vec::new();
-        if !repo.branch.is_empty() && !repo.branch.eq_ignore_ascii_case("HEAD") {
-            branches.push(repo.branch.as_str());
-        }
-        if !branches.contains(&"main") {
-            branches.push("main");
-        }
-        if !branches.contains(&"master") {
-            branches.push("master");
-        }
-
         let mut last_error = None;
-        for branch in branches {
+        for (archive_ref, branch) in Self::archive_candidates(&repo.branch) {
             let url = format!(
-                "https://github.com/{}/{}/archive/refs/heads/{}.zip",
-                repo.owner, repo.name, branch
+                "https://github.com/{}/{}/archive/{}.zip",
+                repo.owner, repo.name, archive_ref
             );
             Self::assert_github_archive_url(&url, &repo.owner, &repo.name)?;
 
@@ -3513,6 +3502,27 @@ impl SkillService {
         }
 
         Err(last_error.unwrap_or_else(|| anyhow::anyhow!("所有分支下载失败")))
+    }
+
+    /// 依次尝试的归档（`archive/` 之后的路径，以及成功时记下的分支名）。
+    ///
+    /// 指定的 ref 先当分支、再当 tag（`.skill-lock.json` 的 `ref` 两种都可能）。之后照旧
+    /// 试 main、master，记下真实分支名，已安装技能和仓库按分支名对应；都不存在时取
+    /// 仓库默认分支（`archive/HEAD.zip`），记为 `HEAD`。
+    fn archive_candidates(branch: &str) -> Vec<(String, String)> {
+        let mut candidates = Vec::new();
+        let explicit = !branch.is_empty() && !branch.eq_ignore_ascii_case("HEAD");
+        if explicit {
+            candidates.push((format!("refs/heads/{branch}"), branch.to_string()));
+            candidates.push((format!("refs/tags/{branch}"), branch.to_string()));
+        }
+        for fallback in ["main", "master"] {
+            if !(explicit && branch == fallback) {
+                candidates.push((format!("refs/heads/{fallback}"), fallback.to_string()));
+            }
+        }
+        candidates.push(("HEAD".to_string(), "HEAD".to_string()));
+        candidates
     }
 
     /// 下载并解压 ZIP
@@ -4688,7 +4698,7 @@ mod tests {
     #[test]
     fn validate_repo_ref_accepts_the_empty_branch_sentinel() {
         // 空 branch 与 "HEAD" 在 download_repo 里是同一个哨兵：分支候选表跳过
-        // 两者，改试 main / master，所以它们从不进 URL。校验若把空串当非法，
+        // 两者，改试 main / master / 默认分支，所以它们从不进 URL。校验若把空串当非法，
         // 存量 skill_repos 行（建表默认 'main'，但空串没被禁）会在 download_repo
         // 第一行就 INVALID_REPO_REF，整个技能面板列不出东西——前端两处
         // `repo.branch || "main"` 正是照着"空串可用"写的。
@@ -4741,9 +4751,73 @@ mod tests {
     }
 
     #[test]
+    fn agents_lock_reads_the_ref_field() {
+        // vercel-labs/skills 写出的条目形态（src/skill-lock.ts 的 SkillLockEntry）
+        let lock: AgentsLockFile = serde_json::from_str(
+            r#"{"version":3,"skills":{"find-skills":{
+                "source":"vercel-labs/skills","sourceType":"github",
+                "sourceUrl":"https://github.com/vercel-labs/skills.git","ref":"v1.7.1",
+                "skillPath":"skills/find-skills/SKILL.md","skillFolderHash":"abc",
+                "installedAt":"2026-01-01T00:00:00Z","updatedAt":"2026-01-01T00:00:00Z"}}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            lock.skills["find-skills"].git_ref.as_deref(),
+            Some("v1.7.1")
+        );
+    }
+
+    #[test]
+    fn archive_candidates_try_tags_and_the_default_branch() {
+        let refs = |branch: &str| {
+            SkillService::archive_candidates(branch)
+                .into_iter()
+                .map(|(archive, _)| archive)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            refs("v1.0.0"),
+            [
+                "refs/heads/v1.0.0",
+                "refs/tags/v1.0.0",
+                "refs/heads/main",
+                "refs/heads/master",
+                "HEAD"
+            ]
+        );
+        assert_eq!(
+            refs("main"),
+            [
+                "refs/heads/main",
+                "refs/tags/main",
+                "refs/heads/master",
+                "HEAD"
+            ]
+        );
+        for sentinel in ["", "HEAD", "head"] {
+            assert_eq!(
+                refs(sentinel),
+                ["refs/heads/main", "refs/heads/master", "HEAD"]
+            );
+        }
+        assert_eq!(
+            SkillService::archive_candidates("").last().unwrap().1,
+            "HEAD"
+        );
+    }
+
+    #[test]
     fn assert_github_archive_url_pins_host_and_path() {
-        let ok = "https://github.com/owner/repo/archive/refs/heads/main.zip";
-        assert!(SkillService::assert_github_archive_url(ok, "owner", "repo").is_ok());
+        for ok in [
+            "https://github.com/owner/repo/archive/refs/heads/main.zip",
+            "https://github.com/owner/repo/archive/refs/tags/v1.0.0.zip",
+            "https://github.com/owner/repo/archive/HEAD.zip",
+        ] {
+            assert!(
+                SkillService::assert_github_archive_url(ok, "owner", "repo").is_ok(),
+                "{ok}"
+            );
+        }
 
         // 出口断言必须挡住落点被改写到 release asset 的情况
         for bad in [
@@ -4751,6 +4825,7 @@ mod tests {
             "https://evil.example/owner/repo/archive/refs/heads/main.zip",
             "http://github.com/owner/repo/archive/refs/heads/main.zip",
             "https://github.com/other/repo/archive/refs/heads/main.zip",
+            "https://github.com/owner/repo/archive/HEAD.tar.gz",
         ] {
             assert!(
                 SkillService::assert_github_archive_url(bad, "owner", "repo").is_err(),
