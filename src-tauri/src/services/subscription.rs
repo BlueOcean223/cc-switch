@@ -4,6 +4,8 @@
 //! 第一层：仅读取凭据，不实现登录/刷新。
 
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use std::collections::{HashMap, HashSet};
@@ -151,31 +153,55 @@ fn read_claude_credentials() -> (Option<String>, CredentialStatus, Option<String
     read_claude_credentials_from_file()
 }
 
+const CLAUDE_KEYCHAIN_SERVICE: &str = "Claude Code-credentials";
+
+/// Claude Code 存 OAuth 凭据的 Keychain 服务名候选，按优先级排列。
+///
+/// Claude Code（2.1.284 `wN("-credentials")`）在设了 `CLAUDE_CONFIG_DIR` 时给服务名加
+/// `-` + sha256(该环境变量原文) 的前 8 位十六进制，没设时不加后缀。cc-switch 拿不到
+/// Claude 进程的环境变量，只能按覆盖目录推：shell 展开 `~` 后的路径，以及带末尾
+/// `/` 的写法；覆盖目录就是默认的 `~/.claude` 时环境变量多半没设，再试无后缀的名字。
+/// 没设覆盖目录时反过来，先试无后缀，再试显式设成默认目录的情况。
+fn claude_keychain_services(override_dir: Option<&Path>, default_dir: &Path) -> Vec<String> {
+    let hashed = |dir: &str| {
+        let digest = format!("{:x}", Sha256::digest(dir.as_bytes()));
+        format!("{CLAUDE_KEYCHAIN_SERVICE}-{}", &digest[..8])
+    };
+    let default = default_dir.to_string_lossy();
+    match override_dir {
+        None => vec![CLAUDE_KEYCHAIN_SERVICE.to_string(), hashed(&default)],
+        Some(dir) => {
+            let dir = dir.to_string_lossy();
+            let mut services = vec![hashed(&dir), hashed(&format!("{dir}/"))];
+            if dir == default {
+                services.push(CLAUDE_KEYCHAIN_SERVICE.to_string());
+            }
+            services
+        }
+    }
+}
+
 /// 从 macOS Keychain 读取 Claude 凭据
 #[cfg(target_os = "macos")]
 fn read_claude_credentials_from_keychain(
 ) -> Option<(Option<String>, CredentialStatus, Option<String>)> {
-    let output = std::process::Command::new("security")
-        .args([
-            "find-generic-password",
-            "-s",
-            "Claude Code-credentials",
-            "-w",
-        ])
-        .output()
-        .ok()?;
-
-    if !output.status.success() {
-        return None; // Keychain 中无此条目，回退到文件
-    }
-
-    let json_str = String::from_utf8(output.stdout).ok()?;
-    let json_str = json_str.trim();
-    if json_str.is_empty() {
-        return None;
-    }
-
-    Some(parse_claude_credentials_json(json_str))
+    let override_dir = crate::settings::get_claude_override_dir();
+    let default_dir = config::get_home_dir().join(".claude");
+    claude_keychain_services(override_dir.as_deref(), &default_dir)
+        .iter()
+        .find_map(|service| {
+            let output = std::process::Command::new("security")
+                .args(["find-generic-password", "-s", service, "-w"])
+                .output()
+                .ok()?;
+            if !output.status.success() {
+                return None; // Keychain 中无此条目
+            }
+            let json_str = String::from_utf8(output.stdout).ok()?;
+            let json_str = json_str.trim();
+            (!json_str.is_empty()).then(|| parse_claude_credentials_json(json_str))
+        })
+    // 全部没有时回退到文件
 }
 
 /// 从文件读取 Claude 凭据
@@ -1627,6 +1653,34 @@ fn now_millis() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn claude_keychain_service_follows_config_dir_hash() {
+        // 期望值按 Claude Code 的 sha256(dir).hex[..8] 用 Python 独立算出
+        let default = Path::new("/Users/x/.claude");
+        assert_eq!(
+            claude_keychain_services(None, default),
+            vec![
+                "Claude Code-credentials",
+                "Claude Code-credentials-c72cc1ce"
+            ]
+        );
+        assert_eq!(
+            claude_keychain_services(Some(Path::new("/Users/x/claude-work")), default),
+            vec![
+                "Claude Code-credentials-8e8c5344",
+                "Claude Code-credentials-8ac017c5"
+            ]
+        );
+        assert_eq!(
+            claude_keychain_services(Some(default), default),
+            vec![
+                "Claude Code-credentials-c72cc1ce",
+                "Claude Code-credentials-95d5ea82",
+                "Claude Code-credentials"
+            ]
+        );
+    }
 
     #[test]
     fn codex_reset_credits_count_only_unexpired_available() {
