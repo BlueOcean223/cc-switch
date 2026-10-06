@@ -12,8 +12,8 @@ use super::blocks::{
 };
 use super::codex_items::image_from_url;
 use super::utils::{
-    extract_text, for_each_jsonl_value, parse_timestamp_to_ms, truncate_summary, JsonlSpan,
-    TITLE_MAX_CHARS,
+    collect_files_named, extract_text, for_each_jsonl_value, parse_timestamp_to_ms,
+    truncate_summary, JsonlSpan, TITLE_MAX_CHARS,
 };
 
 #[derive(Debug, Deserialize)]
@@ -66,7 +66,7 @@ pub fn session_roots() -> Vec<PathBuf> {
 pub fn scan_sessions() -> Vec<SessionMeta> {
     let mut summaries = Vec::new();
     for root in session_roots() {
-        collect_summary_files(&root, &mut summaries);
+        collect_files_named(&root, "summary.json", &mut summaries);
     }
     summaries
         .into_iter()
@@ -323,20 +323,6 @@ pub fn delete_session(root: &Path, path: &Path, session_id: &str) -> Result<bool
     Ok(true)
 }
 
-fn collect_summary_files(root: &Path, files: &mut Vec<PathBuf>) {
-    let Ok(entries) = std::fs::read_dir(root) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            collect_summary_files(&path, files);
-        } else if path.file_name().and_then(|name| name.to_str()) == Some("summary.json") {
-            files.push(path);
-        }
-    }
-}
-
 fn read_summary(path: &Path) -> Result<GrokSessionSummary, String> {
     let text = std::fs::read_to_string(path)
         .map_err(|e| format!("Failed to read Grok Build session summary: {e}"))?;
@@ -404,7 +390,7 @@ mod tests {
         )
         .expect("write summary");
         let mut files = Vec::new();
-        collect_summary_files(&sessions_dir, &mut files);
+        collect_files_named(&sessions_dir, "summary.json", &mut files);
         let sessions = files
             .iter()
             .filter_map(|path| parse_summary(path))
@@ -648,7 +634,7 @@ mod tests {
         write("worktree", r#","session_kind":"worktree""#);
 
         let mut files = Vec::new();
-        collect_summary_files(temp.path(), &mut files);
+        collect_files_named(temp.path(), "summary.json", &mut files);
         let mut ids: Vec<String> = files
             .iter()
             .filter_map(|path| parse_summary(path))

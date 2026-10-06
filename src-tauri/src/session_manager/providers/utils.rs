@@ -329,6 +329,38 @@ pub fn for_each_jsonl_value(
     Ok(())
 }
 
+/// 递归收集 `root` 下扩展名为 `extension` 的文件。目录不存在或读不了时什么也不加。
+pub fn collect_files_with_extension(root: &Path, extension: &str, files: &mut Vec<PathBuf>) {
+    collect_files(
+        root,
+        &|path| path.extension().and_then(|ext| ext.to_str()) == Some(extension),
+        files,
+    );
+}
+
+/// 递归收集 `root` 下文件名为 `name` 的文件。
+pub fn collect_files_named(root: &Path, name: &str, files: &mut Vec<PathBuf>) {
+    collect_files(
+        root,
+        &|path| path.file_name().and_then(|n| n.to_str()) == Some(name),
+        files,
+    );
+}
+
+fn collect_files(root: &Path, keep: &dyn Fn(&Path) -> bool, files: &mut Vec<PathBuf>) {
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            collect_files(&path, keep, files);
+        } else if keep(&path) {
+            files.push(path);
+        }
+    }
+}
+
 pub fn path_basename(value: &str) -> Option<String> {
     let trimmed = value.trim();
     if trimmed.is_empty() {

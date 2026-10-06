@@ -8,7 +8,9 @@ use crate::session_manager::{SessionMessage, SessionMeta};
 
 use super::blocks::assign_turn_ids;
 use super::opencode_blocks::{message_from_parts, v2_message, PartLocator};
-use super::utils::{parse_timestamp_to_ms, path_basename, truncate_summary};
+use super::utils::{
+    collect_files_with_extension, parse_timestamp_to_ms, path_basename, truncate_summary,
+};
 
 const PROVIDER_ID: &str = "opencode";
 
@@ -145,7 +147,7 @@ fn scan_sessions_json() -> Vec<SessionMeta> {
     }
 
     let mut json_files = Vec::new();
-    collect_json_files(&session_dir, &mut json_files);
+    collect_files_with_extension(&session_dir, "json", &mut json_files);
 
     let mut sessions = Vec::new();
     for path in json_files {
@@ -313,7 +315,7 @@ pub fn load_messages(path: &Path) -> Result<Vec<SessionMessage>, String> {
         .ok_or_else(|| "Cannot determine storage root from message path".to_string())?;
 
     let mut msg_files = Vec::new();
-    collect_json_files(path, &mut msg_files);
+    collect_files_with_extension(path, "json", &mut msg_files);
 
     // (created_ts, message_id, message)
     let mut entries: Vec<(i64, String, SessionMessage)> = Vec::new();
@@ -337,7 +339,7 @@ pub fn load_messages(path: &Path) -> Result<Vec<SessionMessage>, String> {
 
         // storage/part/{messageID}/ 下的 part 文件；part id 按时间递增，按文件名排序即生成顺序
         let mut part_files = Vec::new();
-        collect_json_files(&storage.join("part").join(msg_id), &mut part_files);
+        collect_files_with_extension(&storage.join("part").join(msg_id), "json", &mut part_files);
         part_files.sort();
         let parts: Vec<(PartLocator, Value)> = part_files
             .iter()
@@ -541,7 +543,7 @@ pub fn delete_session(storage: &Path, path: &Path, session_id: &str) -> Result<b
 /// 文件存储里 `parentID` 指向 `root` 的全部后代会话 id。
 fn child_session_ids_json(storage: &Path, root: &str) -> Vec<String> {
     let mut files = Vec::new();
-    collect_json_files(&storage.join("session"), &mut files);
+    collect_files_with_extension(&storage.join("session"), "json", &mut files);
     let mut children: HashMap<String, Vec<String>> = HashMap::new();
     for path in files {
         let Some(value) = read_json(&path) else {
@@ -572,7 +574,7 @@ fn child_session_ids_json(storage: &Path, root: &str) -> Vec<String> {
 
 fn delete_session_files(storage: &Path, path: &Path, session_id: &str) -> Result<bool, String> {
     let mut message_files = Vec::new();
-    collect_json_files(path, &mut message_files);
+    collect_files_with_extension(path, "json", &mut message_files);
 
     let mut message_ids = Vec::new();
     for message_path in &message_files {
@@ -813,7 +815,7 @@ fn get_first_user_summary(storage: &Path, session_id: &str) -> Option<String> {
     }
 
     let mut msg_files = Vec::new();
-    collect_json_files(&msg_dir, &mut msg_files);
+    collect_files_with_extension(&msg_dir, "json", &mut msg_files);
 
     // Collect user messages with timestamps for ordering
     let mut user_msgs: Vec<(i64, String)> = Vec::new();
@@ -883,7 +885,7 @@ fn collect_parts_text(part_dir: &Path) -> String {
     }
 
     let mut parts = Vec::new();
-    collect_json_files(part_dir, &mut parts);
+    collect_files_with_extension(part_dir, "json", &mut parts);
 
     let mut texts = Vec::new();
     for part_path in &parts {
@@ -904,30 +906,10 @@ fn collect_parts_text(part_dir: &Path) -> String {
     texts.join("\n")
 }
 
-fn collect_json_files(root: &Path, files: &mut Vec<PathBuf>) {
-    if !root.exists() {
-        return;
-    }
-
-    let entries = match std::fs::read_dir(root) {
-        Ok(entries) => entries,
-        Err(_) => return,
-    };
-
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            collect_json_files(&path, files);
-        } else if path.extension().and_then(|ext| ext.to_str()) == Some("json") {
-            files.push(path);
-        }
-    }
-}
-
 fn find_session_file(storage: &Path, session_id: &str) -> Option<PathBuf> {
     let session_root = storage.join("session");
     let mut files = Vec::new();
-    collect_json_files(&session_root, &mut files);
+    collect_files_with_extension(&session_root, "json", &mut files);
     let expected = format!("{session_id}.json");
 
     files
