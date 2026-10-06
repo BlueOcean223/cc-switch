@@ -439,21 +439,14 @@ async fn query_claude_quota(access_token: &str) -> Result<SubscriptionQuota, Str
 
     let status = resp.status();
 
-    if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
-        return Ok(SubscriptionQuota::error(
-            "claude",
-            CredentialStatus::Expired,
-            format!("Authentication failed (HTTP {status}). Please re-login with Claude CLI."),
-        ));
-    }
-
     if !status.is_success() {
-        let body = resp.text().await.unwrap_or_default();
-        return Ok(SubscriptionQuota::error(
-            "claude",
-            CredentialStatus::Valid,
-            format!("API error (HTTP {status}): {body}"),
-        ));
+        let retry_after = resp
+            .headers()
+            .get(reqwest::header::RETRY_AFTER)
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_string);
+        let body = resp.bytes().await.unwrap_or_default();
+        return Ok(claude_http_error(status, retry_after.as_deref(), &body));
     }
 
     // 先 bytes() 再解析：读体失败（超时/连接中断）是瞬时 → Err；拿到完整响应体
@@ -476,8 +469,73 @@ async fn query_claude_quota(access_token: &str) -> Result<SubscriptionQuota, Str
     Ok(parse_claude_quota(&body))
 }
 
+/// 非 2xx 的分类，与 Claude Code 2.1.284 的 `h6()` 一致：401 和带 Anthropic 错误体
+/// （`{"error":{"type":"…"}}`）的 403 是鉴权被拒；429 和其余 403 是限流。前端按
+/// "Rate limited" 把限流当瞬时失败，沿用上次成功的读数。
+fn claude_http_error(
+    status: reqwest::StatusCode,
+    retry_after: Option<&str>,
+    body: &[u8],
+) -> SubscriptionQuota {
+    let anthropic_error = serde_json::from_slice::<serde_json::Value>(body)
+        .ok()
+        .and_then(|v| v.pointer("/error/type").map(serde_json::Value::is_string))
+        .unwrap_or(false);
+    if status == reqwest::StatusCode::UNAUTHORIZED
+        || (status == reqwest::StatusCode::FORBIDDEN && anthropic_error)
+    {
+        return SubscriptionQuota::error(
+            "claude",
+            CredentialStatus::Expired,
+            format!("Authentication failed (HTTP {status}). Please re-login with Claude CLI."),
+        );
+    }
+    if status == reqwest::StatusCode::TOO_MANY_REQUESTS || status == reqwest::StatusCode::FORBIDDEN
+    {
+        let retry = retry_after
+            .and_then(|v| v.trim().parse::<u64>().ok())
+            .map(|secs| format!(", retry after {secs}s"))
+            .unwrap_or_default();
+        return SubscriptionQuota::error(
+            "claude",
+            CredentialStatus::Valid,
+            format!("Rate limited (HTTP {status}{retry})"),
+        );
+    }
+    SubscriptionQuota::error(
+        "claude",
+        CredentialStatus::Valid,
+        format!(
+            "API error (HTTP {status}): {}",
+            String::from_utf8_lossy(body)
+        ),
+    )
+}
+
+/// 200 响应里至少要有其中一个键，否则 Claude Code（`ult()`）当作带内错误。
+const CLAUDE_USAGE_KEYS: [&str; 8] = [
+    "five_hour",
+    "seven_day",
+    "seven_day_oauth_apps",
+    "seven_day_opus",
+    "seven_day_sonnet",
+    "cinder_cove",
+    "extra_usage",
+    "limits",
+];
+
 /// 兼容旧顶层窗口与新版模型专属周限额，保持查询、缓存和 UI 共用 QuotaTier。
 fn parse_claude_quota(body: &serde_json::Value) -> SubscriptionQuota {
+    let recognized = body
+        .as_object()
+        .is_some_and(|o| CLAUDE_USAGE_KEYS.iter().any(|k| o.contains_key(*k)));
+    if !recognized {
+        return SubscriptionQuota::error(
+            "claude",
+            CredentialStatus::Valid,
+            "Unrecognized usage response".to_string(),
+        );
+    }
     // 解析已知的 tier 窗口
     let mut tiers = Vec::new();
     for &tier_name in KNOWN_TIERS {
@@ -1539,10 +1597,14 @@ pub async fn get_subscription_quota(tool: &str) -> Result<SubscriptionQuota, Str
                     message.unwrap_or_else(|| "Failed to parse credentials".to_string()),
                 )),
                 CredentialStatus::Expired | CredentialStatus::RefreshPending => {
-                    // 即使过期也尝试调用 API（token 可能实际上仍有效）
+                    // 即使过期也尝试调用 API（token 可能实际上仍有效）。只有接口也拒绝了
+                    // 这个 token 才改报凭据过期；限流、5xx 说明 token 被接受了，原样返回，
+                    // 前端才能按瞬时失败处理。
                     if let Some(token) = token {
                         let result = query_claude_quota(&token).await?;
-                        if result.success {
+                        if result.success
+                            || !matches!(result.credential_status, CredentialStatus::Expired)
+                        {
                             return Ok(result);
                         }
                     }
@@ -1835,6 +1897,41 @@ mod tests {
             "is_active": true,
             "scope": { "model": { "id": null, "display_name": model }, "surface": null }
         })
+    }
+
+    #[test]
+    fn claude_http_errors_follow_claude_code_classification() {
+        use reqwest::StatusCode;
+        let anthropic_body =
+            br#"{"type":"error","error":{"type":"permission_error","message":"nope"}}"#;
+
+        let q = claude_http_error(StatusCode::UNAUTHORIZED, None, b"");
+        assert!(matches!(q.credential_status, CredentialStatus::Expired));
+        let q = claude_http_error(StatusCode::FORBIDDEN, None, anthropic_body);
+        assert!(matches!(q.credential_status, CredentialStatus::Expired));
+
+        // 不带 Anthropic 错误体的 403 和 429 都是限流
+        let q = claude_http_error(StatusCode::FORBIDDEN, None, b"<html>blocked</html>");
+        assert!(matches!(q.credential_status, CredentialStatus::Valid));
+        assert!(q.error.unwrap().starts_with("Rate limited (HTTP 403"));
+        let q = claude_http_error(StatusCode::TOO_MANY_REQUESTS, Some("30"), b"");
+        assert_eq!(
+            q.error.as_deref(),
+            Some("Rate limited (HTTP 429 Too Many Requests, retry after 30s)")
+        );
+
+        let q = claude_http_error(StatusCode::BAD_GATEWAY, None, b"oops");
+        assert_eq!(
+            q.error.as_deref(),
+            Some("API error (HTTP 502 Bad Gateway): oops")
+        );
+    }
+
+    #[test]
+    fn claude_quota_without_any_usage_key_is_an_error() {
+        let quota = parse_claude_quota(&serde_json::json!({ "error": "in-band" }));
+        assert!(!quota.success);
+        assert_eq!(quota.error.as_deref(), Some("Unrecognized usage response"));
     }
 
     #[test]
