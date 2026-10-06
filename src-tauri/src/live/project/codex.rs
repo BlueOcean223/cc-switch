@@ -48,7 +48,6 @@ const ROW_TOP_FIELDS: &[&str] = &[
     "review_model",
     "model_reasoning_effort",
     "plan_mode_reasoning_effort",
-    "disable_response_storage",
 ];
 
 fn is_built_in_id(id: &str) -> bool {
@@ -98,7 +97,7 @@ pub enum Route {
 #[derive(Debug, Clone)]
 pub struct CodexProjection {
     pub route: Route,
-    /// 顶层关键字段（模型名、推理档位、`disable_response_storage`）。
+    /// 顶层关键字段（模型名、推理档位）。
     pub top: Vec<(String, TomlValue)>,
     /// 嵌在用户表里的模型名（`agents.default_subagent_model` 等）。
     pub nested: Vec<(Vec<String>, TomlValue)>,
@@ -1008,6 +1007,29 @@ mod tests {
             "{third_party}"
         );
         assert_eq!(third_party["model_provider"].as_str(), Some(ROUTE_ID));
+    }
+
+    #[test]
+    fn retired_disable_response_storage_is_dropped_from_live() {
+        let settings = row(
+            json!({ "OPENAI_API_KEY": "sk" }),
+            &format!("disable_response_storage = true\n{RELAY}"),
+        );
+        let projection = project(&settings).unwrap();
+        assert!(
+            projection
+                .top
+                .iter()
+                .all(|(key, _)| key != "disable_response_storage"),
+            "{:?}",
+            projection.top
+        );
+
+        let doc = apply(
+            RouteWrite::Official,
+            "model = \"gpt-5.5\"\ndisable_response_storage = true\n",
+        );
+        assert!(doc.get("disable_response_storage").is_none(), "{doc}");
     }
 
     #[test]

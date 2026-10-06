@@ -171,7 +171,6 @@ exports[`ProviderForm 预设新增行金标 > codex > CherryIN 1`] = `
       "config": "model_provider = "custom"
 model = "openai/gpt-5.6-sol"
 model_reasoning_effort = "high"
-disable_response_storage = true
 
 [model_providers.custom]
 name = "cherryin"
@@ -228,7 +227,6 @@ exports[`ProviderForm 预设新增行金标 > codex > xAI (Grok) 1`] = `
       "config": "model_provider = "custom"
 model = "grok-4.5"
 model_reasoning_effort = "high"
-disable_response_storage = true
 
 [model_providers.custom]
 name = "xai"

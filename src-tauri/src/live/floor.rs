@@ -124,6 +124,8 @@ pub const CODEX_FLOOR_TOP: &[&str] = &[
     "review_model",
     "model_reasoning_effort",
     "plan_mode_reasoning_effort",
+    // Codex 已不认这个键（请求固定带 `store: false`，启动时提示它被忽略）。旧供应商行里
+    // 还有，投影不再写它；留在这里是为了切换时把 live 里残留的清掉。
     "disable_response_storage",
     "model_catalog_json",
     // 兜底写法会把 Key 写在顶层。
