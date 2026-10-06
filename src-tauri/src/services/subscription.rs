@@ -1394,6 +1394,17 @@ async fn refresh_gemini_token(refresh_token: &str) -> Option<String> {
 struct GeminiLoadCodeAssistResponse {
     #[serde(rename = "cloudaicompanionProject")]
     cloudaicompanion_project: Option<serde_json::Value>,
+    /// 没有时账号还没在 gemini-cli 里完成初始化（onboard）
+    #[serde(rename = "currentTier")]
+    current_tier: Option<serde_json::Value>,
+    #[serde(rename = "ineligibleTiers", default)]
+    ineligible_tiers: Vec<GeminiIneligibleTier>,
+}
+
+#[derive(Deserialize)]
+struct GeminiIneligibleTier {
+    #[serde(rename = "reasonMessage")]
+    reason_message: Option<String>,
 }
 
 /// 配额 bucket
@@ -1424,6 +1435,75 @@ fn extract_project_id(value: &serde_json::Value) -> Option<String> {
             .map(String::from),
         _ => None,
     }
+    .filter(|id| !id.is_empty())
+}
+
+const GEMINI_PROJECT_ENV_KEYS: [&str; 2] = ["GOOGLE_CLOUD_PROJECT", "GOOGLE_CLOUD_PROJECT_ID"];
+
+/// 用户给 gemini-cli 配的 Google Cloud 项目（`code_assist/setup.ts`）：`GOOGLE_CLOUD_PROJECT`，其次
+/// `GOOGLE_CLOUD_PROJECT_ID`。gemini-cli 启动时把找到的第一个 `.env` 并入进程环境（不覆盖已有变量）；
+/// cc-switch 没有工作区目录，只查 `~/.gemini/.env` 和 `~/.env`。macOS 上 GUI 进程拿不到 shell 里
+/// export 的变量，多数情况靠的是这两个文件。
+fn configured_gemini_project() -> Option<String> {
+    let env_file = [
+        crate::gemini_config::get_gemini_dir().join(".env"),
+        crate::config::get_home_dir().join(".env"),
+    ]
+    .into_iter()
+    .find_map(|path| std::fs::read_to_string(path).ok())
+    .unwrap_or_default();
+    pick_gemini_project(|key| std::env::var(key).ok(), &env_file)
+}
+
+fn pick_gemini_project(env: impl Fn(&str) -> Option<String>, env_file: &str) -> Option<String> {
+    GEMINI_PROJECT_ENV_KEYS.iter().find_map(|key| {
+        env(key)
+            .or_else(|| dotenv_value(env_file, key))
+            .filter(|value| !value.is_empty())
+    })
+}
+
+/// `.env` 里某个键的值（同名键取最后一个），按 dotenv 的规则处理 `export ` 前缀、引号和行尾注释
+fn dotenv_value(content: &str, key: &str) -> Option<String> {
+    let mut found = None;
+    for line in content.lines() {
+        let line = line.trim();
+        let line = line.strip_prefix("export ").unwrap_or(line);
+        let Some((name, value)) = line.split_once('=') else {
+            continue;
+        };
+        if name.trim() != key {
+            continue;
+        }
+        let value = value.trim();
+        let value = match value.chars().next() {
+            Some(quote @ ('"' | '\'' | '`')) => value[1..].split(quote).next().unwrap_or_default(),
+            _ => value.split('#').next().unwrap_or_default().trim(),
+        };
+        found = Some(value.to_string());
+    }
+    found
+}
+
+/// 拿不到项目时的提示，对应 gemini-cli 的几种报错：还没初始化账号、账号不符合任何档位
+/// （`IneligibleTierError`）、需要自己配置项目（`ProjectIdRequiredError`）。
+fn gemini_missing_project_message(load: &GeminiLoadCodeAssistResponse) -> String {
+    if load.current_tier.is_none() {
+        return "Gemini CLI has not finished setting up this account. Run gemini once, then refresh."
+            .to_string();
+    }
+    let reasons: Vec<&str> = load
+        .ineligible_tiers
+        .iter()
+        .filter_map(|tier| tier.reason_message.as_deref())
+        .filter(|reason| !reason.is_empty())
+        .collect();
+    if !reasons.is_empty() {
+        return reasons.join(", ");
+    }
+    "This account requires setting GOOGLE_CLOUD_PROJECT or GOOGLE_CLOUD_PROJECT_ID; \
+     cc-switch reads it from ~/.gemini/.env or ~/.env."
+        .to_string()
 }
 
 /// 将 Gemini 模型 ID 分类为 Pro / Flash / Flash Lite
@@ -1441,23 +1521,44 @@ fn classify_gemini_model(model_id: &str) -> &str {
 
 /// 查询 Gemini 官方订阅额度
 ///
-/// 两步 API 调用：
-/// 1. loadCodeAssist → 获取 cloudaicompanionProject
-/// 2. retrieveUserQuota → 获取按模型分桶的配额数据
+/// 两步 API 调用，项目的取法同 gemini-cli（`setupUser` 与 `refreshUserQuota`）：
+/// 1. loadCodeAssist（带上用户配置的项目）→ 获取 cloudaicompanionProject，没有时用配置的项目
+/// 2. retrieveUserQuota → 获取按模型分桶的配额数据；没有项目时 gemini-cli 不查，这里也不查
 async fn query_gemini_quota(access_token: &str) -> Result<SubscriptionQuota, String> {
     let client = crate::http_client::get();
+
+    let configured_project = configured_gemini_project();
+    if let Some(project) = configured_project
+        .as_deref()
+        .filter(|project| project.bytes().all(|b| b.is_ascii_digit()))
+    {
+        return Ok(SubscriptionQuota::error(
+            "gemini",
+            CredentialStatus::Valid,
+            format!(
+                "Invalid Google Cloud Project ID: \"{project}\". GOOGLE_CLOUD_PROJECT (or \
+                 GOOGLE_CLOUD_PROJECT_ID) must be the string Project ID (e.g. \"my-project-123\"), \
+                 not the numeric Project Number."
+            ),
+        ));
+    }
+    let mut load_request = serde_json::json!({
+        "metadata": {
+            "ideType": "GEMINI_CLI",
+            "pluginType": "GEMINI"
+        }
+    });
+    if let Some(project) = &configured_project {
+        load_request["cloudaicompanionProject"] = project.as_str().into();
+        load_request["metadata"]["duetProject"] = project.as_str().into();
+    }
 
     // ── Step 1: loadCodeAssist 获取项目 ID ──
     let load_resp = client
         .post("https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist")
         .header("Authorization", format!("Bearer {access_token}"))
         .header("Content-Type", "application/json")
-        .json(&serde_json::json!({
-            "metadata": {
-                "ideType": "GEMINI_CLI",
-                "pluginType": "GEMINI"
-            }
-        }))
+        .json(&load_request)
         .timeout(std::time::Duration::from_secs(15))
         .send()
         .await;
@@ -1504,13 +1605,18 @@ async fn query_gemini_quota(access_token: &str) -> Result<SubscriptionQuota, Str
     let project_id = load_body
         .cloudaicompanion_project
         .as_ref()
-        .and_then(extract_project_id);
+        .and_then(extract_project_id)
+        .or(configured_project);
+    let Some(project_id) = project_id else {
+        return Ok(SubscriptionQuota::error(
+            "gemini",
+            CredentialStatus::Valid,
+            gemini_missing_project_message(&load_body),
+        ));
+    };
 
     // ── Step 2: retrieveUserQuota 获取配额 ──
-    let mut quota_body = serde_json::json!({});
-    if let Some(ref pid) = project_id {
-        quota_body["project"] = serde_json::Value::String(pid.clone());
-    }
+    let quota_body = serde_json::json!({ "project": project_id });
 
     let quota_resp = client
         .post("https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuota")
@@ -2175,5 +2281,57 @@ mod tests {
         // 其他窗口按小时/天回退命名
         assert_eq!(window_seconds_to_tier_name(3600), "1_hour");
         assert_eq!(window_seconds_to_tier_name(86400), "1_day");
+    }
+
+    #[test]
+    fn gemini_project_follows_gemini_cli_lookup_order() {
+        let env_file = "# project\nexport GOOGLE_CLOUD_PROJECT_ID='from-file-id'\nGOOGLE_CLOUD_PROJECT=\"from-file\" # main\n";
+        let no_env = |_: &str| None;
+        assert_eq!(
+            pick_gemini_project(no_env, env_file).as_deref(),
+            Some("from-file")
+        );
+        // 进程环境优先于 .env；GOOGLE_CLOUD_PROJECT 优先于 _ID，即使后者来自进程环境
+        let env = |key: &str| (key == "GOOGLE_CLOUD_PROJECT_ID").then(|| "env-id".to_string());
+        assert_eq!(
+            pick_gemini_project(env, env_file).as_deref(),
+            Some("from-file")
+        );
+        assert_eq!(pick_gemini_project(env, "").as_deref(), Some("env-id"));
+        // 空值视为没有
+        assert_eq!(
+            pick_gemini_project(
+                no_env,
+                "GOOGLE_CLOUD_PROJECT=\nGOOGLE_CLOUD_PROJECT_ID=p-2 # x"
+            )
+            .as_deref(),
+            Some("p-2")
+        );
+        assert_eq!(pick_gemini_project(no_env, "OTHER=1"), None);
+    }
+
+    #[test]
+    fn gemini_missing_project_message_matches_gemini_cli_errors() {
+        let load = |body: serde_json::Value| -> GeminiLoadCodeAssistResponse {
+            serde_json::from_value(body).unwrap()
+        };
+        assert!(gemini_missing_project_message(&load(serde_json::json!({})))
+            .contains("Run gemini once"));
+        assert_eq!(
+            gemini_missing_project_message(&load(serde_json::json!({
+                "currentTier": {"id": "standard-tier"},
+                "ineligibleTiers": [{"reasonMessage": "Not eligible in your region"}]
+            }))),
+            "Not eligible in your region"
+        );
+        assert!(gemini_missing_project_message(&load(serde_json::json!({
+            "currentTier": {"id": "standard-tier"}
+        })))
+        .starts_with("This account requires setting GOOGLE_CLOUD_PROJECT"));
+        assert_eq!(extract_project_id(&serde_json::json!("")), None);
+        assert_eq!(
+            extract_project_id(&serde_json::json!({"id": "managed-123"})).as_deref(),
+            Some("managed-123")
+        );
     }
 }
