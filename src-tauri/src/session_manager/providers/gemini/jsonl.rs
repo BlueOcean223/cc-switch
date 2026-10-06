@@ -100,14 +100,18 @@ impl Meta {
     }
 
     fn merge_fast(&mut self, rec: &FastRecord) {
-        let fields = [
+        self.merge_loose([
             &rec.session_id,
             &rec.project_hash,
             &rec.start_time,
             &rec.last_updated,
             &rec.summary,
             &rec.kind,
-        ];
+        ]);
+    }
+
+    /// 快速模式下的浅合并：字段顺序同 [`Meta::slots`]；`None` 表示没有这个键
+    fn merge_loose(&mut self, fields: [&Option<LooseStr>; 6]) {
         for ((_, slot), field) in self.slots().into_iter().zip(fields) {
             if let Some(value) = field {
                 *slot = value.as_str().map(str::to_string);
@@ -618,6 +622,209 @@ impl FastState {
             return;
         };
         message.resumable = is_resumable(message.role, &content, message.has_extras);
+    }
+}
+
+// ─── 用量导入 ────────────────────────────────────────────────────────────
+
+/// 一次 API 调用的用量：一条带 `tokens` 的 gemini 消息。
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct TokenMessage {
+    pub id: String,
+    /// `TokensSummary` 原样：`{input, output, cached, thoughts, tool, total}`
+    pub tokens: Value,
+    /// 消息自己的 model；缺失时（合成消息）沿用同文件前面最近一条有 model 的 gemini 消息
+    pub model: Option<String>,
+    pub timestamp: Option<String>,
+}
+
+/// 一个会话文件里的全部用量。
+#[derive(Debug, Default)]
+pub(crate) struct UsageScan {
+    pub meta: Meta,
+    /// 按消息 id 去重，顺序为第一次出现的顺序
+    pub messages: Vec<TokenMessage>,
+}
+
+/// 收集会话文件里所有带 tokens 的 gemini 消息，按消息 id 去重：同一 id 后出现的覆盖先出现的
+/// （每份 tokens 只挂在一条消息上，之后的整条重写都带着同一份，覆盖不会改变数值）。
+/// tokens 的来源有消息行、`$set.messages[]`（2026-10-01 之前的 checkpoint）和单行旧 JSON 的
+/// `messages[]`。
+///
+/// 不应用 `$rewindTo`、`$patch` 和 `removeIds`：被回退、被移除或被压缩掉的调用也计入。这与官方
+/// `/stats` 的口径不同（恢复会话时 `uiTelemetry.hydrate()` 只累计回放后剩下的消息），因为这些
+/// 调用实际已经发生、已经计费。
+///
+/// `.jsonl` 缺 sessionId / projectHash 时与 `.json` 一样整份解析；`.json` 解析失败报错，
+/// `.jsonl` 整份也解析不了时视为还没有用量（可能刚创建，下一轮 mtime 变了会重读）。
+pub(crate) fn scan_usage(path: &Path) -> Result<UsageScan, String> {
+    let mut state = UsageState::default();
+    if is_jsonl(path) {
+        let file = File::open(path).map_err(|e| format!("无法读取文件: {e}"))?;
+        let mut lines = LineSpans::new(BufReader::new(file));
+        while let Some(line) = lines
+            .next_line()
+            .map_err(|e| format!("无法读取文件: {e}"))?
+        {
+            let bytes = line.bytes.trim_ascii();
+            if bytes.is_empty() {
+                continue;
+            }
+            // 半截末行跳过：下一轮 mtime 变化后整份重读，UPSERT 会补上
+            if let Ok(rec) = serde_json::from_slice::<UsageRecord>(bytes) {
+                state.apply(rec);
+            }
+        }
+        if state.meta.is_complete() {
+            return Ok(state.finish());
+        }
+    }
+
+    // 旧格式整份 JSON
+    let data = std::fs::read(path).map_err(|e| format!("无法读取文件: {e}"))?;
+    let rec = match serde_json::from_slice::<UsageRecord>(&data) {
+        Ok(rec) => rec,
+        Err(_) if is_jsonl(path) => return Ok(UsageScan::default()),
+        Err(e) => return Err(format!("JSON 解析失败: {e}")),
+    };
+    let mut state = UsageState::default();
+    state.meta.merge_loose(rec.meta_fields());
+    if let Some(LooseSeq::Items(messages)) = rec.messages {
+        state.observe_all(messages);
+    }
+    Ok(state.finish())
+}
+
+#[derive(Default)]
+struct UsageState {
+    meta: Meta,
+    last_model: Option<String>,
+    messages: IndexMap<String, TokenMessage>,
+}
+
+impl UsageState {
+    /// 与回放同一套行判定顺序，但回退、补丁行不改变已收集的消息
+    fn apply(&mut self, mut rec: UsageRecord) {
+        if matches!(rec.rewind_to, Some(LooseStr::Str(_))) {
+            return;
+        }
+        let has_patch_key = rec.patch.is_some();
+        // `$patch` 只改 content 和工具结果，不带 tokens
+        if matches!(rec.patch, Some(Loose::Obj(_))) {
+            return;
+        }
+        if !has_patch_key && matches!(rec.id, Some(LooseStr::Str(_))) {
+            self.observe(rec);
+            return;
+        }
+        if let Some(Loose::Obj(set)) = rec.set.take() {
+            let mut set = *set;
+            if let Some(LooseSeq::Items(messages)) = set.messages.take() {
+                self.observe_all(messages);
+            }
+            self.meta.merge_loose(set.meta_fields());
+            return;
+        }
+        let is_str = |field: &Option<LooseStr>| matches!(field, Some(LooseStr::Str(_)));
+        if is_str(&rec.session_id) && is_str(&rec.project_hash) {
+            self.meta.merge_loose(rec.meta_fields());
+            if let Some(LooseSeq::Items(messages)) = rec.messages.take() {
+                self.observe_all(messages);
+            }
+        }
+    }
+
+    fn observe_all(&mut self, messages: Vec<Loose<UsageRecord>>) {
+        for message in messages {
+            if let Loose::Obj(message) = message {
+                if message.patch.is_none() {
+                    self.observe(message);
+                }
+            }
+        }
+    }
+
+    fn observe(&mut self, rec: UsageRecord) {
+        if rec.msg_type.as_ref().and_then(LooseStr::as_str) != Some("gemini") {
+            return;
+        }
+        let Some(LooseStr::Str(id)) = rec.id else {
+            return;
+        };
+        if let Some(LooseStr::Str(model)) = rec.model.filter(|m| m.as_str() != Some("")) {
+            self.last_model = Some(model);
+        }
+        let Some(tokens) = rec.tokens.filter(Value::is_object) else {
+            return;
+        };
+        let timestamp = rec.timestamp.and_then(|t| t.as_str().map(str::to_string));
+        self.messages.insert(
+            id.clone(),
+            TokenMessage {
+                id,
+                tokens,
+                model: self.last_model.clone(),
+                timestamp,
+            },
+        );
+    }
+
+    fn finish(self) -> UsageScan {
+        UsageScan {
+            meta: self.meta,
+            messages: self.messages.into_values().collect(),
+        }
+    }
+}
+
+/// 用量导入读的一行（也用于 `$set` 对象和 `messages[]` 里的消息）：只要 tokens 相关字段，
+/// content、toolCalls、thoughts 等由 serde 跳过。
+#[derive(Deserialize, Default)]
+struct UsageRecord {
+    #[serde(rename = "$rewindTo", default)]
+    rewind_to: Option<LooseStr>,
+    #[serde(rename = "$patch", default, deserialize_with = "present")]
+    patch: Option<Loose<IgnoredAny>>,
+    #[serde(rename = "$set", default)]
+    set: Option<Loose<Box<UsageRecord>>>,
+
+    #[serde(default)]
+    id: Option<LooseStr>,
+    #[serde(rename = "type", default)]
+    msg_type: Option<LooseStr>,
+    #[serde(default)]
+    tokens: Option<Value>,
+    #[serde(default)]
+    model: Option<LooseStr>,
+    #[serde(default)]
+    timestamp: Option<LooseStr>,
+
+    #[serde(rename = "sessionId", default, deserialize_with = "present")]
+    session_id: Option<LooseStr>,
+    #[serde(rename = "projectHash", default, deserialize_with = "present")]
+    project_hash: Option<LooseStr>,
+    #[serde(rename = "startTime", default, deserialize_with = "present")]
+    start_time: Option<LooseStr>,
+    #[serde(rename = "lastUpdated", default, deserialize_with = "present")]
+    last_updated: Option<LooseStr>,
+    #[serde(default, deserialize_with = "present")]
+    summary: Option<LooseStr>,
+    #[serde(default, deserialize_with = "present")]
+    kind: Option<LooseStr>,
+    #[serde(default)]
+    messages: Option<LooseSeq<Loose<UsageRecord>>>,
+}
+
+impl UsageRecord {
+    fn meta_fields(&self) -> [&Option<LooseStr>; 6] {
+        [
+            &self.session_id,
+            &self.project_hash,
+            &self.start_time,
+            &self.last_updated,
+            &self.summary,
+            &self.kind,
+        ]
     }
 }
 
@@ -1362,6 +1569,34 @@ pub(crate) mod tests {
         assert_fast_agrees(&path, &replayed);
         let header = scan_header(&path).unwrap().unwrap();
         assert_eq!(header.first_user_text.as_deref(), Some("single part"));
+    }
+
+    /// 用量不受回退和补丁影响；用量晚到时（先写 tokens: null，再整条重写补上）取补上的那份
+    #[test]
+    fn usage_scan_ignores_replay_ops_and_picks_up_late_tokens() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write(dir.path(), "session-a.jsonl", MAIN_SESSION);
+        let scan = scan_usage(&path).unwrap();
+        let ids: Vec<_> = scan.messages.iter().map(|m| m.id.as_str()).collect();
+        assert_eq!(ids, ["m-g1", "m-g2", "m-g3", "m-g4", "m-g5", "m-g6"]);
+        assert_eq!(
+            scan.meta.session_id.as_deref(),
+            Some("5f0c1a2b-3c4d-4e5f-8a9b-0c1d2e3f4a5b")
+        );
+
+        let mut late = gemini("g1", "hi");
+        late["tokens"] = Value::Null;
+        let text = lines(&[
+            meta_line(),
+            late,
+            gemini("g1", "hi"),
+            json!({ "id": "u1", "type": "user", "tokens": { "input": 1 } }),
+        ]);
+        let path = write(dir.path(), "late.jsonl", &text);
+        let scan = scan_usage(&path).unwrap();
+        assert_eq!(scan.messages.len(), 1);
+        assert_eq!(scan.messages[0].tokens["input"], 10);
+        assert_eq!(scan.messages[0].model, None);
     }
 
     #[test]
