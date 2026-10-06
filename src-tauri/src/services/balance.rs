@@ -204,21 +204,21 @@ async fn query_stepfun(api_key: &str) -> Result<UsageResult, String> {
 }
 
 // ── SiliconFlow ─────────────────────────────────────────────
-// GET https://api.siliconflow.cn/v1/user/info (or .com for EN)
+// GET https://api.siliconflow.com/v1/user/info（国际站）
 // Response: { code, data: { balance, chargeBalance, totalBalance, status } }
+//
+// 国内站的 /v1/user/info 已于 2026-08-14 停止服务，官方说替代接口上线后另行通知
+// （docs.siliconflow.cn 更新公告 2026-08-11；截至 2026-09-28 未发布）。
 
-async fn query_siliconflow(api_key: &str, is_cn: bool) -> Result<UsageResult, String> {
+const SILICONFLOW_CN_RETIRED: &str = "SiliconFlow China retired its balance API \
+     (/v1/user/info) on 2026-08-14 and has not published a replacement yet";
+
+async fn query_siliconflow(api_key: &str) -> Result<UsageResult, String> {
     let client = crate::http_client::get();
-
-    let domain = if is_cn {
-        "api.siliconflow.cn"
-    } else {
-        "api.siliconflow.com"
-    };
-    let url = format!("https://{domain}/v1/user/info");
+    let url = "https://api.siliconflow.com/v1/user/info";
 
     let resp = client
-        .get(&url)
+        .get(url)
         .header("Authorization", format!("Bearer {api_key}"))
         .header("Accept", "application/json")
         .timeout(Duration::from_secs(15))
@@ -257,21 +257,14 @@ async fn query_siliconflow(api_key: &str, is_cn: bool) -> Result<UsageResult, St
 
     let total_balance = parse_f64_field(data, "totalBalance").unwrap_or(0.0);
 
-    let unit = if is_cn { "CNY" } else { "USD" };
-    let plan_name = if is_cn {
-        "SiliconFlow"
-    } else {
-        "SiliconFlow (EN)"
-    };
-
     Ok(UsageResult {
         success: true,
         data: Some(vec![UsageData {
-            plan_name: Some(plan_name.to_string()),
+            plan_name: Some("SiliconFlow (EN)".to_string()),
             remaining: Some(total_balance),
             total: None,
             used: None,
-            unit: Some(unit.to_string()),
+            unit: Some("USD".to_string()),
             is_valid: Some(true),
             invalid_message: None,
             extra: None,
@@ -446,9 +439,23 @@ pub async fn get_balance(base_url: &str, api_key: &str) -> Result<UsageResult, S
     match provider {
         BalanceProvider::DeepSeek => query_deepseek(api_key).await,
         BalanceProvider::StepFun => query_stepfun(api_key).await,
-        BalanceProvider::SiliconFlow => query_siliconflow(api_key, true).await,
-        BalanceProvider::SiliconFlowEn => query_siliconflow(api_key, false).await,
+        BalanceProvider::SiliconFlow => Ok(make_error(SILICONFLOW_CN_RETIRED.to_string())),
+        BalanceProvider::SiliconFlowEn => query_siliconflow(api_key).await,
         BalanceProvider::OpenRouter => query_openrouter(api_key).await,
         BalanceProvider::NovitaAI => query_novita(api_key).await,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn siliconflow_china_reports_the_retired_api_without_a_request() {
+        let result = get_balance("https://api.siliconflow.cn/v1", "sk-test")
+            .await
+            .expect("determinate result");
+        assert!(!result.success);
+        assert_eq!(result.error.as_deref(), Some(SILICONFLOW_CN_RETIRED));
     }
 }
