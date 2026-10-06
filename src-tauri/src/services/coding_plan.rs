@@ -437,17 +437,23 @@ fn zhipu_quota_from_body(body: &serde_json::Value) -> SubscriptionQuota {
 
 // ── MiniMax ─────────────────────────────────────────────────
 
+/// MiniMax 业务错误码里表示 Key 无效的两个：1004（未授权/Token 不匹配）、
+/// 2049（无效的 API Key），见 platform.minimax.io/docs/api-reference/errorcode。
+const MINIMAX_AUTH_ERROR_CODES: [i64; 2] = [1004, 2049];
+
 async fn query_minimax(api_key: &str, is_cn: bool) -> Result<SubscriptionQuota, String> {
     let client = crate::http_client::get();
 
-    // 额度接口只在 api.minimaxi.com / api.minimax.io 有公开出处；国内新推理域名
-    // api.minimax.cn 未见该接口文档，沿用旧域名（同一账号体系与 Key）
+    // 官方 CLI（MiniMax-AI/cli）的额度端点是 `{base}/v1/token_plan/remains`，国内
+    // base 为 api.minimax.cn（旧域名 api.minimaxi.com 上同一路由也在）。旧路径
+    // `/v1/api/openplatform/coding_plan/remains` 对 Token Plan Key 回
+    // "cookie is missing, log in again"。
     let api_domain = if is_cn {
-        "api.minimaxi.com"
+        "api.minimax.cn"
     } else {
         "api.minimax.io"
     };
-    let url = format!("https://{api_domain}/v1/api/openplatform/coding_plan/remains");
+    let url = format!("https://{api_domain}/v1/token_plan/remains");
 
     let resp = client
         .get(&url)
@@ -494,7 +500,12 @@ async fn query_minimax(api_key: &str, is_cn: bool) -> Result<SubscriptionQuota, 
         Err(e) => return Ok(make_error(format!("Failed to parse response: {e}"))),
     };
 
-    // 检查业务级别错误
+    Ok(minimax_quota_from_body(&body))
+}
+
+/// 把 MiniMax 额度接口已解析好的 JSON 映射为 SubscriptionQuota（无网络 IO）。
+fn minimax_quota_from_body(body: &serde_json::Value) -> SubscriptionQuota {
+    // 业务错误：鉴权失败时 HTTP 仍是 200，只能看 base_resp.status_code
     if let Some(base_resp) = body.get("base_resp") {
         let status_code = base_resp
             .get("status_code")
@@ -505,25 +516,30 @@ async fn query_minimax(api_key: &str, is_cn: bool) -> Result<SubscriptionQuota, 
                 .get("status_msg")
                 .and_then(|v| v.as_str())
                 .unwrap_or("Unknown error");
-            return Ok(make_error(format!("API error (code {status_code}): {msg}")));
+            let error = make_error(format!("API error (code {status_code}): {msg}"));
+            if MINIMAX_AUTH_ERROR_CODES.contains(&status_code) {
+                return SubscriptionQuota {
+                    credential_status: CredentialStatus::Expired,
+                    credential_message: Some("Invalid API key".to_string()),
+                    ..error
+                };
+            }
+            return error;
         }
     }
 
-    // 提取纯函数便于无 mock 单元测试;新接口直接给"剩余百分比",反转为已用百分比
-    let tiers = parse_minimax_tiers(&body);
-
-    Ok(SubscriptionQuota {
+    SubscriptionQuota {
         tool: "coding_plan".to_string(),
         credential_status: CredentialStatus::Valid,
         credential_message: None,
         success: true,
-        tiers,
+        tiers: parse_minimax_tiers(body),
         extra_usage: None,
         reset_credits: None,
         credits_balance: None,
         error: None,
         queried_at: Some(now_millis()),
-    })
+    }
 }
 
 // ── ZenMux ──────────────────────────────────────────────────
@@ -668,14 +684,19 @@ async fn query_zenmux(base_url: &str, api_key: &str) -> Result<SubscriptionQuota
     })
 }
 
-/// 从 `/coding_plan/remains` 响应中解析 MiniMax 编程套餐的额度 tier。
+/// 从 `/v1/token_plan/remains` 响应中解析 MiniMax Token Plan 的额度 tier。
 ///
-/// 新接口语义:`current_*_remaining_percent` 是"剩余百分比"(0-100),
+/// `current_*_remaining_percent` 是"剩余百分比"(0-100),
 /// `model_remains` 数组里有 `general`(编程套餐)和 `video` 等其他模型,
-/// 这里只取 `general`,跳过 video。
+/// 这里只取 `general`,跳过 video。`*_usage_count` 在新旧响应里一个是剩余次数、
+/// 一个是已用次数(官方 CLI 靠百分比反推),所以只用百分比。
 ///
-/// 5h 桶始终存在;周桶并非所有套餐都有,靠 `current_weekly_status == 1`
-/// 判定激活(无周限额套餐该字段为 3,`remaining_percent` 恒为 100,不应展示)。
+/// `current_*_status` 按官方 CLI 的注释是 1=正常、2=已用完、3=不限。5h 桶始终
+/// 展示;周桶在 status=3 时不展示(无周限额套餐的 `remaining_percent` 恒为 100),
+/// status=2 时展示,缺百分比则按已用 100% 计。
+///
+/// `weekly_boost_permille` 不参与计算:CLI 用它放大剩余百分比的展示值,总量也
+/// 同比放大,已用占比不变。
 fn parse_minimax_tiers(body: &serde_json::Value) -> Vec<QuotaTier> {
     let mut tiers = Vec::new();
 
@@ -711,24 +732,26 @@ fn parse_minimax_tiers(body: &serde_json::Value) -> Vec<QuotaTier> {
         });
     }
 
-    // 周桶:仅当 status=1 时激活;status=3 等表示该套餐无周限额,跳过
-    if item.get("current_weekly_status").and_then(|v| v.as_i64()) == Some(1) {
-        if let Some(remain_pct) = item
+    // 周桶:status=3 表示该套餐无周限额;status=2 表示已用完
+    let weekly_remaining = match item.get("current_weekly_status").and_then(|v| v.as_i64()) {
+        Some(3) => None,
+        status => item
             .get("current_weekly_remaining_percent")
             .and_then(|v| v.as_f64())
-        {
-            let resets_at = item
-                .get("weekly_end_time")
-                .and_then(|v| v.as_i64())
-                .and_then(millis_to_iso8601);
-            tiers.push(QuotaTier {
-                name: TIER_WEEKLY_LIMIT.to_string(),
-                utilization: 100.0 - remain_pct,
-                resets_at,
-                used_value_usd: None,
-                max_value_usd: None,
-            });
-        }
+            .or((status == Some(2)).then_some(0.0)),
+    };
+    if let Some(remain_pct) = weekly_remaining {
+        let resets_at = item
+            .get("weekly_end_time")
+            .and_then(|v| v.as_i64())
+            .and_then(millis_to_iso8601);
+        tiers.push(QuotaTier {
+            name: TIER_WEEKLY_LIMIT.to_string(),
+            utilization: 100.0 - remain_pct,
+            resets_at,
+            used_value_usd: None,
+            max_value_usd: None,
+        });
     }
 
     tiers
@@ -1797,12 +1820,12 @@ pub async fn get_coding_plan_quota(
 #[cfg(test)]
 mod tests {
     use super::{
-        detect_provider, parse_afp_tiers, parse_coding_plan_tiers, parse_command_code_quota,
-        parse_minimax_tiers, parse_opencode_go_tiers, parse_zhipu_token_tiers,
-        query_command_code_at, query_zhipu_team_at, volcengine_canonical_query,
-        volcengine_is_auth_error_code, volcengine_region, volcengine_response_error,
-        volcengine_sign, zhipu_quota_base, CodingPlanProvider, CredentialStatus, TIER_FIVE_HOUR,
-        TIER_MONTHLY, TIER_WEEKLY_LIMIT,
+        detect_provider, minimax_quota_from_body, parse_afp_tiers, parse_coding_plan_tiers,
+        parse_command_code_quota, parse_minimax_tiers, parse_opencode_go_tiers,
+        parse_zhipu_token_tiers, query_command_code_at, query_zhipu_team_at,
+        volcengine_canonical_query, volcengine_is_auth_error_code, volcengine_region,
+        volcengine_response_error, volcengine_sign, zhipu_quota_base, CodingPlanProvider,
+        CredentialStatus, TIER_FIVE_HOUR, TIER_MONTHLY, TIER_WEEKLY_LIMIT,
     };
     use serde_json::json;
 
@@ -2679,20 +2702,72 @@ mod tests {
     }
 
     #[test]
-    fn minimax_weekly_status_2_also_skips_weekly_tier() {
-        // 防御性:除 1 之外的 status 都视为周桶未激活,跳过
+    fn minimax_exhausted_weekly_tier_is_shown_as_full() {
+        // status=2 是周额度已用完,必须展示;缺百分比时按已用 100% 计
+        let body = json!({
+            "model_remains": [{
+                "model_name": "general",
+                "current_interval_remaining_percent": 72,
+                "current_interval_status": 1,
+                "current_weekly_remaining_percent": 0,
+                "current_weekly_status": 2,
+                "weekly_end_time": 1_791_763_200_000_i64,
+                "weekly_boost_permille": 1500
+            }]
+        });
+        let tiers = parse_minimax_tiers(&body);
+        assert_eq!(tiers.len(), 2);
+        assert_eq!(tiers[0].utilization, 28.0);
+        assert_eq!(tiers[1].name, TIER_WEEKLY_LIMIT);
+        assert_eq!(tiers[1].utilization, 100.0);
+        assert!(tiers[1].resets_at.is_some());
+
         let body = json!({
             "model_remains": [{
                 "model_name": "general",
                 "current_interval_remaining_percent": 80.0,
-                "current_weekly_remaining_percent": 50.0,
                 "current_weekly_status": 2
             }]
         });
         let tiers = parse_minimax_tiers(&body);
-        assert_eq!(tiers.len(), 1);
-        assert_eq!(tiers[0].name, TIER_FIVE_HOUR);
-        assert_eq!(tiers[0].utilization, 20.0);
+        assert_eq!(tiers.len(), 2);
+        assert_eq!(tiers[1].name, TIER_WEEKLY_LIMIT);
+        assert_eq!(tiers[1].utilization, 100.0);
+    }
+
+    #[test]
+    fn minimax_weekly_tier_without_status_uses_percent() {
+        let body = json!({
+            "model_remains": [{
+                "model_name": "general",
+                "current_interval_remaining_percent": 80.0,
+                "current_weekly_remaining_percent": 50.0
+            }]
+        });
+        let tiers = parse_minimax_tiers(&body);
+        assert_eq!(tiers.len(), 2);
+        assert_eq!(tiers[1].name, TIER_WEEKLY_LIMIT);
+        assert_eq!(tiers[1].utilization, 50.0);
+    }
+
+    #[test]
+    fn minimax_auth_error_codes_mark_key_invalid() {
+        // 实测(2026-10-07,伪造 key):HTTP 200 + base_resp.status_code=1004
+        let body = json!({"base_resp":{"status_code":1004,"status_msg":"login fail: Please carry the API secret key in the 'Authorization' field of the request header"}});
+        let quota = minimax_quota_from_body(&body);
+        assert!(!quota.success);
+        assert!(matches!(quota.credential_status, CredentialStatus::Expired));
+        assert!(quota.error.unwrap().contains("code 1004"));
+
+        let body = json!({"base_resp":{"status_code":2049,"status_msg":"invalid api key"}});
+        let quota = minimax_quota_from_body(&body);
+        assert!(matches!(quota.credential_status, CredentialStatus::Expired));
+
+        // 其他业务错误不动凭据状态
+        let body = json!({"base_resp":{"status_code":1008,"status_msg":"insufficient balance"}});
+        let quota = minimax_quota_from_body(&body);
+        assert!(!quota.success);
+        assert!(matches!(quota.credential_status, CredentialStatus::Valid));
     }
 
     #[test]
