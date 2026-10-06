@@ -636,12 +636,31 @@ fn spec_transport_type(spec: &Value) -> &str {
     explicit.unwrap_or("stdio")
 }
 
+/// 其它客户端 MCP 格式里的字段，Codex 没有对应项：Gemini CLI 的 `timeout`（毫秒）、
+/// `trust`、`includeTools` 等，MiniMax Code 的 `timeout`、`description`，Claude Code 的
+/// `headersHelper`。从这些客户端导入的规范原样带着它们，写进 config.toml 只会让 Codex
+/// 启动时提示字段被忽略。名单只列这些已知来源；其余字段照常写出，Codex 新增的 MCP
+/// 字段（以及从 Codex 导入时带回来的）不受影响。
+const FOREIGN_FIELDS: &[&str] = &[
+    "timeout",
+    "trust",
+    "description",
+    "includeTools",
+    "excludeTools",
+    "authProviderType",
+    "targetAudience",
+    "targetServiceAccount",
+    "tcp",
+    "httpUrl",
+    "headersHelper",
+];
+
 /// Helper: 将 JSON MCP 服务器规范转换为 toml_edit::Table
 ///
 /// 策略：
 /// 1. 核心字段（command, args, url, headers, env, cwd）使用强类型处理
-/// 2. 扩展字段（timeout、retry 等）通过白名单列表自动转换
-/// 3. 其他未知字段使用通用转换器尝试转换
+/// 2. 其它客户端格式的字段（[`FOREIGN_FIELDS`]）不写
+/// 3. 其余字段使用通用转换器尝试转换
 ///
 /// 注意：**不向 Codex 写出 `type`**。`[mcp_servers.*]` 没有 `type` 字段，
 /// Codex 由 `command`（stdio）或 `url`（streamable HTTP）推断传输方式；
@@ -689,34 +708,6 @@ pub(super) fn json_server_to_toml_table(spec: &Value) -> Result<toml_edit::Table
         ],
         _ => &["type"],
     };
-
-    // 定义扩展字段白名单（Codex 常见可选字段）
-    let extended_fields = [
-        // 通用字段
-        "timeout",
-        "timeout_ms",
-        "startup_timeout_ms",
-        "startup_timeout_sec",
-        "connection_timeout",
-        "read_timeout",
-        "debug",
-        "log_level",
-        "disabled",
-        // stdio 特有
-        "shell",
-        "encoding",
-        "working_dir",
-        "restart_on_exit",
-        "max_restart_count",
-        // http/sse 特有
-        "retry_count",
-        "max_retry_attempts",
-        "retry_delay",
-        "cache_tools_list",
-        "verify_ssl",
-        "insecure",
-        "proxy",
-    ];
 
     // 1. 处理核心字段（强类型）
     match typ {
@@ -774,21 +765,16 @@ pub(super) fn json_server_to_toml_table(spec: &Value) -> Result<toml_edit::Table
     // 2. 处理扩展字段和其他未知字段
     if let Some(obj) = spec.as_object() {
         for (key, value) in obj {
-            // 跳过已处理的字段和另一种传输方式专属的字段
-            if skipped_fields.contains(&key.as_str()) {
+            // 跳过已处理的字段、另一种传输方式专属的字段和其它客户端的字段
+            if skipped_fields.contains(&key.as_str()) || FOREIGN_FIELDS.contains(&key.as_str()) {
                 continue;
             }
 
             // 尝试使用通用转换器
             if let Some(toml_item) = json_value_to_toml_item(value, key) {
                 t[&key[..]] = toml_item;
-
                 // 只记录字段名：未知字段同样可能携带 token / secret。
-                if extended_fields.contains(&key.as_str()) {
-                    log::debug!("已转换扩展字段 '{key}'（值已省略）");
-                } else {
-                    log::debug!("已转换自定义字段 '{key}'（值已省略）");
-                }
+                log::debug!("已转换字段 '{key}'（值已省略）");
             }
         }
     }
@@ -892,7 +878,7 @@ mod tests {
                 "Authorization": "Bearer top-secret",
                 "X-Api-Key": "also-secret"
             },
-            "timeout": 30
+            "startup_timeout_sec": 30
         }))
         .unwrap();
 
@@ -909,9 +895,35 @@ mod tests {
             "legacy headers must not be emitted a second time"
         );
         assert_eq!(
-            table.get("timeout").and_then(|item| item.as_integer()),
+            table
+                .get("startup_timeout_sec")
+                .and_then(|item| item.as_integer()),
             Some(30)
         );
+    }
+
+    #[test]
+    fn fields_from_other_clients_are_not_written_to_codex() {
+        // Gemini 导入的条目：timeout / trust / includeTools 是 Gemini 的字段，Codex 没有。
+        let table = json_server_to_toml_table(&json!({
+            "type": "stdio",
+            "command": "node",
+            "timeout": 60000,
+            "trust": true,
+            "description": "docs",
+            "includeTools": ["search"],
+            "tool_timeout_sec": 30,
+            "enabled_tools": ["search"],
+            "startup_readiness": "lazy"
+        }))
+        .unwrap();
+        for key in ["timeout", "trust", "description", "includeTools"] {
+            assert!(table.get(key).is_none(), "{key} should be skipped: {table}");
+        }
+        // Codex 自己的字段（包括这里还没列出的新字段）照常写出。
+        for key in ["tool_timeout_sec", "enabled_tools", "startup_readiness"] {
+            assert!(table.get(key).is_some(), "{key} should be kept: {table}");
+        }
     }
 
     #[test]
