@@ -154,6 +154,7 @@ fn parse_session_lines(path: &Path, head: Vec<String>, tail: Vec<String>) -> Opt
     let mut last_active_at: Option<i64> = None;
     let mut summary: Option<String> = None;
     let mut custom_title: Option<String> = None;
+    let mut ai_title: Option<String> = None;
 
     for line in tail.iter().rev() {
         let value: Value = match serde_json::from_str(line) {
@@ -163,15 +164,21 @@ fn parse_session_lines(path: &Path, head: Vec<String>, tail: Vec<String>) -> Opt
         if last_active_at.is_none() {
             last_active_at = value.get("timestamp").and_then(parse_timestamp_to_ms);
         }
-        // Look for custom-title entry (take the last one, i.e. first in reverse)
-        if custom_title.is_none()
-            && value.get("type").and_then(Value::as_str) == Some("custom-title")
-        {
-            custom_title = value
-                .get("customTitle")
+        // custom-title（/rename）与 ai-title（Claude Code 自动生成，随会话反复追加）
+        // 都取最后一条，即倒序的第一条
+        let title_of = |key: &str| {
+            value
+                .get(key)
                 .and_then(Value::as_str)
                 .map(|s| s.trim().to_string())
-                .filter(|s| !s.is_empty());
+                .filter(|s| !s.is_empty())
+        };
+        match value.get("type").and_then(Value::as_str) {
+            Some("custom-title") if custom_title.is_none() => {
+                custom_title = title_of("customTitle");
+            }
+            Some("ai-title") if ai_title.is_none() => ai_title = title_of("aiTitle"),
+            _ => {}
         }
         if summary.is_none() {
             if value.get("isMeta").and_then(Value::as_bool) == Some(true) {
@@ -192,8 +199,9 @@ fn parse_session_lines(path: &Path, head: Vec<String>, tail: Vec<String>) -> Opt
     let session_id = session_id.or_else(|| infer_session_id_from_filename(path));
     let session_id = session_id?;
 
-    // Title priority: custom-title > first user message > directory basename
+    // Title priority: custom-title > ai-title > first user message > directory basename
     let title = custom_title
+        .or(ai_title)
         .map(|t| truncate_summary(&t, TITLE_MAX_CHARS))
         .or_else(|| first_user_message.map(|t| truncate_summary(&t, TITLE_MAX_CHARS)))
         .or_else(|| {
@@ -736,6 +744,8 @@ impl TranscriptBuilder {
         let call_id = item.tool_use_id.as_str().unwrap_or_default().to_string();
         let base = format!("/message/content/{index}/content");
         let mut images = Vec::new();
+        // 没有正文、只能给一行说明的块（ToolSearch 的 tool_reference、Read 读 PDF 的 document）
+        let mut notes: Vec<String> = Vec::new();
         let (text, pointer): (Cow<'_, str>, Option<String>) = match item.content {
             RawContent::Text(text) => (text, Some(base)),
             RawContent::Items(parts) => {
@@ -747,6 +757,20 @@ impl TranscriptBuilder {
                             if let Some(text) = part.text.0 {
                                 texts.push((j, text));
                             }
+                        }
+                        "tool_reference" => {
+                            if let Some(name) = part.tool_name.as_str() {
+                                notes.push(format!("Loaded tool: {name}"));
+                            }
+                        }
+                        "document" => {
+                            let media_type = part
+                                .source
+                                .0
+                                .as_ref()
+                                .and_then(|source| source.media_type.as_str())
+                                .unwrap_or("unknown");
+                            notes.push(format!("[Document: {media_type}]"));
                         }
                         "image" => {
                             if let Some(image) = image_ref(
@@ -778,6 +802,12 @@ impl TranscriptBuilder {
                 }
             }
             RawContent::None => (Cow::Borrowed(""), None),
+        };
+        // 说明行接在正文后面；全文引用仍只指向正文
+        let (text, pointer) = match (notes.is_empty(), text.trim().is_empty()) {
+            (true, _) => (text, pointer),
+            (false, true) => (Cow::Owned(notes.join("\n")), None),
+            (false, false) => (Cow::Owned(format!("{text}\n{}", notes.join("\n"))), pointer),
         };
         let text = if text.contains(SYSTEM_REMINDER_OPEN) {
             Cow::Owned(strip_system_reminders(&text))
@@ -1413,6 +1443,9 @@ struct RawItem<'a> {
     input: Option<Value>,
     #[serde(default, borrow)]
     tool_use_id: LStr<'a>,
+    /// `tool_reference`（ToolSearch 结果）里被加载的工具名
+    #[serde(default, borrow)]
+    tool_name: LStr<'a>,
     #[serde(default)]
     is_error: Option<Value>,
     #[serde(default, borrow)]
@@ -1853,6 +1886,34 @@ mod tests {
     }
 
     #[test]
+    fn parse_session_uses_latest_ai_title_unless_renamed() {
+        let temp = tempdir().expect("tempdir");
+        let write = |name: &str, extra: &str| {
+            let path = temp.path().join(name);
+            let lines = [
+                "{\"sessionId\":\"s\",\"cwd\":\"/tmp/project\",\"timestamp\":\"2026-03-06T10:00:00Z\"}",
+                "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"fix something\"},\"sessionId\":\"s\",\"timestamp\":\"2026-03-06T10:01:00Z\"}",
+                "{\"type\":\"ai-title\",\"aiTitle\":\"Fix something\",\"sessionId\":\"s\"}",
+                "{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":\"Done.\"},\"timestamp\":\"2026-03-06T10:02:00Z\"}",
+                "{\"type\":\"ai-title\",\"aiTitle\":\"Fix login redirect\",\"sessionId\":\"s\"}",
+                extra,
+            ];
+            std::fs::write(&path, lines.join("\n")).expect("write");
+            parse_session(&path).unwrap().title
+        };
+
+        assert_eq!(write("ai.jsonl", "").as_deref(), Some("Fix login redirect"));
+        assert_eq!(
+            write(
+                "renamed.jsonl",
+                "{\"type\":\"custom-title\",\"customTitle\":\"login-bug\",\"sessionId\":\"s\"}"
+            )
+            .as_deref(),
+            Some("login-bug")
+        );
+    }
+
+    #[test]
     fn parse_session_falls_back_to_dir_basename() {
         let temp = tempdir().expect("tempdir");
         let path = temp.path().join("session-ghi.jsonl");
@@ -2073,6 +2134,43 @@ mod transcript_tests {
             }
             other => panic!("unexpected {other:?}"),
         }
+    }
+
+    #[test]
+    fn tool_reference_and_document_results_get_notes() {
+        let (_t, _path, msgs, _offsets) = parse_lines(&[
+            user("u1", json!("find tools")),
+            assistant(
+                "a1",
+                "msg_1",
+                json!([{ "type": "tool_use", "id": "toolu_1", "name": "ToolSearch", "input": { "query": "web" } }]),
+            ),
+            user(
+                "u2",
+                json!([{ "type": "tool_result", "tool_use_id": "toolu_1", "content": [
+                    { "type": "tool_reference", "tool_name": "WebFetch" },
+                    { "type": "tool_reference", "tool_name": "WebSearch" }
+                ]}]),
+            ),
+            assistant(
+                "a2",
+                "msg_2",
+                json!([{ "type": "tool_use", "id": "toolu_2", "name": "Read", "input": { "file_path": "/tmp/a.pdf" } }]),
+            ),
+            user(
+                "u3",
+                json!([{ "type": "tool_result", "tool_use_id": "toolu_2", "content": [
+                    { "type": "text", "text": "PDF file read" },
+                    { "type": "document", "source": { "type": "base64", "media_type": "application/pdf", "data": "JVBERi0=" } }
+                ]}]),
+            ),
+        ]);
+        let preview = |i: usize| match &msgs[i].blocks[0] {
+            SessionBlock::ToolResult { preview, .. } => preview.clone(),
+            other => panic!("{other:?}"),
+        };
+        assert_eq!(preview(2), "Loaded tool: WebFetch\nLoaded tool: WebSearch");
+        assert_eq!(preview(4), "PDF file read\n[Document: application/pdf]");
     }
 
     #[test]
