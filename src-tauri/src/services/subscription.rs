@@ -669,6 +669,7 @@ struct CodexAuthJson {
 struct CodexTokens {
     access_token: Option<String>,
     account_id: Option<String>,
+    refresh_token: Option<String>,
 }
 
 /// (access_token, account_id, status, message)
@@ -827,24 +828,64 @@ pub(crate) fn parse_codex_credentials_json(content: &str) -> CodexCredentials {
         }
     };
 
-    // 检查 token 是否可能过期（距上次刷新 > 8 天）
-    if let Some(ref last_refresh) = auth.last_refresh {
-        if is_codex_token_stale(last_refresh) {
-            return (
-                Some(access_token),
-                tokens.account_id,
-                CredentialStatus::Expired,
-                Some("Codex token may be stale (>8 days since last refresh)".to_string()),
-            );
-        }
+    // 与 codex-rs `should_refresh_proactively` 一致：access_token 带 `exp` 就只看
+    // `exp`，解析不出来才退回"距上次刷新超过 8 天"。
+    let expired = match jwt_exp(&access_token) {
+        Some(exp) => exp <= now_millis() / 1000,
+        None => auth
+            .last_refresh
+            .as_deref()
+            .is_some_and(is_codex_token_stale),
+    };
+    if !expired {
+        return (
+            Some(access_token),
+            tokens.account_id,
+            CredentialStatus::Valid,
+            None,
+        );
     }
+    // 有刷新令牌时 Codex CLI 下次运行会自己换新的，不用重新登录
+    if tokens.refresh_token.is_some_and(|t| !t.is_empty()) {
+        (
+            Some(access_token),
+            tokens.account_id,
+            CredentialStatus::RefreshPending,
+            Some(
+                "Access token has expired; Codex CLI refreshes it the next time it runs"
+                    .to_string(),
+            ),
+        )
+    } else {
+        (
+            Some(access_token),
+            tokens.account_id,
+            CredentialStatus::Expired,
+            Some("Codex OAuth token has expired. Please re-login with Codex CLI.".to_string()),
+        )
+    }
+}
 
-    (
-        Some(access_token),
-        tokens.account_id,
-        CredentialStatus::Valid,
-        None,
-    )
+/// 读 JWT payload 里的 `exp`（秒）。格式同 codex-rs `decode_jwt_payload`：三段
+/// 都非空，payload 是 base64url（无填充）编码的 JSON。
+fn jwt_exp(token: &str) -> Option<i64> {
+    use base64::Engine;
+    let mut parts = token.split('.');
+    let (Some(header), Some(payload), Some(signature), None) =
+        (parts.next(), parts.next(), parts.next(), parts.next())
+    else {
+        return None;
+    };
+    if header.is_empty() || payload.is_empty() || signature.is_empty() {
+        return None;
+    }
+    let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(payload)
+        .ok()?;
+    serde_json::from_slice::<serde_json::Value>(&bytes)
+        .ok()?
+        .get("exp")?
+        .as_i64()
 }
 
 /// 判断 Codex token 是否可能过期（Codex CLI 在 >8 天时自动刷新）
@@ -1631,7 +1672,8 @@ pub async fn get_subscription_quota(tool: &str) -> Result<SubscriptionQuota, Str
                     message.unwrap_or_else(|| "Failed to parse credentials".to_string()),
                 )),
                 CredentialStatus::Expired | CredentialStatus::RefreshPending => {
-                    // 即使可能过期也尝试调用 API
+                    // 即使可能过期也尝试调用 API；只有接口也拒绝了 token 才改报凭据
+                    // 状态，其余失败（限流、5xx）原样返回，同 Claude 分支。
                     if let Some(token) = token {
                         let result = query_codex_quota(
                             &token,
@@ -1640,14 +1682,16 @@ pub async fn get_subscription_quota(tool: &str) -> Result<SubscriptionQuota, Str
                             "Authentication failed. Please re-login with Codex CLI.",
                         )
                         .await?;
-                        if result.success {
+                        if result.success
+                            || !matches!(result.credential_status, CredentialStatus::Expired)
+                        {
                             return Ok(result);
                         }
                     }
                     Ok(SubscriptionQuota::error(
                         "codex",
-                        CredentialStatus::Expired,
-                        message.unwrap_or_else(|| "Codex OAuth token may be stale".to_string()),
+                        status,
+                        message.unwrap_or_else(|| "Codex OAuth token has expired".to_string()),
                     ))
                 }
                 CredentialStatus::Valid => {
@@ -1897,6 +1941,55 @@ mod tests {
             "is_active": true,
             "scope": { "model": { "id": null, "display_name": model }, "surface": null }
         })
+    }
+
+    fn codex_auth_json(exp: Option<i64>, refresh_token: &str, last_refresh: &str) -> String {
+        use base64::Engine;
+        let access_token = match exp {
+            Some(exp) => {
+                let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD
+                    .encode(serde_json::json!({ "exp": exp }).to_string());
+                format!("e30.{payload}.sig")
+            }
+            None => "opaque-token".to_string(),
+        };
+        serde_json::json!({
+            "auth_mode": "chatgpt",
+            "last_refresh": last_refresh,
+            "tokens": {
+                "access_token": access_token,
+                "account_id": "acct",
+                "refresh_token": refresh_token
+            }
+        })
+        .to_string()
+    }
+
+    #[test]
+    fn codex_token_status_follows_jwt_exp_first() {
+        let now = now_millis() / 1000;
+        let long_ago = "2020-01-01T00:00:00Z";
+
+        // exp 在将来：last_refresh 再旧也有效
+        let (_, _, status, _) =
+            parse_codex_credentials_json(&codex_auth_json(Some(now + 3600), "rt", long_ago));
+        assert!(matches!(status, CredentialStatus::Valid));
+
+        // exp 已过：有刷新令牌是 RefreshPending，没有是 Expired
+        let (_, _, status, _) =
+            parse_codex_credentials_json(&codex_auth_json(Some(now - 60), "rt", long_ago));
+        assert!(matches!(status, CredentialStatus::RefreshPending));
+        let (_, _, status, _) =
+            parse_codex_credentials_json(&codex_auth_json(Some(now - 60), "", long_ago));
+        assert!(matches!(status, CredentialStatus::Expired));
+
+        // 读不出 exp 才看 last_refresh
+        let (_, _, status, _) =
+            parse_codex_credentials_json(&codex_auth_json(None, "rt", long_ago));
+        assert!(matches!(status, CredentialStatus::RefreshPending));
+        let recent = chrono::Utc::now().to_rfc3339();
+        let (_, _, status, _) = parse_codex_credentials_json(&codex_auth_json(None, "rt", &recent));
+        assert!(matches!(status, CredentialStatus::Valid));
     }
 
     #[test]
