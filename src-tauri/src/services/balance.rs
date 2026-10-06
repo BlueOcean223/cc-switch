@@ -274,14 +274,18 @@ async fn query_siliconflow(api_key: &str) -> Result<UsageResult, String> {
 }
 
 // ── OpenRouter ──────────────────────────────────────────────
-// GET https://openrouter.ai/api/v1/credits
-// Response: { data: { total_credits, total_usage } }
+// GET https://openrouter.ai/api/v1/key
+// Response: { data: { limit, limit_remaining, limit_reset, usage, ... } }
+//
+// 账户余额接口 /api/v1/credits 只认 Management key（普通 key 回 403），而
+// Management key 不能用于推理，供应商配置里的 key 不会是它。所以只查当前 key：
+// 设了消费上限（limit）就显示上限还剩多少，没设就只能显示这个 key 的累计用量。
 
 async fn query_openrouter(api_key: &str) -> Result<UsageResult, String> {
     let client = crate::http_client::get();
 
     let resp = client
-        .get("https://openrouter.ai/api/v1/credits")
+        .get("https://openrouter.ai/api/v1/key")
         .header("Authorization", format!("Bearer {api_key}"))
         .header("Accept", "application/json")
         .timeout(Duration::from_secs(15))
@@ -313,29 +317,43 @@ async fn query_openrouter(api_key: &str) -> Result<UsageResult, String> {
         Err(e) => return Ok(make_error(format!("Failed to parse response: {e}"))),
     };
 
-    let data = body.get("data").unwrap_or(&body);
-    let total_credits = parse_f64_field(data, "total_credits").unwrap_or(0.0);
-    let total_usage = parse_f64_field(data, "total_usage").unwrap_or(0.0);
-    let remaining = total_credits - total_usage;
+    Ok(openrouter_key_usage(body.get("data").unwrap_or(&body)))
+}
 
-    Ok(UsageResult {
-        success: true,
-        data: Some(vec![UsageData {
+fn openrouter_key_usage(key: &serde_json::Value) -> UsageResult {
+    let usage = parse_f64_field(key, "usage");
+    let limit = parse_f64_field(key, "limit");
+    let data = match (limit, parse_f64_field(key, "limit_remaining")) {
+        (Some(limit), Some(remaining)) => UsageData {
             plan_name: Some("OpenRouter".to_string()),
             remaining: Some(remaining),
-            total: Some(total_credits),
-            used: Some(total_usage),
+            total: Some(limit),
+            used: Some(limit - remaining),
             unit: Some("USD".to_string()),
             is_valid: Some(remaining > 0.0),
-            invalid_message: if remaining <= 0.0 {
-                Some("No credits remaining".to_string())
-            } else {
-                None
-            },
+            invalid_message: (remaining <= 0.0).then(|| "Key spending limit reached".to_string()),
+            extra: key
+                .get("limit_reset")
+                .and_then(|v| v.as_str())
+                .map(|reset| format!("Key limit resets {reset}")),
+        },
+        // 不限额的 key：没有余额可显示，不能当成 0
+        _ => UsageData {
+            plan_name: Some("OpenRouter".to_string()),
+            remaining: None,
+            total: None,
+            used: usage,
+            unit: Some("USD".to_string()),
+            is_valid: Some(true),
+            invalid_message: None,
             extra: None,
-        }]),
+        },
+    };
+    UsageResult {
+        success: true,
+        data: Some(vec![data]),
         error: None,
-    })
+    }
 }
 
 // ── Novita AI ───────────────────────────────────────────────
@@ -457,5 +475,37 @@ mod tests {
             .expect("determinate result");
         assert!(!result.success);
         assert_eq!(result.error.as_deref(), Some(SILICONFLOW_CN_RETIRED));
+    }
+
+    #[test]
+    fn openrouter_key_with_a_limit_reports_what_is_left() {
+        // 官方 /api/v1/key 示例节选
+        let key = serde_json::json!({
+            "limit": 100, "limit_remaining": 74.5, "limit_reset": "monthly", "usage": 25.5
+        });
+        let data = &openrouter_key_usage(&key).data.unwrap()[0];
+        assert_eq!(data.remaining, Some(74.5));
+        assert_eq!(data.total, Some(100.0));
+        assert_eq!(data.used, Some(25.5));
+        assert_eq!(data.is_valid, Some(true));
+        assert_eq!(data.extra.as_deref(), Some("Key limit resets monthly"));
+
+        let spent = serde_json::json!({ "limit": 10, "limit_remaining": 0, "usage": 10 });
+        let data = &openrouter_key_usage(&spent).data.unwrap()[0];
+        assert_eq!(data.is_valid, Some(false));
+    }
+
+    #[test]
+    fn openrouter_unlimited_key_reports_usage_only() {
+        let key = serde_json::json!({
+            "limit": null, "limit_remaining": null, "limit_reset": null, "usage": 12.34
+        });
+        let result = openrouter_key_usage(&key);
+        assert!(result.success);
+        let data = &result.data.unwrap()[0];
+        assert_eq!(data.remaining, None);
+        assert_eq!(data.total, None);
+        assert_eq!(data.used, Some(12.34));
+        assert_eq!(data.is_valid, Some(true));
     }
 }
