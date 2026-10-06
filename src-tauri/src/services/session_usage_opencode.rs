@@ -283,11 +283,15 @@ fn query_assistant_messages(
         })
         .map_err(|e| AppError::Database(format!("查询消息失败: {e}")))?;
 
+    let fork = schema == OpenCodeSchema::V2 && is_fork_session(conn, session_id);
     let mut messages = Vec::new();
     let mut has_incomplete_usage = false;
     for row in rows {
         let (message_id, data_json, message_type) =
             row.map_err(|e| AppError::Database(format!("读取消息行失败: {e}")))?;
+        if fork && is_fork_copy(&message_id) {
+            continue;
+        }
 
         // V2 的 assistant 消息没有 role 字段（由 `type` 列标识），
         // V1 消息仍按 data.role 过滤。
@@ -332,6 +336,26 @@ fn query_assistant_messages(
         messages,
         has_incomplete_usage,
     })
+}
+
+/// 2.x fork 出来的会话（`fork_session_id` 非空）。旧库没有这一列时视为不是。
+fn is_fork_session(conn: &rusqlite::Connection, session_id: &str) -> bool {
+    conn.query_row(
+        "SELECT fork_session_id IS NOT NULL FROM session_v2 WHERE id = ?1",
+        [session_id],
+        |row| row.get(0),
+    )
+    .unwrap_or(false)
+}
+
+/// fork 时从父会话原样复制的消息：id 为 `msg_<事件 id>_<父会话 seq>`，`data` 含原来的
+/// tokens/cost，父会话里已经计过（v2.0.24 `core/src/session/projector.ts`）。
+/// 正常生成的消息 id 是 `msg_` 加 26 位字母数字，不含第二个 `_`。
+fn is_fork_copy(message_id: &str) -> bool {
+    message_id
+        .strip_prefix("msg_")
+        .and_then(|rest| rest.rsplit_once('_'))
+        .is_some_and(|(_, seq)| !seq.is_empty() && seq.bytes().all(|b| b.is_ascii_digit()))
 }
 
 /// 解析 opencode message.data JSON 为结构化数据
@@ -828,5 +852,48 @@ mod tests {
         assert_eq!(result.messages[0].1.model_id, "deepseek-v4.1-flash");
         assert_eq!(result.messages[1].1.input_tokens, 300);
         assert!(result.has_incomplete_usage);
+    }
+
+    #[test]
+    fn test_query_assistant_messages_v2_skips_fork_copies() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE session_v2 (id TEXT, fork_session_id TEXT);
+             CREATE TABLE session_message (
+                 id TEXT,
+                 session_id TEXT,
+                 type TEXT,
+                 time_created INTEGER,
+                 data TEXT
+             );
+             INSERT INTO session_v2 VALUES ('parent', NULL), ('fork', 'parent');",
+        )
+        .unwrap();
+        let done = serde_json::json!({
+            "tokens": { "input": 1000, "output": 200 },
+            "model": { "id": "m" },
+            "time": { "created": 1, "completed": 2 }
+        })
+        .to_string();
+        conn.execute(
+            "INSERT INTO session_message VALUES
+                 ('msg_0193f2a1b2c3AbCdEfGhIjKlMn', 'parent', 'assistant', 1, ?1),
+                 ('msg_0193f2a1b2d0XyZaBcDeFgHiJk_4', 'fork', 'assistant', 1, ?1),
+                 ('msg_0193f2a1b2e5QrStUvWxYzAbCd', 'fork', 'assistant', 3, ?1)",
+            rusqlite::params![done],
+        )
+        .unwrap();
+
+        let ids = |session: &str| -> Vec<String> {
+            query_assistant_messages(&conn, OpenCodeSchema::V2, session)
+                .unwrap()
+                .messages
+                .into_iter()
+                .map(|(id, _)| id)
+                .collect()
+        };
+        assert_eq!(ids("parent"), ["msg_0193f2a1b2c3AbCdEfGhIjKlMn"]);
+        // 复制行在父会话里已计入，fork 会话只算自己新产生的
+        assert_eq!(ids("fork"), ["msg_0193f2a1b2e5QrStUvWxYzAbCd"]);
     }
 }
