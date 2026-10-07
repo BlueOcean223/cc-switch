@@ -883,6 +883,8 @@
   "grokBuild": {
     "contextWindow": "Context window",
     "contextWindowInvalid": "Context window must be a positive integer",
+    "apiBackend": "API format",
+    "apiBackendHint": "Grok Build calls the provider with this API, so pick one the provider supports. When config.toml leaves it out, Grok uses Chat Completions.",
     "rawConfig": "config.toml",
     "invalidToml": "Invalid config.toml: {{error}}",
     "defaultModelPlaceholder": "e.g. grok-4.5",

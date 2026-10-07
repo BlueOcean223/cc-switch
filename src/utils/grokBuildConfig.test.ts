@@ -140,6 +140,35 @@ env_key = ["RELAY_KEY", "LC_RELAY_KEY"]
     ).toBe("context_window must be a positive integer");
   });
 
+  it("writes api_backend only when one is chosen", () => {
+    const values = {
+      model: "grok-4.5",
+      baseUrl: "https://api.example.com/v1",
+      name: "Relay",
+      apiKey: "secret",
+      contextWindow: 500000,
+    };
+    const built = parseToml(buildGrokBuildConfig(values)) as any;
+    expect(built.model["grok-4.5"]).not.toHaveProperty("api_backend");
+
+    const existing = buildGrokBuildConfig({
+      ...values,
+      apiBackend: "messages",
+    });
+    const kept = parseToml(
+      updateGrokBuildConfig(existing, { ...values, apiBackend: undefined }),
+    ) as any;
+    expect(kept.model["grok-4.5"].api_backend).toBe("messages");
+
+    const changed = parseToml(
+      updateGrokBuildConfig(existing, {
+        ...values,
+        apiBackend: "chat_completions",
+      }),
+    ) as any;
+    expect(changed.model["grok-4.5"].api_backend).toBe("chat_completions");
+  });
+
   it("renames the selected profile without leaving the old table behind", () => {
     const original = buildGrokBuildConfig({
       model: "old-profile",

@@ -15,14 +15,19 @@
  * - OpenCode Go 上游自 2026-08 起已提供 grok-4.5，但暂仍不收录：
  *   订阅制网关是否纳入 Grok 预设属产品决策，收录前需单独评估。
  * - 只收聚合站与第三方中转站，默认模型统一为 grok-4.5；
- *   OpenRouter 系命名空间的路由站用 "x-ai/grok-4.5"。
+ *   用 x-ai/ 命名空间的站点（OpenRouter、七牛）用 "x-ai/grok-4.5"，
+ *   CherryIN 没有 4.5，用 "x-ai/grok-4.6"（2026-10 公开定价接口）。
  *
  * config 字段沿用 Codex 风格 TOML 作为载体：Grok 表单只从中提取
  * base_url / model 两个字段（extractCodex* 工具），再重建
- * Grok CLI 自己的 config.toml。
+ * Grok CLI 自己的 config.toml。api_backend 单独由 apiBackend 给出，
+ * 按上游对所选 Grok 模型实际开放的接口填写。
  */
 import type { ProviderCategory } from "../types";
-import { GROK_BUILD_DEFAULT_MODEL } from "../utils/grokBuildConfig";
+import {
+  GROK_BUILD_DEFAULT_MODEL,
+  type GrokBuildApiBackend,
+} from "../utils/grokBuildConfig";
 import type { PresetFamilyFields } from "./presetFamilies";
 
 export interface GrokBuildProviderPreset extends PresetFamilyFields {
@@ -32,6 +37,8 @@ export interface GrokBuildProviderPreset extends PresetFamilyFields {
   apiKeyUrl?: string;
   auth: Record<string, any>;
   config: string; // Codex 风格 TOML 载体（只消费 base_url / model）
+  /** 写进 config.toml 的 api_backend；官方条目没有自定义模型表，不填 */
+  apiBackend?: GrokBuildApiBackend;
   isOfficial?: boolean;
   partnerPromotionKey?: string;
   category?: ProviderCategory;
@@ -54,7 +61,7 @@ export const grokBuildOfficialPreset: GrokBuildProviderPreset = {
   iconColor: "currentColor",
 };
 
-/** OpenRouter 系命名空间路由站的 Grok 模型 id */
+/** x-ai/ 命名空间站点的 Grok 模型 id */
 const OPENROUTER_STYLE_GROK_MODEL = "x-ai/grok-4.5";
 
 const grokAuth = (): Record<string, any> => ({ OPENAI_API_KEY: "" });
@@ -72,7 +79,6 @@ model = ${tomlString(model)}
 [model_providers.custom]
 name = ${tomlString(providerName)}
 base_url = ${tomlString(baseUrl)}
-wire_api = "responses"
 requires_openai_auth = true`;
 }
 
@@ -83,13 +89,18 @@ export const grokBuildProviderPresets: GrokBuildProviderPreset[] = [
     websiteUrl: "https://www.qiniu.com/ai",
     apiKeyUrl: "https://portal.qiniu.com/ai-inference/api-key",
     auth: grokAuth(),
+    // bypass/openai 是 GPT 的 Responses 直通，没有 Grok。Grok 走通用网关的
+    // /v1/chat/completions；海外入口 modelink.ai 的模型列表有 x-ai/grok-4.5，
+    // 国内 api.qnaigc.com 是否提供 Grok 未证实。
+    apiBackend: "chat_completions",
     config: grokPresetConfig(
       "Qiniu",
-      "https://api.qnaigc.com/bypass/openai/v1",
+      "https://api.modelink.ai/v1",
+      OPENROUTER_STYLE_GROK_MODEL,
     ),
     endpointCandidates: [
-      "https://api.qnaigc.com/bypass/openai/v1",
-      "https://api.modelink.ai/bypass/openai/v1",
+      "https://api.modelink.ai/v1",
+      "https://api.qnaigc.com/v1",
     ],
     category: "aggregator",
     icon: "qiniu",
@@ -102,6 +113,7 @@ export const grokBuildProviderPresets: GrokBuildProviderPreset[] = [
     websiteUrl: "https://www.compshare.cn",
     apiKeyUrl: "https://www.compshare.cn/coding-plan",
     auth: grokAuth(),
+    apiBackend: "responses",
     config: grokPresetConfig("Compshare", "https://api.modelverse.cn/v1"),
     endpointCandidates: ["https://api.modelverse.cn/v1"],
     category: "aggregator",
@@ -116,6 +128,7 @@ export const grokBuildProviderPresets: GrokBuildProviderPreset[] = [
     websiteUrl: "https://www.compshare.cn",
     apiKeyUrl: "https://www.compshare.cn/coding-plan",
     auth: grokAuth(),
+    apiBackend: "responses",
     config: grokPresetConfig(
       "Compshare Coding Plan",
       "https://cp.compshare.cn/v1",
@@ -130,6 +143,7 @@ export const grokBuildProviderPresets: GrokBuildProviderPreset[] = [
     websiteUrl: "https://x.ai/api",
     apiKeyUrl: "https://console.x.ai",
     auth: grokAuth(),
+    apiBackend: "responses",
     config: grokPresetConfig("xAI (Grok)", "https://api.x.ai/v1"),
     endpointCandidates: ["https://api.x.ai/v1"],
     category: "third_party",
@@ -141,10 +155,12 @@ export const grokBuildProviderPresets: GrokBuildProviderPreset[] = [
     websiteUrl: "https://open.cherryin.ai",
     apiKeyUrl: "https://open.cherryin.ai/console/token",
     auth: grokAuth(),
+    apiBackend: "responses",
+    // 定价接口里 x-ai/grok-4.6 支持 openai 与 openai-response
     config: grokPresetConfig(
       "CherryIN",
       "https://open.cherryin.net/v1",
-      OPENROUTER_STYLE_GROK_MODEL,
+      "x-ai/grok-4.6",
     ),
     endpointCandidates: ["https://open.cherryin.net/v1"],
     category: "aggregator",
@@ -155,6 +171,7 @@ export const grokBuildProviderPresets: GrokBuildProviderPreset[] = [
     websiteUrl: "https://openrouter.ai",
     apiKeyUrl: "https://openrouter.ai/keys",
     auth: grokAuth(),
+    apiBackend: "responses",
     config: grokPresetConfig(
       "OpenRouter",
       "https://openrouter.ai/api/v1",

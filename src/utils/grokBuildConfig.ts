@@ -1,7 +1,17 @@
 import { parse as parseToml, stringify as stringifyToml } from "smol-toml";
 
 export const GROK_BUILD_DEFAULT_MODEL = "grok-4.5";
-export const GROK_BUILD_DEFAULT_API_BACKEND = "responses";
+/** Grok Build 的 `api_backend` 取值，决定请求上游的哪个接口。 */
+export const GROK_BUILD_API_BACKENDS = [
+  { value: "responses", label: "OpenAI Responses" },
+  { value: "chat_completions", label: "OpenAI Chat Completions" },
+  { value: "messages", label: "Anthropic Messages" },
+] as const;
+export type GrokBuildApiBackend =
+  (typeof GROK_BUILD_API_BACKENDS)[number]["value"];
+/** 不写 `api_backend` 时 Grok 用的接口。 */
+export const GROK_BUILD_IMPLICIT_API_BACKEND: GrokBuildApiBackend =
+  "chat_completions";
 export const GROK_BUILD_DEFAULT_CONTEXT_WINDOW = 500000;
 
 export interface GrokBuildConfigValues {
@@ -13,7 +23,8 @@ export interface GrokBuildConfigValues {
   name: string;
   apiKey: string;
   envKey?: string;
-  apiBackend: string;
+  /** config.toml 里的原值；没写时为空，保存时也不补写。 */
+  apiBackend?: string;
   contextWindow: number;
 }
 
@@ -42,7 +53,6 @@ export function parseGrokBuildConfig(
     baseUrl: "",
     name: fallbackName,
     apiKey: "",
-    apiBackend: GROK_BUILD_DEFAULT_API_BACKEND,
     contextWindow: GROK_BUILD_DEFAULT_CONTEXT_WINDOW,
   };
 
@@ -63,10 +73,7 @@ export function parseGrokBuildConfig(
       name: asString(selectedModel?.name, fallbackName),
       apiKey: asString(selectedModel?.api_key),
       envKey: envKeyNames(selectedModel?.env_key)[0] ?? "",
-      apiBackend: asString(
-        selectedModel?.api_backend,
-        GROK_BUILD_DEFAULT_API_BACKEND,
-      ),
+      apiBackend: asString(selectedModel?.api_backend).trim() || undefined,
       contextWindow:
         typeof rawContextWindow === "number" &&
         Number.isInteger(rawContextWindow) &&
@@ -107,6 +114,7 @@ export function updateGrokBuildConfig(
     asRecord(modelTables[previousProfile]) ??
     {};
   const apiKey = values.apiKey.trim();
+  const apiBackend = values.apiBackend?.trim();
   const envKey = values.envKey?.trim();
   const existingEnvKeys = envKeyNames(existingSelected.env_key);
   const updatedSelected: Record<string, unknown> = {
@@ -114,7 +122,7 @@ export function updateGrokBuildConfig(
     model: upstreamModel,
     base_url: values.baseUrl.trim(),
     name: values.name.trim(),
-    api_backend: values.apiBackend.trim() || GROK_BUILD_DEFAULT_API_BACKEND,
+    ...(apiBackend ? { api_backend: apiBackend } : {}),
     context_window:
       Number.isInteger(values.contextWindow) && values.contextWindow > 0
         ? values.contextWindow

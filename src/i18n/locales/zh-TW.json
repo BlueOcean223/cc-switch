@@ -883,6 +883,8 @@
   "grokBuild": {
     "contextWindow": "上下文視窗",
     "contextWindowInvalid": "上下文視窗必須是正整數",
+    "apiBackend": "API 協定",
+    "apiBackendHint": "Grok Build 依這個協定請求上游，請選上游支援的。config.toml 裡沒寫時 Grok 使用 Chat Completions。",
     "rawConfig": "config.toml",
     "invalidToml": "config.toml 格式錯誤：{{error}}",
     "defaultModelPlaceholder": "例如: grok-4.5",

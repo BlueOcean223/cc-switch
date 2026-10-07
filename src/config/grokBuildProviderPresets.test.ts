@@ -7,7 +7,7 @@ import {
   extractCodexBaseUrl,
   extractCodexModelName,
 } from "../utils/providerConfigUtils";
-import { GROK_BUILD_DEFAULT_MODEL } from "../utils/grokBuildConfig";
+import { GROK_BUILD_API_BACKENDS } from "../utils/grokBuildConfig";
 
 describe("grokBuildProviderPresets", () => {
   it("has unique preset names", () => {
@@ -52,10 +52,7 @@ describe("grokBuildProviderPresets", () => {
   it("uses a Grok default model on every preset", () => {
     for (const preset of grokBuildProviderPresets) {
       const model = extractCodexModelName(preset.config);
-      expect(
-        model === GROK_BUILD_DEFAULT_MODEL || model === "x-ai/grok-4.5",
-        `${preset.name}: ${model}`,
-      ).toBe(true);
+      expect(model, preset.name).toMatch(/^(x-ai\/)?grok-/);
     }
   });
 
@@ -65,6 +62,13 @@ describe("grokBuildProviderPresets", () => {
         /^https:\/\//,
       );
       expect(preset.auth, preset.name).toEqual({ OPENAI_API_KEY: "" });
+    }
+  });
+
+  it("names an api_backend Grok Build supports on every preset", () => {
+    const supported = GROK_BUILD_API_BACKENDS.map((option) => option.value);
+    for (const preset of grokBuildProviderPresets) {
+      expect(supported, preset.name).toContain(preset.apiBackend);
     }
   });
 

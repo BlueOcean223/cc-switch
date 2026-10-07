@@ -4,6 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { parse as parseToml } from "smol-toml";
 import { describe, expect, it, vi } from "vitest";
 import { GrokBuildProviderForm } from "@/components/providers/forms/GrokBuildProviderForm";
+import { grokBuildProviderPresets } from "@/config/grokBuildProviderPresets";
 
 vi.mock("@/components/JsonEditor", () => ({
   default: ({
@@ -68,7 +69,34 @@ describe("GrokBuildProviderForm", () => {
     );
   });
 
-  it("submits a complete config.toml payload with Grok defaults", async () => {
+  it("writes the preset's api_backend", async () => {
+    const user = userEvent.setup();
+    const onSubmit = vi.fn();
+    render(
+      <GrokBuildProviderForm
+        submitLabel="Save"
+        onSubmit={onSubmit}
+        onCancel={() => {}}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: /OpenRouter/ }));
+    fireEvent.change(screen.getByLabelText("API Key"), {
+      target: { value: "secret-key" },
+    });
+    await user.click(screen.getByRole("button", { name: "Save" }));
+
+    const preset = grokBuildProviderPresets.find(
+      (candidate) => candidate.name === "OpenRouter",
+    );
+    const settings = JSON.parse(onSubmit.mock.calls[0][0].settingsConfig);
+    const config = parseToml(settings.config) as any;
+    expect(config.model[config.models.default].api_backend).toBe(
+      preset?.apiBackend,
+    );
+  });
+
+  it("submits a complete config.toml payload and leaves api_backend to Grok", async () => {
     const user = userEvent.setup();
     const onSubmit = vi.fn();
     const { container } = render(
@@ -107,7 +135,6 @@ describe("GrokBuildProviderForm", () => {
       base_url: "https://relay.example.com/v1",
       name: "Example Relay",
       api_key: "secret-key",
-      api_backend: "responses",
       context_window: 500000,
     });
   });
@@ -122,7 +149,10 @@ describe("GrokBuildProviderForm", () => {
     );
 
     expect(container.querySelector("#grokbuild-profile")).toBeNull();
-    expect(container.querySelector("#grokbuild-api-backend")).toBeNull();
+    // 没写 api_backend 时显示 Grok 实际使用的 Chat Completions
+    expect(container.querySelector("#grokbuild-api-backend")).toHaveTextContent(
+      "OpenAI Chat Completions",
+    );
     expect(container.querySelector("#grokbuild-context-window")).toHaveValue(
       500000,
     );
@@ -131,7 +161,7 @@ describe("GrokBuildProviderForm", () => {
     expect(screen.queryByText("高级选项")).toBeNull();
   });
 
-  it("drops the legacy upstream format and keeps the Grok client on Responses", async () => {
+  it("keeps the api_backend already in config.toml", async () => {
     const user = userEvent.setup();
     const onSubmit = vi.fn();
     const configToml = `[models]
@@ -166,7 +196,7 @@ context_window = 500000
     const settings = JSON.parse(submitted.settingsConfig);
     const config = parseToml(settings.config) as any;
     const selected = config.model[config.models.default];
-    expect(selected.api_backend).toBe("responses");
+    expect(selected.api_backend).toBe("chat_completions");
     expect(selected.model).toBe("grok-4.5");
     expect(selected.base_url).toBe("https://relay.example.com/v1");
   });

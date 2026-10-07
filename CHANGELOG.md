@@ -27,6 +27,7 @@ First release of this fork of [farion1231/cc-switch](https://github.com/farion12
   - Claude 1-hour cache writes cost 2x the input price; fast / priority requests use the model's multiplier; a request whose prompt exceeds the long-context threshold (272K for GPT-5.4 and later, 200K for Claude Sonnet 4 / 4.5, Gemini Pro and xAI) is billed at the higher rate in full.
   - Built-in prices win at startup and the overrides in `~/.cc-switch/model-pricing.json` are applied on top. Stored costs are recalculated on every launch and after pricing edits.
   - Pi and OpenCode are priced from the pricing table first; the cost they recorded is used only for models missing from it. Pi kept charging the old GPT-5.6 Sol price after the cut. Grok Build keeps the cost xAI returns.
+- **Grok Build API format**: the provider form has an API format choice (OpenAI Responses, Chat Completions or Anthropic Messages) that is written to `api_backend`, so Grok Build reaches Chat Completions and Anthropic upstreams on its own without the removed conversion. A value already in `config.toml` is kept instead of being reset to Responses. The Qiniu preset now uses Qiniu's general gateway with Chat Completions and `x-ai/grok-4.5`, and CherryIN uses `x-ai/grok-4.6`, the Grok models those services list.
 
 ### Added
 

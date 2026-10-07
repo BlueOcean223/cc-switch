@@ -883,6 +883,8 @@
   "grokBuild": {
     "contextWindow": "コンテキストウィンドウ",
     "contextWindowInvalid": "コンテキストウィンドウは正の整数で指定してください",
+    "apiBackend": "API 形式",
+    "apiBackendHint": "Grok Build はこの API でプロバイダーにリクエストします。プロバイダーが対応しているものを選んでください。config.toml で省略した場合、Grok は Chat Completions を使います。",
     "rawConfig": "config.toml",
     "invalidToml": "config.toml の形式が不正です: {{error}}",
     "defaultModelPlaceholder": "例: grok-4.5",

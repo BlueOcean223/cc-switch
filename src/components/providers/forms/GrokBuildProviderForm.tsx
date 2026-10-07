@@ -13,6 +13,13 @@ import {
   FormMessage,
 } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import JsonEditor from "@/components/JsonEditor";
 import { useDarkMode } from "@/hooks/useDarkMode";
 import { providerSchema, type ProviderFormData } from "@/lib/schemas/provider";
@@ -33,7 +40,8 @@ import {
 } from "@/utils/providerConfigUtils";
 import {
   buildGrokBuildConfig,
-  GROK_BUILD_DEFAULT_API_BACKEND,
+  GROK_BUILD_API_BACKENDS,
+  GROK_BUILD_IMPLICIT_API_BACKEND,
   parseGrokBuildConfig,
   updateGrokBuildConfig,
   validateGrokBuildConfig,
@@ -91,6 +99,7 @@ export function GrokBuildProviderForm({
   );
   const [baseUrl, setBaseUrl] = useState(initialConfig.baseUrl);
   const [apiKey, setApiKey] = useState(initialConfig.apiKey);
+  const [apiBackend, setApiBackend] = useState(initialConfig.apiBackend);
   const [contextWindow, setContextWindow] = useState(
     String(initialConfig.contextWindow),
   );
@@ -185,9 +194,9 @@ export function GrokBuildProviderForm({
       baseUrl,
       name: form.getValues("name") || initialConfig.name,
       apiKey,
+      apiBackend,
       contextWindow: Number.parseInt(contextWindow, 10),
       ...overrides,
-      apiBackend: GROK_BUILD_DEFAULT_API_BACKEND,
     };
     setRawConfig((current) => updateGrokBuildConfig(current, next));
   };
@@ -233,6 +242,7 @@ export function GrokBuildProviderForm({
     setBaseUrl(presetBaseUrl);
     setApiKey(presetApiKey);
     setUpstreamModel(presetModel);
+    setApiBackend(preset.apiBackend);
     setPresetEndpoints(preset.endpointCandidates ?? []);
     const presetConfig = buildGrokBuildConfig({
       model: profile,
@@ -240,7 +250,7 @@ export function GrokBuildProviderForm({
       baseUrl: presetBaseUrl,
       name: presetName,
       apiKey: presetApiKey,
-      apiBackend: GROK_BUILD_DEFAULT_API_BACKEND,
+      apiBackend: preset.apiBackend,
       contextWindow: Number.parseInt(contextWindow, 10),
     });
     setRawConfig(presetConfig);
@@ -255,6 +265,7 @@ export function GrokBuildProviderForm({
     setUpstreamModel(parsed.upstreamModel ?? parsed.model);
     setBaseUrl(parsed.baseUrl);
     setApiKey(parsed.apiKey);
+    setApiBackend(parsed.apiBackend);
     setContextWindow(String(parsed.contextWindow));
     if (parsed.name) form.setValue("name", parsed.name);
   };
@@ -308,7 +319,7 @@ export function GrokBuildProviderForm({
       baseUrl,
       name,
       apiKey,
-      apiBackend: GROK_BUILD_DEFAULT_API_BACKEND,
+      apiBackend,
       contextWindow: parsedContextWindow,
     });
     const configError = validateGrokBuildConfig(finalConfig);
@@ -404,6 +415,42 @@ export function GrokBuildProviderForm({
               }}
               speedTestEndpoints={speedTestEndpoints}
             />
+
+            <div className="space-y-2">
+              <FormLabel htmlFor="grokbuild-api-backend">
+                {t("grokBuild.apiBackend", { defaultValue: "API 协议" })}
+              </FormLabel>
+              <Select
+                value={apiBackend ?? GROK_BUILD_IMPLICIT_API_BACKEND}
+                onValueChange={(value) => {
+                  setApiBackend(value);
+                  syncStructuredConfig({ apiBackend: value });
+                }}
+              >
+                <SelectTrigger id="grokbuild-api-backend">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {GROK_BUILD_API_BACKENDS.map((option) => (
+                    <SelectItem key={option.value} value={option.value}>
+                      {option.label}
+                    </SelectItem>
+                  ))}
+                  {apiBackend &&
+                    !GROK_BUILD_API_BACKENDS.some(
+                      (option) => option.value === apiBackend,
+                    ) && (
+                      <SelectItem value={apiBackend}>{apiBackend}</SelectItem>
+                    )}
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-fg-2">
+                {t("grokBuild.apiBackendHint", {
+                  defaultValue:
+                    "Grok Build 按这个协议请求上游，要选上游支持的。config.toml 里没写时 Grok 用 Chat Completions。",
+                })}
+              </p>
+            </div>
 
             <FormItem>
               <FormLabel htmlFor="grokbuild-context-window">
