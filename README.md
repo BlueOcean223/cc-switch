@@ -57,7 +57,7 @@ Download the latest `CC-Switch-v{version}-Windows.msi` installer or `CC-Switch-v
 
 Download `CC-Switch-v{version}-macOS.dmg` (recommended) or `.zip` from the [Releases](../../releases) page. It's a Universal build that runs natively on both Apple Silicon and Intel Macs.
 
-> **Note**: The release notes of each version say whether the macOS package is notarized by Apple. macOS blocks a version that is not notarized the first time you open it; run `xattr -dr com.apple.quarantine "/Applications/CC Switch.app"` in Terminal and open it again.
+> **Note**: The release notes of each version say whether the macOS package is notarized by Apple. macOS blocks a version that is not notarized the first time you open it; run `xattr -dr com.apple.quarantine "/Applications/ccs-lite.app"` in Terminal and open it again.
 
 ### Linux Users
 

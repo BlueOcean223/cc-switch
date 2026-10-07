@@ -57,7 +57,7 @@ Claude Code、Codex、Gemini CLI などの AI コーディングツールは、�
 
 [Releases](../../releases) から `CC-Switch-v{version}-macOS.dmg`（推奨）または `.zip` をダウンロード。Apple Silicon と Intel Mac の両方でネイティブに動作する Universal ビルドです。
 
-> **注意**: macOS パッケージが Apple の公証を受けているかどうかは、各バージョンのリリースノートに記載されています。公証されていないバージョンは初回起動時にシステムにブロックされるので、ターミナルで `xattr -dr com.apple.quarantine "/Applications/CC Switch.app"` を実行してから開いてください。
+> **注意**: macOS パッケージが Apple の公証を受けているかどうかは、各バージョンのリリースノートに記載されています。公証されていないバージョンは初回起動時にシステムにブロックされるので、ターミナルで `xattr -dr com.apple.quarantine "/Applications/ccs-lite.app"` を実行してから開いてください。
 
 ### Linux ユーザー
 

@@ -668,16 +668,16 @@ jobs:
           DMG_STAGE_DIR="$RUNNER_TEMP/dmg-stage"
           rm -rf "$DMG_STAGE_DIR"
           mkdir -p "$DMG_STAGE_DIR"
-          ditto "$APP_PATH" "$DMG_STAGE_DIR/CC Switch.app"
+          ditto "$APP_PATH" "$DMG_STAGE_DIR/ccs-lite.app"
 
           create-dmg \
-            --volname "CC Switch" \
+            --volname "ccs-lite" \
             --background "src-tauri/icons/dmg-background.png" \
             --window-size 660 400 \
             --window-pos 200 120 \
             --icon-size 80 \
-            --icon "CC Switch.app" 180 220 \
-            --hide-extension "CC Switch.app" \
+            --icon "ccs-lite.app" 180 220 \
+            --hide-extension "ccs-lite.app" \
             --app-drop-link 480 220 \
             ${CODESIGN_ARGS[@]+"${CODESIGN_ARGS[@]}"} \
             --no-internet-enable \
@@ -939,7 +939,7 @@ jobs:
             > `.tar.gz` 为 Tauri updater 自动更新专用，无需手动下载。
 
             ---
-            ${{ secrets.APPLE_CERTIFICATE != '' && 'macOS 版本已通过 Apple 代码签名和公证，可直接安装使用。' || 'macOS 版本未经 Apple 公证。首次打开如果提示无法打开，请在终端运行 `xattr -dr com.apple.quarantine "/Applications/CC Switch.app"`，或在「系统设置 → 隐私与安全性」里点「仍要打开」。' }}
+            ${{ secrets.APPLE_CERTIFICATE != '' && 'macOS 版本已通过 Apple 代码签名和公证，可直接安装使用。' || 'macOS 版本未经 Apple 公证。首次打开如果提示无法打开，请在终端运行 `xattr -dr com.apple.quarantine "/Applications/ccs-lite.app"`，或在「系统设置 → 隐私与安全性」里点「仍要打开」。' }}
           files: release-assets/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

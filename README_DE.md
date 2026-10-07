@@ -57,7 +57,7 @@ Laden Sie das neueste Installationsprogramm `CC-Switch-v{version}-Windows.msi` o
 
 Laden Sie `CC-Switch-v{version}-macOS.dmg` (empfohlen) oder `.zip` von der Seite [Releases](../../releases) herunter. Es handelt sich um einen Universal-Build, der nativ auf Apple-Silicon- und Intel-Macs läuft.
 
-> **Hinweis**: Ob das macOS-Paket von Apple notarisiert ist, steht in den Release Notes der jeweiligen Version. Eine nicht notarisierte Version blockiert macOS beim ersten Öffnen; führen Sie im Terminal `xattr -dr com.apple.quarantine "/Applications/CC Switch.app"` aus und öffnen Sie die App erneut.
+> **Hinweis**: Ob das macOS-Paket von Apple notarisiert ist, steht in den Release Notes der jeweiligen Version. Eine nicht notarisierte Version blockiert macOS beim ersten Öffnen; führen Sie im Terminal `xattr -dr com.apple.quarantine "/Applications/ccs-lite.app"` aus und öffnen Sie die App erneut.
 
 ### Linux-Nutzer
 

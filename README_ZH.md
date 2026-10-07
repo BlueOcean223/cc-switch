@@ -57,7 +57,7 @@ Claude Code、Codex、Gemini CLI 等 AI 编程工具各有各的配置格式。�
 
 从 [Releases](../../releases) 页面下载 `CC-Switch-v{版本号}-macOS.dmg`（推荐）或 `.zip`。这是 Universal 通用包，Apple Silicon 和 Intel Mac 均可原生运行。
 
-> **注意**：macOS 包是否经过 Apple 公证，每个版本的 Release 说明里会写明。没有公证的版本首次打开会被系统拦截，在终端运行 `xattr -dr com.apple.quarantine "/Applications/CC Switch.app"` 后即可打开。
+> **注意**：macOS 包是否经过 Apple 公证，每个版本的 Release 说明里会写明。没有公证的版本首次打开会被系统拦截，在终端运行 `xattr -dr com.apple.quarantine "/Applications/ccs-lite.app"` 后即可打开。
 
 ### Linux 用户
 
