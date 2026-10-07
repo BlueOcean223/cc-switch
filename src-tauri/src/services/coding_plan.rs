@@ -438,9 +438,21 @@ fn zhipu_quota_from_body(body: &serde_json::Value) -> SubscriptionQuota {
 
 /// MiniMax 业务错误码里表示 Key 无效的两个：1004（未授权/Token 不匹配）、
 /// 2049（无效的 API Key），见 platform.minimax.io/docs/api-reference/errorcode。
-const MINIMAX_AUTH_ERROR_CODES: [i64; 2] = [1004, 2049];
+pub(crate) const MINIMAX_AUTH_ERROR_CODES: [i64; 2] = [1004, 2049];
+
+/// MiniMax 按量计费的 Key 以 `sk-api-` 开头，没有 Token Plan，官方 CLI 对它改查
+/// 账户余额（`selectUsageEndpoint`），余额查询见 `balance.rs`。
+pub(crate) fn is_minimax_pay_as_you_go_key(api_key: &str) -> bool {
+    api_key.starts_with("sk-api-")
+}
+
+const MINIMAX_PAY_AS_YOU_GO_KEY: &str = "This is a pay-as-you-go key (sk-api-), \
+     which has no Token Plan quota. Choose the Balance template to see the account balance";
 
 async fn query_minimax(api_key: &str, is_cn: bool) -> Result<SubscriptionQuota, String> {
+    if is_minimax_pay_as_you_go_key(api_key) {
+        return Ok(make_error(MINIMAX_PAY_AS_YOU_GO_KEY.to_string()));
+    }
     let client = crate::http_client::get();
 
     // 官方 CLI（MiniMax-AI/cli）的额度端点是 `{base}/v1/token_plan/remains`，国内
@@ -3128,6 +3140,27 @@ mod tests {
             msg.contains("API key + organization ID + project ID"),
             "err={msg}"
         );
+    }
+
+    #[tokio::test]
+    async fn minimax_pay_as_you_go_key_points_to_the_balance_template() {
+        // sk-api- 开头的按量 Key 没有 Token Plan，不发请求，直接提示改用余额模板
+        let quota = get_coding_plan_quota(
+            "https://api.minimax.cn/anthropic",
+            "sk-api-test",
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .await
+        .expect("determinate result");
+        assert!(!quota.success);
+        assert!(quota
+            .error
+            .as_deref()
+            .is_some_and(|e| e.contains("Balance template")));
     }
 
     #[tokio::test]

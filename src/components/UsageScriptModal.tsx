@@ -30,7 +30,9 @@ import { cn } from "@/lib/utils";
 import { TEMPLATE_TYPES, PROVIDER_TYPES } from "@/config/constants";
 import {
   CODING_PLAN_PROVIDERS,
+  MINIMAX_BASE_URL_PATTERN,
   detectCodingPlanProvider,
+  isMiniMaxPayAsYouGoKey,
 } from "@/config/codingPlanProviders";
 import { formatUsageDataSummary } from "@/utils/usageDisplay";
 
@@ -148,6 +150,8 @@ const BALANCE_PROVIDERS = [
   },
   { id: "openrouter", label: "OpenRouter", pattern: /openrouter\.ai/i },
   { id: "novita", label: "Novita AI", pattern: /api\.novita\.ai/i },
+  // 只有按量计费的 Key 查余额，Token Plan 的 Key 走 Coding Plan 模板
+  { id: "minimax", label: "MiniMax", pattern: MINIMAX_BASE_URL_PATTERN },
 ] as const;
 
 /** 根据 Base URL 自动检测余额查询供应商 */
@@ -321,6 +325,9 @@ const UsageScriptModal: React.FC<UsageScriptModalProps> = ({
   };
 
   const providerCredentials = getProviderCredentials();
+  const isMiniMaxPayAsYouGo =
+    detectCodingPlanProvider(providerCredentials.baseUrl) === "minimax" &&
+    isMiniMaxPayAsYouGoKey(providerCredentials.apiKey);
   const isBoundCodexOfficial =
     resolveCodexOfficialIdentity(appId, provider) === "managed_account";
   const isOfficialSubscription = isOfficialSubscriptionProvider(
@@ -355,7 +362,7 @@ const UsageScriptModal: React.FC<UsageScriptModalProps> = ({
     }
 
     const autoDetected = detectCodingPlanProvider(providerCredentials.baseUrl);
-    if (autoDetected) {
+    if (autoDetected && !isMiniMaxPayAsYouGo) {
       return createUsageScript({ codingPlanProvider: autoDetected });
     }
 
@@ -454,7 +461,10 @@ const UsageScriptModal: React.FC<UsageScriptModalProps> = ({
         return TEMPLATE_TYPES.GENERAL;
       }
       // 新配置：如果 URL 匹配 Coding Plan 供应商，自动选择 Coding Plan 模板
-      if (detectCodingPlanProvider(providerCredentials.baseUrl)) {
+      if (
+        detectCodingPlanProvider(providerCredentials.baseUrl) &&
+        !isMiniMaxPayAsYouGo
+      ) {
         return TEMPLATE_TYPES.TOKEN_PLAN;
       }
       // 新配置：如果 URL 匹配官方余额查询供应商，自动选择 Balance 模板

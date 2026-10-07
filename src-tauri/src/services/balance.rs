@@ -23,6 +23,8 @@ enum BalanceProvider {
     SiliconFlowEn,
     OpenRouter,
     NovitaAI,
+    MiniMax,
+    MiniMaxIntl,
 }
 
 fn detect_provider(base_url: &str) -> Option<BalanceProvider> {
@@ -41,6 +43,13 @@ fn detect_provider(base_url: &str) -> Option<BalanceProvider> {
         Some(BalanceProvider::OpenRouter)
     } else if url.contains("api.novita.ai") {
         Some(BalanceProvider::NovitaAI)
+    } else if crate::codex_config::codex_url_host_matches_any(
+        base_url,
+        &["api.minimaxi.com", "api.minimax.cn"],
+    ) {
+        Some(BalanceProvider::MiniMax)
+    } else if crate::codex_config::codex_url_host_matches_any(base_url, &["api.minimax.io"]) {
+        Some(BalanceProvider::MiniMaxIntl)
     } else {
         None
     }
@@ -375,6 +384,119 @@ fn novita_balance(body: &serde_json::Value) -> UsageResult {
     }
 }
 
+// ── MiniMax ─────────────────────────────────────────────────
+// GET https://api.minimax.cn/account/query_balance（国内）/ https://api.minimax.io/...（国际）
+// 按量计费的 Key（sk-api-）查这个；Token Plan 的 Key 走 coding_plan 的额度接口。
+// 接口不在公开文档里，路径和字段取自官方 CLI（MiniMax-AI/cli `9aa05d24c4`，
+// 2026-08-01）：{ available_amount, cash_balance, voucher_balance, credit_balance,
+// owed_amount, base_resp }，金额是字符串。CLI 不写币种，按两站计价：国内按元、国际按美元。
+
+async fn query_minimax(api_key: &str, intl: bool) -> Result<UsageResult, String> {
+    let client = crate::http_client::get();
+
+    let (url, plan_name, unit) = if intl {
+        (
+            "https://api.minimax.io/account/query_balance",
+            "MiniMax (Intl)",
+            "USD",
+        )
+    } else {
+        (
+            "https://api.minimax.cn/account/query_balance",
+            "MiniMax",
+            "CNY",
+        )
+    };
+    let resp = client
+        .get(url)
+        .header("Authorization", format!("Bearer {api_key}"))
+        .header("Content-Type", "application/json")
+        .timeout(Duration::from_secs(15))
+        .send()
+        .await
+        .map_err(|e| format!("Network error: {e}"))?;
+
+    let status = resp.status();
+    if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
+        return Ok(make_auth_error(status));
+    }
+
+    let body: serde_json::Value = match read_json(resp).await? {
+        Ok(body) => body,
+        Err(error) => return Ok(make_error(error)),
+    };
+
+    Ok(minimax_balance(&body, plan_name, unit))
+}
+
+fn minimax_balance(body: &serde_json::Value, plan_name: &str, unit: &str) -> UsageResult {
+    // 鉴权失败时 HTTP 仍是 200，只能看 base_resp.status_code
+    let status_code = body
+        .pointer("/base_resp/status_code")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(0);
+    if status_code != 0 {
+        let msg = body
+            .pointer("/base_resp/status_msg")
+            .and_then(|v| v.as_str())
+            .unwrap_or("Unknown error");
+        let message = format!("API error (code {status_code}): {msg}");
+        if crate::services::coding_plan::MINIMAX_AUTH_ERROR_CODES.contains(&status_code) {
+            return UsageResult {
+                success: false,
+                data: Some(vec![UsageData {
+                    plan_name: None,
+                    remaining: None,
+                    total: None,
+                    used: None,
+                    unit: None,
+                    is_valid: Some(false),
+                    invalid_message: Some("Invalid API key".to_string()),
+                    extra: None,
+                }]),
+                error: Some(message),
+            };
+        }
+        return make_error(message);
+    }
+    let Some(available) = parse_f64_field(body, "available_amount") else {
+        return make_error("Unrecognized MiniMax balance response".to_string());
+    };
+    // 可用余额里有代金券、信用额度或有欠款时拆开写进说明
+    let part = |label: &str, field| {
+        parse_f64_field(body, field)
+            .filter(|v| *v != 0.0)
+            .map(|v| format!("{label} {v:.2}"))
+    };
+    let others: Vec<String> = [
+        part("voucher", "voucher_balance"),
+        part("credit", "credit_balance"),
+        part("owed", "owed_amount"),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
+    let extra = (!others.is_empty()).then(|| {
+        let cash = part("Cash", "cash_balance").unwrap_or_else(|| "Cash 0.00".to_string());
+        format!("{cash}, {} {unit}", others.join(", "))
+    });
+
+    UsageResult {
+        success: true,
+        data: Some(vec![UsageData {
+            plan_name: Some(plan_name.to_string()),
+            remaining: Some(available),
+            total: None,
+            used: None,
+            unit: Some(unit.to_string()),
+            is_valid: Some(available > 0.0),
+            invalid_message: (available <= 0.0).then(|| "No balance remaining".to_string()),
+            extra,
+        }]),
+        error: None,
+    }
+}
+
 // ── 工具函数 ────────────────────────────────────────────────
 
 /// 解析 JSON 字段为 f64，兼容数字和字符串格式
@@ -417,6 +539,8 @@ pub async fn get_balance(base_url: &str, api_key: &str) -> Result<UsageResult, S
         BalanceProvider::SiliconFlowEn => query_siliconflow(api_key).await,
         BalanceProvider::OpenRouter => query_openrouter(api_key).await,
         BalanceProvider::NovitaAI => query_novita(api_key).await,
+        BalanceProvider::MiniMax => query_minimax(api_key, false).await,
+        BalanceProvider::MiniMaxIntl => query_minimax(api_key, true).await,
     }
 }
 
@@ -431,6 +555,69 @@ mod tests {
             .expect("determinate result");
         assert!(!result.success);
         assert_eq!(result.error.as_deref(), Some(SILICONFLOW_CN_RETIRED));
+    }
+
+    #[test]
+    fn minimax_hosts_are_matched_by_host_label() {
+        for url in [
+            "https://api.minimax.cn/anthropic",
+            "https://api.minimaxi.com/v1",
+        ] {
+            assert!(matches!(
+                detect_provider(url),
+                Some(BalanceProvider::MiniMax)
+            ));
+        }
+        assert!(matches!(
+            detect_provider("https://api.minimax.io/anthropic"),
+            Some(BalanceProvider::MiniMaxIntl)
+        ));
+        assert!(detect_provider("https://api.minimax.cn.example.com/v1").is_none());
+    }
+
+    #[test]
+    fn minimax_balance_reports_available_amount() {
+        // 字段形状取自官方 CLI 的 AccountBalanceResponse
+        let body = serde_json::json!({
+            "available_amount": "12.50", "cash_balance": "12.50", "voucher_balance": "0",
+            "credit_balance": "0", "owed_amount": "0", "balance_alert_switch": false,
+            "balance_alert_threshold": "", "base_resp": { "status_code": 0, "status_msg": "success" }
+        });
+        let result = minimax_balance(&body, "MiniMax", "CNY");
+        assert!(result.success);
+        let data = &result.data.unwrap()[0];
+        assert_eq!(data.remaining, Some(12.5));
+        assert_eq!(data.unit.as_deref(), Some("CNY"));
+        assert_eq!(data.extra, None);
+    }
+
+    #[test]
+    fn minimax_balance_lists_voucher_and_owed_amounts() {
+        let body = serde_json::json!({
+            "available_amount": "30", "cash_balance": "10", "voucher_balance": "20",
+            "credit_balance": "0", "owed_amount": "1.5", "base_resp": { "status_code": 0 }
+        });
+        let data = &minimax_balance(&body, "MiniMax (Intl)", "USD")
+            .data
+            .unwrap()[0];
+        assert_eq!(
+            data.extra.as_deref(),
+            Some("Cash 10.00, voucher 20.00, owed 1.50 USD")
+        );
+    }
+
+    #[test]
+    fn minimax_balance_flags_an_invalid_key() {
+        let body = serde_json::json!({
+            "base_resp": { "status_code": 1004, "status_msg": "not authorized" }
+        });
+        let result = minimax_balance(&body, "MiniMax", "CNY");
+        assert!(!result.success);
+        assert_eq!(result.data.unwrap()[0].is_valid, Some(false));
+        assert_eq!(
+            result.error.as_deref(),
+            Some("API error (code 1004): not authorized")
+        );
     }
 
     #[test]

@@ -34,6 +34,7 @@ First release of this fork of [farion1231/cc-switch](https://github.com/farion12
 
 - **Usage rebuild**: after upgrading, usage is rebuilt once from the session logs. "Rebuild Usage" in the usage Data sources sheet does the same on demand. The database is backed up first, and days whose logs have been deleted keep their daily totals.
 - Pricing for Claude Sonnet 5.5, and long-context and priority settings for the built-in models.
+- **MiniMax pay-as-you-go balance**: a MiniMax key starting with `sk-api-` has no Token Plan, so the usage query shows the account balance instead (CNY on the China site, USD on the international site), the same way MiniMax's CLI does. A Token Plan query with such a key now says to use the Balance template.
 
 ### Fixed
 

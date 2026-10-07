@@ -169,6 +169,26 @@ describe("injectCodingPlanUsageScript", () => {
     expect(injected.meta?.usage_script?.codingPlanProvider).toBe("kimi");
   });
 
+  it("queries the balance for a MiniMax pay-as-you-go key", () => {
+    const minimax = (key: string) =>
+      inject("claude", {
+        settingsConfig: {
+          env: {
+            ANTHROPIC_BASE_URL: "https://api.minimax.cn/anthropic",
+            ANTHROPIC_AUTH_TOKEN: key,
+          },
+        },
+      }).meta?.usage_script;
+    expect(minimax("sk-api-abc")).toMatchObject({
+      enabled: true,
+      templateType: "balance",
+    });
+    expect(minimax("sk-cp-abc")).toMatchObject({
+      templateType: "token_plan",
+      codingPlanProvider: "minimax",
+    });
+  });
+
   it("does not extend other coding plans to non-claude apps", () => {
     // 智谱/Kimi 等在其他 app 的自动注入未逐一验证，仅 OpenCode Go 放行
     const provider: TestProvider = {

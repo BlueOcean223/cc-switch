@@ -29,6 +29,21 @@ export interface CodingPlanProviderEntry {
   pattern: RegExp;
 }
 
+/**
+ * MiniMax 的 base_url。按 host 标签边界匹配（同后端 codex_url_host_matches_any），
+ * 不认 api.minimax.cn.example.com 这类伪造后缀或出现在路径里的域名。
+ */
+export const MINIMAX_BASE_URL_PATTERN =
+  /^(?:https?:\/\/)?(?:[^/?#@]*@)?(?:[\w-]+\.)*api\.(?:minimaxi\.com|minimax\.(?:io|cn))(?=[:/?#]|$)/i;
+
+/**
+ * MiniMax 按量计费的 Key 以 `sk-api-` 开头，没有 Token Plan，只能查账户余额
+ * （官方 CLI 同样按前缀区分）。与后端 `is_minimax_pay_as_you_go_key` 一致。
+ */
+export function isMiniMaxPayAsYouGoKey(apiKey: unknown): boolean {
+  return typeof apiKey === "string" && apiKey.startsWith("sk-api-");
+}
+
 export const CODING_PLAN_PROVIDERS: readonly CodingPlanProviderEntry[] = [
   {
     id: "kimi",
@@ -51,12 +66,9 @@ export const CODING_PLAN_PROVIDERS: readonly CodingPlanProviderEntry[] = [
     pattern: /bigmodel\.cn/i,
   },
   {
-    // 按 host 标签边界匹配（同后端 codex_url_host_matches_any），不认
-    // api.minimax.cn.example.com 这类伪造后缀或出现在路径里的域名
     id: "minimax",
     label: "MiniMax",
-    pattern:
-      /^(?:https?:\/\/)?(?:[^/?#@]*@)?(?:[\w-]+\.)*api\.(?:minimaxi\.com|minimax\.(?:io|cn))(?=[:/?#]|$)/i,
+    pattern: MINIMAX_BASE_URL_PATTERN,
   },
   {
     id: "zenmux",
@@ -179,15 +191,26 @@ export function injectCodingPlanUsageScript<
     return provider;
   }
 
+  // MiniMax 走到这里只可能是 Claude；按量计费的 Key 没有 Token Plan，改查余额
+  const env = provider.settingsConfig?.env;
+  const usageScript =
+    codingPlanProvider === "minimax" &&
+    isMiniMaxPayAsYouGoKey(env?.ANTHROPIC_AUTH_TOKEN || env?.ANTHROPIC_API_KEY)
+      ? createUsageScript({
+          enabled: true,
+          templateType: TEMPLATE_TYPES.BALANCE,
+        })
+      : createUsageScript({
+          enabled: true,
+          templateType: TEMPLATE_TYPES.TOKEN_PLAN,
+          codingPlanProvider,
+        });
+
   return {
     ...provider,
     meta: {
       ...(provider.meta ?? {}),
-      usage_script: createUsageScript({
-        enabled: true,
-        templateType: TEMPLATE_TYPES.TOKEN_PLAN,
-        codingPlanProvider,
-      }),
+      usage_script: usageScript,
     },
   };
 }
