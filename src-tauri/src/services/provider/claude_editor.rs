@@ -28,14 +28,6 @@ use crate::store::AppState;
 
 use super::claude_direct;
 
-/// 旧版存在 settings 里的内部字段：从不写进 live，也不算「不随切换生效的字段」。
-const INTERNAL_TOP: &[&str] = &[
-    "api_format",
-    "apiFormat",
-    "openrouter_compat_mode",
-    "openrouterCompatMode",
-];
-
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EditorView {
@@ -137,8 +129,7 @@ fn inactive_fields(row: &Value, display: &Value) -> Vec<InactiveField> {
     let mut fields = Vec::new();
     if let Some(root) = row.as_object() {
         for (key, value) in root {
-            if key == "env" || floor::claude_floor_top(key) || INTERNAL_TOP.contains(&key.as_str())
-            {
+            if key == "env" || floor::claude_floor_top(key) {
                 continue;
             }
             if display.get(key) != Some(value) {
@@ -267,7 +258,7 @@ fn global_changes(base: &Value, edited: &Value, removed_from_live: &[String]) ->
         &KeyPath::root(),
         &top(base),
         &top(edited),
-        |key| key == "env" || floor::claude_floor_top(key) || INTERNAL_TOP.contains(&key),
+        |key| key == "env" || floor::claude_floor_top(key),
         &mut changes,
     );
     diff_level(
@@ -416,8 +407,7 @@ mod tests {
                 "EXTRA": "x"
             },
             "hooks": { "Stop": [] },
-            "alwaysThinkingEnabled": false,
-            "apiFormat": "openai_chat"
+            "alwaysThinkingEnabled": false
         });
         let changes = global_changes(&base, &edited, &[]);
         assert_eq!(
@@ -510,8 +500,7 @@ mod tests {
                 "ENABLE_TOOL_SEARCH": "true"
             },
             "hooks": { "Stop": [] },
-            "theme": "dark",
-            "apiFormat": "anthropic"
+            "theme": "dark"
         });
         let display = json!({
             "env": { "ANTHROPIC_BASE_URL": "https://a.example", "ENABLE_TOOL_SEARCH": "true" },

@@ -330,8 +330,6 @@ export function GrokBuildProviderForm({
     );
     const initialMeta = { ...(initialData?.meta ?? {}) };
     delete initialMeta.custom_endpoints;
-    // 旧版路由用的格式字段：Grok Build 直连时用不上，保存时清掉
-    delete initialMeta.apiFormat;
     delete initialMeta.apiKeyField;
     const meta: ProviderMeta = {
       ...initialMeta,

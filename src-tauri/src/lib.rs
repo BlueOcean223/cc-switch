@@ -72,6 +72,8 @@ pub use store::AppState;
 use tauri_plugin_deep_link::DeepLinkExt;
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 
+#[cfg(target_os = "windows")]
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::{fmt, sync::Arc};
 use tauri::tray::{TrayIconBuilder, TrayIconEvent};
 use tauri::RunEvent;
@@ -1524,7 +1526,6 @@ pub fn run() {
             commands::get_models_dev_sync_config,
             commands::save_models_dev_sync_config,
             commands::record_models_dev_sync_result,
-            commands::check_provider_limits,
             // Session usage sync
             commands::sync_session_usage,
             commands::rebuild_codex_usage,

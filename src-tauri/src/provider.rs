@@ -1,4 +1,3 @@
-use http::header::{HeaderValue, InvalidHeaderValue};
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -348,24 +347,6 @@ pub struct ProviderMeta {
         skip_serializing_if = "Option::is_none"
     )]
     pub partner_promotion_key: Option<String>,
-    /// 已停用：供应商级成本倍率。新版不再读取，只为与旧版设备同步时原样往返保留
-    #[serde(rename = "costMultiplier", skip_serializing_if = "Option::is_none")]
-    pub cost_multiplier: Option<String>,
-    /// 已停用：供应商级计费模式覆盖（response/request）。新版只读全局设置，
-    /// 该字段只为与旧版设备同步时原样往返保留
-    #[serde(rename = "pricingModelSource", skip_serializing_if = "Option::is_none")]
-    pub pricing_model_source: Option<String>,
-    /// 每日消费限额（USD）
-    #[serde(rename = "limitDailyUsd", skip_serializing_if = "Option::is_none")]
-    pub limit_daily_usd: Option<String>,
-    /// 每月消费限额（USD）
-    #[serde(rename = "limitMonthlyUsd", skip_serializing_if = "Option::is_none")]
-    pub limit_monthly_usd: Option<String>,
-    /// Codex 上游 API 格式：决定写进模型目录的工具形态（见
-    /// `codex_provider::resolve_codex_catalog_tool_profile`），新存的第三方供应商一律是
-    /// "openai_responses"。
-    #[serde(rename = "apiFormat", skip_serializing_if = "Option::is_none")]
-    pub api_format: Option<String>,
     /// 通用认证绑定（provider_config / managed_account）
     #[serde(rename = "authBinding", skip_serializing_if = "Option::is_none")]
     pub auth_binding: Option<AuthBinding>,
@@ -387,24 +368,6 @@ pub struct ProviderMeta {
     /// - "codex_oauth": 绑定了 ChatGPT 账号的 Codex 官方卡
     #[serde(rename = "providerType", skip_serializing_if = "Option::is_none")]
     pub provider_type: Option<String>,
-}
-
-/// 解析获取模型列表（model_fetch）用的自定义 User-Agent 字符串。
-///
-/// 合法性由 `http::HeaderValue::from_str` 按**字节**判定（`b >= 32 && b != 127 || b == '\t'`）：
-/// - `Ok(None)`：未设置或纯空白（trim 后为空）。
-/// - `Ok(Some(hv))`：合法。制表符、可见 ASCII（0x20–0x7E）、以及任意非 ASCII 字符
-///   （UTF-8 字节均 ≥ 0x80）都合法。
-/// - `Err(_)`：仅含控制字符时——除 `\t` 外的 0x00–0x1F（含换行）与 0x7F（DEL）。
-///
-/// 非法值由调用方静默忽略（`.ok().flatten()`），不阻断取模型。
-pub fn parse_custom_user_agent(
-    raw: Option<&str>,
-) -> Result<Option<HeaderValue>, InvalidHeaderValue> {
-    match raw.map(str::trim).filter(|s| !s.is_empty()) {
-        Some(ua) => HeaderValue::from_str(ua).map(Some),
-        None => Ok(None),
-    }
 }
 
 impl ProviderMeta {
@@ -817,35 +780,9 @@ pub struct OpenCodeModelLimit {
 mod tests {
     use super::{
         ClaudeModelConfig, CodexModelConfig, GeminiModelConfig, OpenCodeProviderConfig, Provider,
-        ProviderMeta, UniversalProvider,
+        UniversalProvider,
     };
     use serde_json::json;
-
-    #[test]
-    fn provider_meta_serializes_pricing_model_source() {
-        let meta = ProviderMeta {
-            pricing_model_source: Some("response".to_string()),
-            ..ProviderMeta::default()
-        };
-
-        let value = serde_json::to_value(&meta).expect("serialize ProviderMeta");
-
-        assert_eq!(
-            value
-                .get("pricingModelSource")
-                .and_then(|item| item.as_str()),
-            Some("response")
-        );
-        assert!(value.get("pricing_model_source").is_none());
-    }
-
-    #[test]
-    fn provider_meta_omits_pricing_model_source_when_none() {
-        let meta = ProviderMeta::default();
-        let value = serde_json::to_value(&meta).expect("serialize ProviderMeta");
-
-        assert!(value.get("pricingModelSource").is_none());
-    }
 
     #[test]
     fn provider_with_id_populates_defaults() {

@@ -51,7 +51,6 @@ import {
   type View,
 } from "@/lib/navigation";
 import { Sidebar } from "@/components/shell/Sidebar";
-import { NewLayoutDialog } from "@/components/shell/NewLayoutDialog";
 import {
   AppPageHeader,
   WindowControlsContext,
@@ -1485,7 +1484,6 @@ function App() {
 
       <DeepLinkImportDialog />
       <FirstRunNoticeDialog />
-      <NewLayoutDialog />
       <WhatsNewNotice />
     </WindowControlsContext.Provider>
   );

@@ -12,6 +12,4 @@ pub struct TokenUsage {
     pub output_tokens: u32,
     pub cache_read_tokens: u32,
     pub cache_creation_tokens: u32,
-    /// 实际使用的模型名称（如果可用）
-    pub model: Option<String>,
 }

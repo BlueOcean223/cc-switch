@@ -197,7 +197,7 @@ mod tests {
         assert!(should_trigger_for_table("profiles"));
         assert!(should_trigger_for_table("settings"));
         assert!(!should_trigger_for_table("proxy_request_logs"));
-        assert!(!should_trigger_for_table("provider_health"));
+        assert!(!should_trigger_for_table("session_log_sync"));
     }
 
     #[test]

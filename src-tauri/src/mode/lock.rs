@@ -44,15 +44,6 @@ impl SwitchLocks {
     }
 }
 
-/// 客户端文件经写引擎写的应用：它们的写入可能留下没做完的操作（`live-state.json` 的
-/// pending），操作前要先补完。
-fn uses_write_engine(app: &AppType) -> bool {
-    matches!(
-        app,
-        AppType::Claude | AppType::Codex | AppType::Gemini | AppType::GrokBuild
-    )
-}
-
 /// 拿这个应用的切换锁，再补完它上一次没做完的写入。之后读到的指针都是落定过的。写入
 /// 函数在写锁里发现还有没补完的操作会补完后拒绝这次写入（见
 /// `operation::recover_before_write`），入口先补完，用户就不用重试一次。
@@ -81,12 +72,13 @@ pub(crate) async fn lock_settled(
     Ok(guard)
 }
 
-/// 同步代码里用的 [`lock_settled`]。不经写引擎的应用没有要补完的操作，不拿锁。
+/// 同步代码里用的 [`lock_settled`]。累加式应用不经写引擎（`live-state.json` 里没有它们
+/// 要补完的操作），不拿锁。
 pub(crate) fn lock_settled_blocking(
     state: &AppState,
     app: &AppType,
 ) -> Result<Option<OwnedMutexGuard<()>>, AppError> {
-    if !uses_write_engine(app) {
+    if app.is_additive_mode() {
         return Ok(None);
     }
     futures::executor::block_on(lock_settled(state, app)).map(Some)

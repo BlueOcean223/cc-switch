@@ -159,7 +159,8 @@ impl StreamCheckService {
             AppType::Pi => crate::pi_config::provider_base_url(&provider.settings_config),
             AppType::Claude => Self::extract_claude_base_url(provider),
             AppType::Gemini => Self::extract_gemini_base_url(provider),
-            AppType::Codex | AppType::GrokBuild => Self::extract_codex_base_url(provider),
+            AppType::Codex => Self::extract_codex_base_url(provider),
+            AppType::GrokBuild => Self::extract_grok_base_url(provider),
             AppType::Mcode => Err(AppError::InvalidInput(format!(
                 "{} does not support reachability checks",
                 app_type.as_str()
@@ -207,22 +208,35 @@ impl StreamCheckService {
         .ok_or_else(|| Self::missing_base_url("Gemini"))
     }
 
-    /// Codex / Grok Build：`config.toml` 文本里当前路由表的 `base_url`，或者行上直接存的地址。
+    /// `config.toml` 文本交给对应解析器取地址，或者行上直接存的地址。
+    fn extract_toml_base_url(
+        provider: &Provider,
+        parse: fn(&str) -> Option<String>,
+    ) -> Option<String> {
+        Self::first_url(provider, &["/base_url", "/baseURL", "/config/base_url"]).or_else(|| {
+            provider
+                .settings_config
+                .get("config")
+                .and_then(|v| v.as_str())
+                .and_then(parse)
+                .map(|url| url.trim().trim_end_matches('/').to_string())
+                .filter(|url| !url.is_empty())
+        })
+    }
+
+    /// Codex：当前 `model_provider` 对应的 `[model_providers.<id>] base_url`。
     fn extract_codex_base_url(provider: &Provider) -> Result<String, AppError> {
         if crate::codex_provider::is_codex_official_provider(provider) {
             return Ok(CHATGPT_CODEX_BASE_URL.to_string());
         }
-        if let Some(url) = Self::first_url(provider, &["/base_url", "/baseURL", "/config/base_url"])
-        {
-            return Ok(url);
-        }
-        provider
-            .settings_config
-            .get("config")
-            .and_then(|v| v.as_str())
-            .and_then(crate::grok_config::extract_base_url)
-            .map(|url| url.trim_end_matches('/').to_string())
+        Self::extract_toml_base_url(provider, crate::codex_config::extract_codex_base_url)
             .ok_or_else(|| Self::missing_base_url("Codex"))
+    }
+
+    /// Grok Build：`[models] default` 指向的 `[model.<id>] base_url`。
+    fn extract_grok_base_url(provider: &Provider) -> Result<String, AppError> {
+        Self::extract_toml_base_url(provider, crate::grok_config::extract_base_url)
+            .ok_or_else(|| Self::missing_base_url("Grok Build"))
     }
 
     /// 轻量可达性探测：GET `base_url`，收到任意 HTTP 响应即可达。
@@ -536,5 +550,28 @@ mod tests {
         official.id = crate::database::CODEX_OFFICIAL_PROVIDER_ID.to_string();
         official.category = Some("official".to_string());
         assert!(StreamCheckService::resolve_base_url(&AppType::Codex, &official).is_err());
+    }
+
+    #[test]
+    fn test_resolve_codex_base_url_reads_active_model_provider() {
+        let p = make_provider(serde_json::json!({
+            "auth": { "OPENAI_API_KEY": "sk-test" },
+            "config": "model_provider = \"custom\"\nmodel = \"gpt-5\"\n\n[model_providers.custom]\nname = \"custom\"\nbase_url = \"https://relay.example/v1/\"\nwire_api = \"responses\"\n",
+        }));
+        assert_eq!(
+            StreamCheckService::resolve_base_url(&AppType::Codex, &p).unwrap(),
+            "https://relay.example/v1"
+        );
+    }
+
+    #[test]
+    fn test_resolve_grok_base_url_reads_default_model_table() {
+        let p = make_provider(serde_json::json!({
+            "config": "[models]\ndefault = \"grok\"\n\n[model.grok]\nname = \"Grok\"\nmodel = \"grok-4\"\nbase_url = \"https://grok.example/v1\"\napi_backend = \"openai_responses\"\ncontext_window = 256000\n",
+        }));
+        assert_eq!(
+            StreamCheckService::resolve_base_url(&AppType::GrokBuild, &p).unwrap(),
+            "https://grok.example/v1"
+        );
     }
 }

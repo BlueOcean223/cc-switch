@@ -149,9 +149,7 @@ export const codexProviderPresets: CodexProviderPreset[] = [
     // Key 探针：Codex 0.153.4 的全量请求形态（include
     // reasoning.encrypted_content + reasoning.summary + text.verbosity）与
     // 流式事件序列均 200；kimi-k2.7-code 亦 200——文档只列 kimi-k3，属未文
-    // 档化能力，厂商若收回从 catalog 删行即可。存量 openai_chat 卡片的
-    // thinking/reasoning_effort 注入来自卡片自身 meta.codexChatReasoning
-    //（预设已不再携带），那条路径的 Kimi 400 仍首查该注入
+    // 档化能力，厂商若收回从 catalog 删行即可。
     modelCatalog: modelCatalog([
       // 首行 = 默认模型（catalog[0] 须与 config.toml 的 model 一致）：
       // kimi-k3 是官方 Codex 文档与 Responses OpenAPI 唯一列出的模型

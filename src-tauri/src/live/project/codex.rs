@@ -20,12 +20,8 @@ use crate::live::patch::LiveWriteError;
 
 /// CC Switch 写入的路由表 id。
 pub const ROUTE_ID: &str = "custom";
-/// 旧版代理官方路由写的表 id。会话按选中的 id 分桶，它让代理下的官方会话自成一桶，
-/// 表一删就 resume 不了，新版不再写；live 里留着的只清理。
-pub const OFFICIAL_PROXY_ROUTE_ID: &str = "cc-switch-official";
 /// CC Switch 生成的模型目录文件名。
 pub const CATALOG_FILENAME: &str = "cc-switch-model-catalog.json";
-pub use super::claude::PROXY_TOKEN_PLACEHOLDER;
 /// `web_search` 的禁用值。
 pub const WEB_SEARCH_DISABLED: &str = "disabled";
 pub const MODEL_CATALOG_JSON: &str = "model_catalog_json";
@@ -434,7 +430,7 @@ fn default_route(_doc: &DocumentMut, _input: &RowInput<'_>) -> Result<Route, App
 pub enum RouteWrite {
     /// 官方直连：不写选路。live 里已有 custom 表时改写成休眠形态（占位地址加占位 Key）：
     /// Codex 按 provider id 给会话分桶，表一删，第三方的旧会话就 resume 不了。
-    Official { dormant_base_url: String },
+    Official,
     /// 官方直连且开了「统一会话历史」：选路写 custom，表是官方镜像（认证走官方登录）。
     OfficialMirror,
     /// 第三方：选路写 custom。
@@ -448,7 +444,7 @@ pub enum RouteWrite {
 impl RouteWrite {
     fn selector(&self) -> Option<&str> {
         match self {
-            Self::Official { .. } | Self::Default => None,
+            Self::Official | Self::Default => None,
             Self::OfficialMirror | Self::Custom(_) => Some(ROUTE_ID),
             Self::BuiltIn { id, .. } => Some(id),
         }
@@ -465,15 +461,20 @@ fn official_mirror_table() -> Table {
     table
 }
 
-/// 官方直连时 custom 表的休眠形态：占位 Key，地址上不需要有服务在监听。
-fn dormant_route_table(base_url: &str) -> Table {
+/// 休眠形态 custom 表的占位地址：上面不需要有服务在监听。
+pub(crate) const DORMANT_BASE_URL: &str = "http://127.0.0.1:15721/v1";
+/// 休眠形态 custom 表的占位 Key。
+pub(crate) const DORMANT_BEARER_TOKEN: &str = "PROXY_MANAGED";
+
+/// 官方直连时 custom 表的休眠形态：占位地址加占位 Key。
+fn dormant_route_table() -> Table {
     let mut table = Table::new();
     table.insert("name", toml_edit::value(ROUTE_ID));
-    table.insert("base_url", toml_edit::value(base_url));
+    table.insert("base_url", toml_edit::value(DORMANT_BASE_URL));
     table.insert("wire_api", toml_edit::value("responses"));
     table.insert(
         "experimental_bearer_token",
-        toml_edit::value(PROXY_TOKEN_PLACEHOLDER),
+        toml_edit::value(DORMANT_BEARER_TOKEN),
     );
     table
 }
@@ -672,23 +673,20 @@ impl CodexConfigPatch {
                 continue;
             }
             let item = providers.remove(id).expect("present");
-            if self.is_retired(id, &item) || holds_placeholder(&item) {
+            if self.is_retired(id, &item) {
                 continue;
             }
             let renamed = first_free_id(providers, LEGACY_REROUTE_ID);
             providers.insert(&renamed, item);
         }
 
-        // 旧版按别的 id 写进去的表（含旧版代理官方路由表）、残留的代理占位表。被 profile
-        // 引用的不动。
+        // 旧版按别的 id 写进去、能证明是 CC Switch 写的表。被 profile 引用的不动。
         let doomed: Vec<String> = providers
             .iter()
             .filter(|(id, item)| {
                 *id != ROUTE_ID
                     && !referenced.iter().any(|name| name == id)
-                    && (*id == OFFICIAL_PROXY_ROUTE_ID
-                        || holds_placeholder(item)
-                        || self.is_retired(id, item))
+                    && self.is_retired(id, item)
             })
             .map(|(id, _)| id.to_string())
             .collect();
@@ -697,10 +695,9 @@ impl CodexConfigPatch {
         }
 
         match &self.route {
-            RouteWrite::Official { dormant_base_url } => {
+            RouteWrite::Official => {
                 if providers.contains_key(ROUTE_ID) {
-                    let dormant = dormant_route_table(dormant_base_url);
-                    put_table(providers, ROUTE_ID, dormant, container_inline);
+                    put_table(providers, ROUTE_ID, dormant_route_table(), container_inline);
                 }
             }
             RouteWrite::Default | RouteWrite::BuiltIn { table: None, .. } => {
@@ -758,13 +755,6 @@ impl CodexConfigPatch {
             .iter()
             .any(|known| known.id == id && base_url.as_deref() == Some(known.base_url.as_str()))
     }
-}
-
-fn holds_placeholder(item: &Item) -> bool {
-    item.as_table_like()
-        .and_then(|table| table.get("experimental_bearer_token"))
-        .and_then(Item::as_str)
-        == Some(PROXY_TOKEN_PLACEHOLDER)
 }
 
 fn first_free_id(providers: &dyn TableLike, base: &str) -> String {
@@ -989,30 +979,24 @@ mod tests {
         doc
     }
 
-    const DORMANT: &str = "http://127.0.0.1:15721/v1";
-
     #[test]
-    fn writes_clean_up_the_old_proxy_reroute() {
-        // 旧版代理写的 cc-switch-official 表和顶层改道删掉；第三方留下的 custom 表改成休眠形态。
-        let live = "model_provider = \"cc-switch-official\"\nopenai_base_url = \"http://127.0.0.1:15721/v1\"\nmodel = \"gpt-5.5\"\n\n[model_providers.cc-switch-official]\nname = \"OpenAI\"\nbase_url = \"http://127.0.0.1:15721/v1\"\nrequires_openai_auth = true\n\n[model_providers.custom]\nname = \"custom\"\nbase_url = \"https://relay.example/v1\"\nexperimental_bearer_token = \"sk-relay\"\n";
-        let official = || RouteWrite::Official {
-            dormant_base_url: DORMANT.to_string(),
-        };
-        let doc = apply(official(), live);
+    fn official_route_leaves_a_dormant_custom_table() {
+        // 切回官方：选路和顶层改道删掉，第三方留下的 custom 表改成休眠形态（不留真实 Key）。
+        let live = "model_provider = \"custom\"\nopenai_base_url = \"https://relay.example/v1\"\nmodel = \"gpt-5.5\"\n\n[model_providers.custom]\nname = \"custom\"\nbase_url = \"https://relay.example/v1\"\nexperimental_bearer_token = \"sk-relay\"\n";
+        let doc = apply(RouteWrite::Official, live);
         assert!(doc.get("model_provider").is_none(), "{doc}");
         assert!(doc.get("openai_base_url").is_none(), "{doc}");
         let providers = doc["model_providers"].as_table().unwrap();
-        assert!(!providers.contains_key(OFFICIAL_PROXY_ROUTE_ID), "{doc}");
         let dormant = providers[ROUTE_ID].as_table().unwrap();
-        assert_eq!(dormant["base_url"].as_str(), Some(DORMANT));
+        assert_eq!(dormant["base_url"].as_str(), Some(DORMANT_BASE_URL));
         assert_eq!(
             dormant["experimental_bearer_token"].as_str(),
-            Some(PROXY_TOKEN_PLACEHOLDER)
+            Some(DORMANT_BEARER_TOKEN)
         );
         assert!(!doc.to_string().contains("sk-relay"));
 
         // 没有 model_providers 时不建表。
-        let bare = apply(official(), "model = \"gpt-5.5\"\n");
+        let bare = apply(RouteWrite::Official, "model = \"gpt-5.5\"\n");
         assert!(bare.get("model_providers").is_none(), "{bare}");
 
         let mut relay = Table::new();

@@ -10,7 +10,6 @@ import type {
   ModelPricing,
   ModelsDevSyncConfig,
   ModelsDevSyncState,
-  ProviderLimitStatus,
   PaginatedLogs,
   SessionSyncResult,
   DataSourceSummary,
@@ -196,13 +195,6 @@ export const usageApi = {
 
   deleteModelPricing: async (modelId: string): Promise<void> => {
     return invoke("delete_model_pricing", { modelId });
-  },
-
-  checkProviderLimits: async (
-    providerId: string,
-    appType: string,
-  ): Promise<ProviderLimitStatus> => {
-    return invoke("check_provider_limits", { providerId, appType });
   },
 
   // Session usage sync

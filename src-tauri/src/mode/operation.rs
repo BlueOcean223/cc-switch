@@ -302,7 +302,7 @@ pub(crate) fn has_pending(app: &str) -> bool {
 }
 
 /// 读指针、模式或「live 现在归谁」之前调用：先补完这个应用上一次没做完的操作，读到的
-/// 才是落定过的状态。调用方不能持有这个应用的写锁（不可重入）；要拿代理切换锁时先拿它。
+/// 才是落定过的状态。调用方不能持有这个应用的写锁（不可重入）。
 pub fn settle(db: &Database, app: &str) -> Result<Option<RecoveryOutcome>, AppError> {
     let store = DeviceStore::for_device();
     let guard = crate::live::engine::lock_app(app);

@@ -43,12 +43,6 @@ vi.mock("@/components/providers/forms/hooks", async (importOriginal) => {
     await importOriginal<typeof import("@/components/providers/forms/hooks")>();
   return {
     ...actual,
-    useCopilotAuth: () => ({
-      isAuthenticated: false,
-      isStatusSuccess: true,
-      isStatusError: false,
-      accounts: [],
-    }),
     useCodexOauth: () => ({
       isAuthenticated: false,
       isStatusSuccess: true,
@@ -56,7 +50,6 @@ vi.mock("@/components/providers/forms/hooks", async (importOriginal) => {
       defaultAccountId: null,
       accounts: [],
     }),
-    useXaiOauth: () => ({ isAuthenticated: false, accounts: [] }),
   };
 });
 
@@ -141,9 +134,7 @@ describe("新增对话框的草稿投影", () => {
     renderForm("codex", bases);
 
     let base = await nextBase(bases, 0);
-    await waitFor(() =>
-      expect(editorTexts()).toContain(String(base!.config)),
-    );
+    await waitFor(() => expect(editorTexts()).toContain(String(base!.config)));
 
     const preset = codexProviderPresets.find(
       (item) => item.category !== "official" && item.name === "OpenRouter",
@@ -152,17 +143,13 @@ describe("新增对话框的草稿投影", () => {
     clickPreset(preset.name);
     base = await nextBase(bases, seen);
     expect(String(base!.config)).toContain(LIVE_TOML.trim());
-    await waitFor(() =>
-      expect(editorTexts()).toContain(String(base!.config)),
-    );
+    await waitFor(() => expect(editorTexts()).toContain(String(base!.config)));
 
     seen = bases.length;
     clickPreset("providerPreset.custom");
     base = await nextBase(bases, seen);
     expect(String(base!.config)).not.toContain("openrouter");
-    await waitFor(() =>
-      expect(editorTexts()).toContain(String(base!.config)),
-    );
+    await waitFor(() => expect(editorTexts()).toContain(String(base!.config)));
   });
 
   it("Gemini：选预设、切回自定义后，全局设置仍在显示内容和底里", async () => {
@@ -202,9 +189,7 @@ describe("新增对话框的草稿投影", () => {
     const seen = bases.length;
     clickPreset(preset.nameKey ?? preset.name);
     const base = await nextBase(bases, seen);
-    await waitFor(() =>
-      expect(editorTexts()).toContain(String(base!.config)),
-    );
+    await waitFor(() => expect(editorTexts()).toContain(String(base!.config)));
 
     fireEvent.click(screen.getByRole("button", { name: /Grok Official/ }));
     await waitFor(() => expect(bases.at(-1)).toBeNull());

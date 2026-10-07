@@ -161,16 +161,6 @@ export interface UsageScopeFilters {
   model?: string;
 }
 
-export interface ProviderLimitStatus {
-  providerId: string;
-  dailyUsage: string;
-  dailyLimit?: string;
-  dailyExceeded: boolean;
-  monthlyUsage: string;
-  monthlyLimit?: string;
-  monthlyExceeded: boolean;
-}
-
 export type UsageRangePreset =
   | "today"
   | "1d"

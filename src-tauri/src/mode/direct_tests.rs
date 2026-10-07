@@ -388,8 +388,7 @@ async fn codex_direct_switch_replaces_only_key_fields_and_round_trips() {
 }
 
 /// 行里自己指定的模型目录指针跟着这一家走：切走时删掉，切到生成了目录的那家就换成
-/// CC Switch 自己的指针；代理契约带进来的，退出代理时同样删掉。用户直接写进 live 的
-/// 指针一直留着。
+/// CC Switch 自己的指针。`model_catalog_json` 是关键字段，live 里手写的值不保留。
 #[tokio::test]
 #[serial]
 async fn codex_a_row_catalog_pointer_leaves_with_its_provider() {
@@ -420,13 +419,13 @@ async fn codex_a_row_catalog_pointer_leaves_with_its_provider() {
     ProviderService::switch(&state, AppType::Codex, "c").expect("to c");
     assert_eq!(pointer(), None, "{}", codex_text());
 
-    // 用户自己写进 live 的指针不认领、不删，也不被 CC Switch 的指针替换。
+    // 手写进 live 的指针会挡住生成的目录：切到生成了目录的那家时换成 CC Switch 的指针。
     let with_user = format!("model_catalog_json = \"/work/mine.json\"\n{}", codex_text());
     fs::write(codex_config_path(), with_user).unwrap();
     ProviderService::switch(&state, AppType::Codex, "b").expect("to b");
-    assert_eq!(pointer().as_deref(), Some("/work/mine.json"));
+    assert_eq!(pointer().as_deref(), Some(ours), "{}", codex_text());
     ProviderService::switch(&state, AppType::Codex, "c").expect("to c");
-    assert_eq!(pointer().as_deref(), Some("/work/mine.json"));
+    assert_eq!(pointer(), None, "{}", codex_text());
 }
 
 #[tokio::test]
@@ -471,12 +470,12 @@ async fn codex_official_switch_leaves_a_dormant_route_table() {
     let dormant = &doc["model_providers"]["custom"];
     assert_eq!(
         dormant["base_url"].as_str(),
-        Some("http://127.0.0.1:15721/v1"),
-        "the dormant table keeps the address older versions wrote: {text}"
+        Some(crate::live::project::codex::DORMANT_BASE_URL),
+        "{text}"
     );
     assert_eq!(
         dormant["experimental_bearer_token"].as_str(),
-        Some(crate::live::project::codex::PROXY_TOKEN_PLACEHOLDER)
+        Some(crate::live::project::codex::DORMANT_BEARER_TOKEN)
     );
     assert!(dormant.get("name").is_some(), "Codex loads it: {text}");
     assert!(!text.contains("sk-a"), "no real key stays behind: {text}");
@@ -553,7 +552,7 @@ async fn codex_migration_retires_only_tables_cc_switch_wrote() {
     let _home = Home::new();
     set_preservation(true);
     // 旧版按行的 id 整份写进来的表：a（id 和地址都对得上 a 的行）、b 的地址被用户改过、
-    // 被 profile 引用的 c、代理占位残留、用户自己的 ollama_local。
+    // 被 profile 引用的 c、用户自己的 ollama_local。
     let live = r#"model_provider = "a"
 model = "gpt-a"
 
@@ -569,11 +568,6 @@ base_url = "https://my-own-b.example/v1"
 [model_providers.c]
 name = "c"
 base_url = "https://c.example/v1"
-
-[model_providers.deepseek]
-name = "deepseek"
-base_url = "http://127.0.0.1:15721/v1"
-experimental_bearer_token = "PROXY_MANAGED"
 
 [model_providers.ollama_local]
 name = "Ollama"
@@ -591,10 +585,6 @@ model_provider = "c"
     let text = codex_text();
     let providers = codex_doc()["model_providers"].as_table().unwrap().clone();
     assert!(!providers.contains_key("a"), "provably ours: {text}");
-    assert!(
-        !providers.contains_key("deepseek"),
-        "placeholder leftover: {text}"
-    );
     assert!(
         providers.contains_key("b"),
         "address differs, not provably ours"

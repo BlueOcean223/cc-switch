@@ -149,23 +149,25 @@ fn build_client(proxy_url: Option<&str>) -> Result<Client, String> {
 pub fn mask_url(url: &str) -> String {
     if let Ok(parsed) = url::Url::parse(url) {
         // 隐藏用户名和密码，保留 scheme、host 和端口
-        let host = parsed.host_str().unwrap_or("?");
-        match parsed.port() {
-            Some(port) => format!("{}://{}:{}", parsed.scheme(), host, port),
-            None => format!("{}://{}", parsed.scheme(), host),
+        if let Some(host) = parsed.host_str() {
+            return match parsed.port() {
+                Some(port) => format!("{}://{}:{}", parsed.scheme(), host, port),
+                None => format!("{}://{}", parsed.scheme(), host),
+            };
         }
+    }
+    // 解析不出 host（例如漏写 scheme 的 `user:pass@host:port`）：丢掉最后一个 `@`
+    // 之前可能是凭据的部分，再截断。截断点回退到最近的字符边界，
+    // 避免在多字节 UTF-8 字符中间切割导致 panic。
+    let rest = url.rsplit_once('@').map_or(url, |(_, host)| host);
+    if rest.len() > 20 {
+        let cut = (0..=20)
+            .rev()
+            .find(|&i| rest.is_char_boundary(i))
+            .unwrap_or(0);
+        format!("{}...", &rest[..cut])
     } else {
-        // URL 解析失败，返回部分内容。截断点回退到最近的字符边界，
-        // 避免在多字节 UTF-8 字符中间切割导致 panic。
-        if url.len() > 20 {
-            let cut = (0..=20)
-                .rev()
-                .find(|&i| url.is_char_boundary(i))
-                .unwrap_or(0);
-            format!("{}...", &url[..cut])
-        } else {
-            url.to_string()
-        }
+        rest.to_string()
     }
 }
 
@@ -193,6 +195,12 @@ mod tests {
             mask_url("https://user:pass@proxy.example.com"),
             "https://proxy.example.com"
         );
+    }
+
+    #[test]
+    fn test_mask_url_drops_credentials_without_scheme() {
+        assert_eq!(mask_url("user:pass@127.0.0.1:7890"), "127.0.0.1:7890");
+        assert_eq!(mask_url("1user:p@ss@127.0.0.1:7890"), "127.0.0.1:7890");
     }
 
     #[test]

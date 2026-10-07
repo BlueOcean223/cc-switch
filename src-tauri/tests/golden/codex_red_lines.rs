@@ -31,10 +31,10 @@
 //! | 24 | `web_search = "disabled"` 只删 CC Switch 写的哨兵值，用户的其他值保留 | 本文件 |
 //! | 25 | auth.json 删不掉时切换照常成功，返回 `codex_auth_cleanup_failed` 警告 | 本文件 |
 //!
-//! 只替换关键字段之后新增的性质锁在 crate 内 `mode::controller` 的 `codex_*` 测试里：其余
+//! 只替换关键字段之后新增的性质锁在 crate 内 `mode::direct_tests` 的 `codex_*` 测试里：其余
 //! 字节不动、独有字段只删上一家的值、切回官方留下休眠表、生效的 profile 覆盖选路时拒绝
 //! 写入、只清能证明是 CC Switch 写的旧表、保留登录关闭时删掉的登录切回官方时还回来、
-//! 切换中途 CLI 刷新了登录就停下、契约相同时不碰客户端文件、编辑器的全局改动。
+//! 切换中途 CLI 刷新了登录就停下、编辑器的全局改动。
 //!
 //! 已删除、不再锁的机制：统一会话桶的注入与剥离、回填（token 提回 auth、剥 MCP、保留
 //! modelCatalog）、给用户表补 name / wire_api、接管的备份与恢复。CX-15、CX-20～22 锁的是
@@ -48,7 +48,7 @@ use toml::Table;
 
 use cc_switch_lib::{
     get_codex_auth_path, get_codex_config_path, update_settings, AppError, AppSettings, AppState,
-    AppType, Provider, ProviderMeta, ProviderService,
+    AppType, Provider, ProviderService,
 };
 
 use crate::support::{create_test_state, reset_test_fs, test_mutex};
@@ -73,11 +73,6 @@ fn codex(id: &str, key: Option<&str>, config: &str) -> Provider {
         None => json!({}),
     };
     provider(id, json!({ "auth": auth, "config": config }), None)
-}
-
-fn with_meta(mut provider: Provider, meta: ProviderMeta) -> Provider {
-    provider.meta = Some(meta);
-    provider
 }
 
 fn relay_config(id: &str, base_url: &str) -> String {
@@ -676,16 +671,10 @@ fn web_search_sentinel_is_the_only_value_removed() {
     reset_test_fs();
     set_login_preservation(false);
     // MiMo 的原生 Responses 网关拒收 web_search：配了模型目录时 CC Switch 写哨兵值关掉它。
-    let mut rejecting = with_meta(
-        codex(
-            "mimo",
-            Some("sk-m"),
-            &relay_config("relay", "https://api.xiaomimimo.com/v1"),
-        ),
-        ProviderMeta {
-            api_format: Some("openai_responses".to_string()),
-            ..Default::default()
-        },
+    let mut rejecting = codex(
+        "mimo",
+        Some("sk-m"),
+        &relay_config("relay", "https://api.xiaomimimo.com/v1"),
     );
     rejecting.settings_config["modelCatalog"] = json!({ "models": [{ "model": "mimo-v2" }] });
     let state = setup(

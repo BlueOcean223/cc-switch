@@ -73,7 +73,6 @@ pub(crate) fn should_trigger_auto_sync_for_table(table: &str) -> bool {
             | "skill_repos"
             | "profiles"
             | "settings"
-            | "proxy_config"
     )
 }
 
@@ -503,7 +502,6 @@ mod tests {
             "skill_repos",
             "profiles",
             "settings",
-            "proxy_config",
         ] {
             assert!(
                 should_trigger_auto_sync_for_table(table),
@@ -512,12 +510,7 @@ mod tests {
         }
 
         assert!(should_trigger_auto_sync_for_table("  PROFILES  "));
-        for table in [
-            "proxy_request_logs",
-            "provider_health",
-            "session_log_sync",
-            "model_pricing",
-        ] {
+        for table in ["proxy_request_logs", "session_log_sync", "model_pricing"] {
             assert!(
                 !should_trigger_auto_sync_for_table(table),
                 "{table} should not trigger automatic snapshot upload"

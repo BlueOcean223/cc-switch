@@ -642,7 +642,6 @@
     "checkUpdateFailed": "Failed to check for updates, please try again later.",
     "openReleaseNotesFailed": "Failed to open release notes",
     "releaseNotes": "Release Notes",
-    "officialWebsite": "Official Website",
     "github": "GitHub",
     "starPrompt": "If CC Switch has helped you, please star us on GitHub — it means a lot to us",
     "manualInstallCommands": "Manual Install Commands",
@@ -1796,6 +1795,8 @@
     "organizationIdPlaceholder": "e.g. org-xxxxxx",
     "projectId": "Project ID",
     "projectIdPlaceholder": "e.g. proj-xxxxxx",
+    "defaultPlan": "Default Plan",
+    "queryFailedMessage": "Query failed",
     "timeoutSeconds": "Timeout (seconds)",
     "timeoutMustBeInteger": "Timeout must be an integer, decimal part ignored",
     "timeoutCannotBeNegative": "Timeout cannot be negative",
@@ -3210,12 +3211,6 @@
     "headerUpdatesShow": "Show only Skills with updates",
     "headerUpdatesClear": "Show all Skills",
     "updateAllCount": "Update all ({{count}})"
-  },
-  "newLayoutNotice": {
-    "title": "CC Switch has a new look",
-    "body": "This version redesigns the interface, so a few things have moved:\n• Modes now sit at the top of each app page\n• Usage and Accounts are in the sidebar\nSee the release notes for everything that changed.",
-    "viewReleaseNotes": "View release notes",
-    "confirm": "Got it"
   },
   "whatsNew": {
     "updatedTo": "Updated to v{{version}}",

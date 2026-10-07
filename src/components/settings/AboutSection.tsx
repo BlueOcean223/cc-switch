@@ -3,7 +3,6 @@ import {
   Download,
   ExternalLink,
   Github,
-  Globe,
   Info,
   Loader2,
   RefreshCw,
@@ -238,15 +237,6 @@ export function AboutSection({ isPortable }: AboutSectionProps) {
         >
           <Github className="h-3.5 w-3.5" />
           {t("settings.github")}
-        </Button>
-        <Button
-          type="button"
-          variant="neutral"
-          size="compact"
-          onClick={() => settingsApi.openExternal("https://ccswitch.io")}
-        >
-          <Globe className="h-3.5 w-3.5" />
-          {t("settings.officialWebsite")}
         </Button>
         <Button
           type="button"

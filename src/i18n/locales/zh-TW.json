@@ -642,7 +642,6 @@
     "checkUpdateFailed": "檢查更新失敗，請稍後重試。",
     "openReleaseNotesFailed": "開啟更新日誌失敗",
     "releaseNotes": "更新日誌",
-    "officialWebsite": "官方網站",
     "github": "GitHub",
     "starPrompt": "如果 CC Switch 幫到了你，請在 GitHub 點個 Star，這對我們意義重大",
     "manualInstallCommands": "手動安裝指令",
@@ -1796,6 +1795,8 @@
     "organizationIdPlaceholder": "例如：org-xxxxxx",
     "projectId": "專案 ID",
     "projectIdPlaceholder": "例如：proj-xxxxxx",
+    "defaultPlan": "預設方案",
+    "queryFailedMessage": "查詢失敗",
     "timeoutSeconds": "逾時時間（秒）",
     "timeoutMustBeInteger": "逾時時間必須為整數，小數部分已忽略",
     "timeoutCannotBeNegative": "逾時時間不能為負數",
@@ -3210,12 +3211,6 @@
     "headerUpdatesShow": "只看可更新的 Skill",
     "headerUpdatesClear": "顯示全部 Skill",
     "updateAllCount": "全部更新（{{count}} 個）"
-  },
-  "newLayoutNotice": {
-    "title": "介面改版了",
-    "body": "CC Switch 這一版重新設計了介面，常用功能的位置有變化：\n• 模式移到了每個應用頁的頂部\n• 用量統計和授權中心移到了左側邊欄\n想了解全部變化，可以看看這一版的更新說明。",
-    "viewReleaseNotes": "查看更新說明",
-    "confirm": "我知道了"
   },
   "whatsNew": {
     "updatedTo": "已更新至 v{{version}}",

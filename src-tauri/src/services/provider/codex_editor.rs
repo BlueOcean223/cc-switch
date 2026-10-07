@@ -27,7 +27,7 @@ use crate::live::engine::{read_current, LiveFile};
 use crate::live::floor;
 use crate::live::patch::toml::parse;
 use crate::live::project::codex::{
-    is_keyless_fallback, CodexProjection, Route, RowInput, OFFICIAL_PROXY_ROUTE_ID, ROUTE_ID,
+    is_keyless_fallback, CodexProjection, Route, RowInput, ROUTE_ID,
 };
 use crate::mode::operation::{AppWrite, FileChange};
 use crate::mode::state::{op, PendingTarget};
@@ -35,7 +35,7 @@ use crate::provider::Provider;
 use crate::store::AppState;
 
 use super::claude_editor::{ConflictPolicy, EditorView, InactiveField};
-use super::codex_direct::{self, Owner, Prepared, Target};
+use super::codex_direct::{self, Prepared, Target};
 use super::editor_toml::{self, config_text, insert_at, render, Entry, TomlEdits};
 
 fn app() -> &'static str {
@@ -59,8 +59,7 @@ fn entries(doc: &DocumentMut, skip_routes: &[&str]) -> Vec<Entry> {
         if key == "model_providers" {
             if let Some(providers) = item.as_table_like() {
                 for (id, table) in providers.iter() {
-                    if id == ROUTE_ID || id == OFFICIAL_PROXY_ROUTE_ID || skip_routes.contains(&id)
-                    {
+                    if id == ROUTE_ID || skip_routes.contains(&id) {
                         continue;
                     }
                     entries.push(Entry {
@@ -114,7 +113,7 @@ pub fn view(
         Provider::with_id(String::new(), String::new(), settings_config.clone(), None);
     provider.category = category.map(str::to_string);
     let live_owner = LiveOwner::read(state)?;
-    let planned = plan_for_view(&state.db, &live_owner.owner(), &provider)?;
+    let planned = plan_for_view(&state.db, live_owner.owner(), &provider)?;
     planned.config().apply_to(&path, &mut doc)?;
 
     // Key 在 API Key 输入框里（行的 auth），TOML 里不再重复显示。
@@ -177,7 +176,7 @@ fn with_pending_key(settings: &Value) -> Option<Value> {
 /// 当前供应商），它们用的都是真实的行。
 fn plan_for_view(
     db: &Database,
-    owner: &Owner<'_>,
+    owner: Option<&Provider>,
     provider: &Provider,
 ) -> Result<codex_direct::Planned, AppError> {
     let plan = |provider: &Provider| {
@@ -249,8 +248,8 @@ impl LiveOwner {
         })
     }
 
-    fn owner(&self) -> Owner<'_> {
-        self.current.as_ref().map_or(Owner::None, Owner::Provider)
+    fn owner(&self) -> Option<&Provider> {
+        self.current.as_ref()
     }
 }
 
@@ -263,7 +262,7 @@ pub(crate) fn live_exclusive(state: &AppState) -> Result<Vec<Entry>, AppError> {
     let path = get_codex_config_path();
     let pre = read_current(&path)?;
     let doc = parse(&path, pre.as_deref())?;
-    let owned = codex_direct::outgoing_exclusive(&LiveOwner::read(state)?.owner());
+    let owned = codex_direct::outgoing_exclusive(LiveOwner::read(state)?.owner());
     Ok(exclusive_entries(&doc)
         .into_iter()
         .filter(|entry| {
@@ -467,10 +466,9 @@ pub(crate) fn write_live(
             target,
             set_pointer,
         } => {
-            let owner = prev.map_or(Owner::None, Owner::Provider);
             let spec = Target(Some(target));
-            let prepared = codex_direct::prepare(manager, &owner, &spec)?;
-            let planned = codex_direct::plan(db, &owner, &spec, &prepared)?;
+            let prepared = codex_direct::prepare(manager, prev, &spec)?;
+            let planned = codex_direct::plan(db, prev, &spec, &prepared)?;
             codex_direct::run_with_edits(
                 db,
                 if set_pointer { op::SWITCH } else { op::APPLY },

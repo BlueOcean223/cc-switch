@@ -381,16 +381,22 @@ pub(crate) fn remove_common_config_from_settings(
 
 /// 把 `provider` 写进 live（live 当前对应的就是它：同步、编辑当前供应商）。切换式应用只
 /// 替换关键字段；通用配置片段冻结在库里只给旧版读，这里不再合并。
+///
+/// `prev` 是 live 现在对应的那一版供应商行（编辑前的行），Claude 按它删上一版带进来的
+/// 独有字段，Grok Build 按它推断旧表名；`None` 表示 live 对应的就是 `provider` 自己。
+/// 调用方持有这个应用的切换锁（`mode::lock_settled_blocking`），并且在拿锁之后才读谁是
+/// 当前供应商。
 pub(crate) fn write_live_for_state(
     state: &AppState,
     app_type: &AppType,
     provider: &Provider,
+    prev: Option<&Provider>,
 ) -> Result<(), AppError> {
     let db = state.db.as_ref();
+    let prev = prev.or(Some(provider));
     if matches!(app_type, AppType::Claude) {
-        // Claude 不再整份写，也不合并片段：只替换关键字段和独有字段。live 当前对应的
-        // 就是这个供应商，它带进来的独有字段按同一行比对。
-        super::claude_direct::reapply(db, Some(provider), provider)?;
+        // Claude 不再整份写，也不合并片段：只替换关键字段和独有字段。
+        super::claude_direct::reapply(db, prev, provider)?;
         return Ok(());
     }
     if matches!(app_type, AppType::Codex) {
@@ -399,7 +405,7 @@ pub(crate) fn write_live_for_state(
             db,
             &state.codex_oauth_manager,
             crate::mode::state::op::APPLY,
-            super::codex_direct::Owner::Provider(provider),
+            Some(provider),
             Some(provider),
             crate::mode::state::PendingTarget::default(),
         )?;
@@ -411,7 +417,7 @@ pub(crate) fn write_live_for_state(
         return Ok(());
     }
     if matches!(app_type, AppType::GrokBuild) {
-        super::grok_direct::reapply(db, Some(provider), provider)?;
+        super::grok_direct::reapply(db, prev, provider)?;
         return Ok(());
     }
 
@@ -699,7 +705,7 @@ fn sync_all_providers_to_live(state: &AppState, app_type: &AppType) -> Result<()
             continue;
         }
 
-        if let Err(e) = write_live_for_state(state, app_type, provider) {
+        if let Err(e) = write_live_for_state(state, app_type, provider, None) {
             log::warn!(
                 "Failed to sync {:?} provider '{}' to live: {e}",
                 app_type,
@@ -729,28 +735,6 @@ pub(crate) fn sync_additive_app_to_live(
     Ok(())
 }
 
-/// 把 `provider` 同步到 live。
-///
-/// `prev` 是 live 现在对应的那一版供应商行（编辑前的行），Claude 按它删上一版带进来的
-/// 独有字段；`None` 表示 live 对应的就是 `provider` 自己。调用方持有这个应用的切换锁
-/// （`mode::lock_settled_blocking`），并且在拿锁之后才读谁是当前供应商。
-pub(crate) fn sync_live_for_provider(
-    state: &AppState,
-    app_type: &AppType,
-    provider: &Provider,
-    prev: Option<&Provider>,
-) -> Result<(), AppError> {
-    if matches!(app_type, AppType::Claude) {
-        super::claude_direct::reapply(state.db.as_ref(), prev.or(Some(provider)), provider)?;
-    } else if matches!(app_type, AppType::GrokBuild) {
-        // 编辑前的行用来推断旧版写的表（还没有写入记录时），改了表名也能删掉旧表。
-        super::grok_direct::reapply(state.db.as_ref(), prev.or(Some(provider)), provider)?;
-    } else {
-        write_live_for_state(state, app_type, provider)?;
-    }
-    Ok(())
-}
-
 /// 把当前供应商同步到 live；没有当前供应商时返回 `false`。返回时已经放开切换锁。
 pub(crate) fn sync_current_provider_for_app_live(
     state: &AppState,
@@ -760,7 +744,7 @@ pub(crate) fn sync_current_provider_for_app_live(
     let Some(provider) = crate::mode::current::provider(&state.db, app_type)? else {
         return Ok(false);
     };
-    sync_live_for_provider(state, app_type, &provider, None)?;
+    write_live_for_state(state, app_type, &provider, None)?;
     Ok(true)
 }
 

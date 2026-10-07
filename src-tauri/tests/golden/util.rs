@@ -136,7 +136,7 @@ pub fn dump_provider_rows(
     let mut stmt = conn
         .prepare(
             "SELECT id, name, settings_config, website_url, category, sort_index, notes, icon,
-                    icon_color, meta, is_current, in_failover_queue
+                    icon_color, meta, is_current
              FROM providers WHERE app_type = ?1 ORDER BY id",
         )
         .expect("prepare providers query");
@@ -154,7 +154,6 @@ pub fn dump_provider_rows(
                 ("icon_color", opt_text(row.get::<_, Option<String>>(8)?)),
                 ("meta", row.get::<_, String>(9)?),
                 ("is_current", row.get::<_, bool>(10)?.to_string()),
-                ("in_failover_queue", row.get::<_, bool>(11)?.to_string()),
             ])
         })
         .expect("query providers");

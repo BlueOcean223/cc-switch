@@ -49,7 +49,7 @@ vi.mock("@/components/providers/forms/ProviderForm", () => ({
   }: {
     onSubmit: (values: ProviderFormValues) => void;
     onSubmitReadyChange?: (isReady: boolean) => void;
-    onManageAuthAccounts?: (target: "codex_oauth") => void;
+    onManageAuthAccounts?: () => void;
     onEditorBaseChange?: (
       base: Record<string, unknown> | null,
       draft?: Record<string, unknown>,
@@ -72,10 +72,7 @@ vi.mock("@/components/providers/forms/ProviderForm", () => ({
           onSubmit(mockFormValues);
         }}
       >
-        <button
-          type="button"
-          onClick={() => onManageAuthAccounts?.("codex_oauth")}
-        >
+        <button type="button" onClick={() => onManageAuthAccounts?.()}>
           manage-auth
         </button>
       </form>
@@ -84,8 +81,8 @@ vi.mock("@/components/providers/forms/ProviderForm", () => ({
 }));
 
 vi.mock("@/components/providers/AuthSettingsPanel", () => ({
-  AuthSettingsPanel: ({ target }: { target: string | null }) =>
-    target ? <div data-testid="auth-settings-panel">{target}</div> : null,
+  AuthSettingsPanel: ({ isOpen }: { isOpen: boolean }) =>
+    isOpen ? <div data-testid="auth-settings-panel" /> : null,
 }));
 
 describe("AddProviderDialog", () => {
@@ -305,9 +302,7 @@ describe("AddProviderDialog", () => {
     const { rerender } = render(<AddProviderDialog open {...props} />);
 
     fireEvent.click(screen.getByRole("button", { name: "manage-auth" }));
-    expect(screen.getByTestId("auth-settings-panel")).toHaveTextContent(
-      "codex_oauth",
-    );
+    expect(screen.getByTestId("auth-settings-panel")).toBeInTheDocument();
 
     rerender(<AddProviderDialog open={false} {...props} />);
     rerender(<AddProviderDialog open {...props} />);

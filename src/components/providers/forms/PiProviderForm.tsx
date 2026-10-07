@@ -43,10 +43,7 @@ import { ProviderPresetSelector } from "./ProviderPresetSelector";
 import { RequestHeadersEditor } from "./RequestHeadersEditor";
 import { StructuredOptionsEditor } from "./StructuredOptionsEditor";
 import { ApiKeySection, EndpointField, ModelDropdown } from "./shared";
-import {
-  findRequestHeaderValue,
-  normalizeRequestHeaders,
-} from "./helpers/requestHeaders";
+import { normalizeRequestHeaders } from "./helpers/requestHeaders";
 import {
   piProviderPresets,
   type PiApiFormat,
@@ -1064,15 +1061,10 @@ export function PiProviderForm({
       return;
     }
 
-    const customUserAgent = findRequestHeaderValue(
-      requestHeaders,
-      "user-agent",
-    );
-
     const requestGeneration = ++modelFetchGenerationRef.current;
     setFetchedModels([]);
     setIsFetchingModels(true);
-    fetchModelsForConfig(endpoint, apiKey, undefined, customUserAgent, {
+    fetchModelsForConfig(endpoint, apiKey, undefined, {
       apiFormat: api,
       requestHeaders,
     })

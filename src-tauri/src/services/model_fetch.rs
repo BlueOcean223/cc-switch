@@ -4,7 +4,7 @@
 //! 主要面向第三方聚合站（硅基流动、OpenRouter 等），以及把 Anthropic
 //! 协议挂在兼容子路径上的官方供应商（DeepSeek、Kimi、智谱 GLM 等）。
 
-use reqwest::header::{HeaderMap, HeaderName, HeaderValue, AUTHORIZATION, USER_AGENT};
+use reqwest::header::{HeaderMap, HeaderName, HeaderValue, AUTHORIZATION};
 use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -84,13 +84,11 @@ pub async fn fetch_models(
     base_url: &str,
     api_key: &str,
     models_url_override: Option<&str>,
-    user_agent: Option<HeaderValue>,
     api_format: Option<&str>,
     request_headers: Option<&BTreeMap<String, String>>,
 ) -> Result<Vec<FetchedModel>, String> {
     let candidates = build_models_url_candidates(base_url, models_url_override)?;
-    let headers =
-        build_model_fetch_headers(api_key, api_format, user_agent.as_ref(), request_headers)?;
+    let headers = build_model_fetch_headers(api_key, api_format, request_headers)?;
     let client = crate::http_client::get();
     let mut last_err: Option<String> = None;
     let mut known_secrets = vec![api_key.to_string()];
@@ -169,7 +167,6 @@ fn redact_model_fetch_error_body(body: String, known_secrets: &[String]) -> Stri
 fn build_model_fetch_headers(
     api_key: &str,
     api_format: Option<&str>,
-    user_agent: Option<&HeaderValue>,
     request_headers: Option<&BTreeMap<String, String>>,
 ) -> Result<HeaderMap, String> {
     let custom_count = request_headers.map_or(0, BTreeMap::len);
@@ -202,10 +199,6 @@ fn build_model_fetch_headers(
             ),
         };
         headers.insert(name, value);
-    }
-
-    if let Some(user_agent) = user_agent {
-        headers.insert(USER_AGENT, user_agent.clone());
     }
 
     if let Some(request_headers) = request_headers {
@@ -328,19 +321,17 @@ mod tests {
     #[test]
     fn model_fetch_headers_follow_pi_api_format() {
         let anthropic =
-            build_model_fetch_headers("anthropic-key", Some("anthropic-messages"), None, None)
-                .unwrap();
+            build_model_fetch_headers("anthropic-key", Some("anthropic-messages"), None).unwrap();
         assert_eq!(anthropic["x-api-key"], "anthropic-key");
         assert!(!anthropic.contains_key(AUTHORIZATION));
 
         let google =
-            build_model_fetch_headers("google-key", Some("google-generative-ai"), None, None)
-                .unwrap();
+            build_model_fetch_headers("google-key", Some("google-generative-ai"), None).unwrap();
         assert_eq!(google["x-goog-api-key"], "google-key");
         assert!(!google.contains_key(AUTHORIZATION));
 
         let openai =
-            build_model_fetch_headers("openai-key", Some("openai-responses"), None, None).unwrap();
+            build_model_fetch_headers("openai-key", Some("openai-responses"), None).unwrap();
         assert_eq!(openai[AUTHORIZATION], "Bearer openai-key");
     }
 
@@ -351,7 +342,7 @@ mod tests {
             ("X-Tenant".to_string(), "tenant-a".to_string()),
         ]);
         let headers =
-            build_model_fetch_headers("", Some("openai-completions"), None, Some(&custom)).unwrap();
+            build_model_fetch_headers("", Some("openai-completions"), Some(&custom)).unwrap();
         assert_eq!(headers[AUTHORIZATION], "Token literal");
         assert_eq!(headers["x-tenant"], "tenant-a");
 
@@ -360,7 +351,6 @@ mod tests {
         let headers = build_model_fetch_headers(
             "provider-key",
             Some("anthropic-messages"),
-            None,
             Some(&override_default),
         )
         .unwrap();
@@ -369,9 +359,9 @@ mod tests {
 
     #[test]
     fn model_fetch_headers_reject_invalid_or_missing_credentials() {
-        assert!(build_model_fetch_headers("", None, None, None).is_err());
+        assert!(build_model_fetch_headers("", None, None).is_err());
         let invalid = BTreeMap::from([("bad header".to_string(), "literal-value".to_string())]);
-        assert!(build_model_fetch_headers("", None, None, Some(&invalid)).is_err());
+        assert!(build_model_fetch_headers("", None, Some(&invalid)).is_err());
     }
 
     #[test]

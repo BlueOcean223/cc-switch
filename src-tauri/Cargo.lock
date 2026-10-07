@@ -661,7 +661,6 @@ dependencies = [
  "dirs 5.0.1",
  "futures",
  "hmac",
- "http",
  "indexmap 2.13.0",
  "json-five",
  "json5",

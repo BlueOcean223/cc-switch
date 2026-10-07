@@ -141,7 +141,6 @@ mod tests {
             output_tokens: 500,
             cache_read_tokens: 200,
             cache_creation_tokens: 100,
-            model: None,
         };
 
         let pricing = ModelPricing::from_strings("3.0", "15.0", "0.3", "3.75").unwrap();
@@ -172,7 +171,6 @@ mod tests {
             output_tokens: 500,
             cache_read_tokens: 200,
             cache_creation_tokens: 100,
-            model: None,
         };
 
         let pricing = ModelPricing::from_strings("3.0", "15.0", "0.3", "3.75").unwrap();
@@ -198,7 +196,6 @@ mod tests {
             output_tokens: 0,
             cache_read_tokens: 600,
             cache_creation_tokens: 0,
-            model: None,
         };
         let pricing = ModelPricing::from_strings("10", "0", "1", "0").unwrap();
 
@@ -216,7 +213,6 @@ mod tests {
             output_tokens: 0,
             cache_read_tokens: 0,
             cache_creation_tokens: 0,
-            model: None,
         };
 
         let pricing = ModelPricing::from_strings("3.0", "15.0", "0", "0").unwrap();
@@ -237,7 +233,6 @@ mod tests {
             output_tokens: 1,
             cache_read_tokens: 1,
             cache_creation_tokens: 1,
-            model: None,
         };
 
         let pricing = ModelPricing::from_strings("0.075", "0.3", "0.01875", "0.075").unwrap();

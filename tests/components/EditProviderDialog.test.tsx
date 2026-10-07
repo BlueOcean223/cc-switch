@@ -76,7 +76,7 @@ vi.mock("@/components/providers/forms/ProviderForm", () => ({
       iconColor?: string;
     }) => void;
     onSubmitReadyChange?: (isReady: boolean) => void;
-    onManageAuthAccounts?: (target: "codex_oauth") => void;
+    onManageAuthAccounts?: () => void;
     appId?: string;
   }) => {
     useEffect(() => {
@@ -114,10 +114,7 @@ vi.mock("@/components/providers/forms/ProviderForm", () => ({
         <output data-testid="settings-config">
           {JSON.stringify(initialData.settingsConfig ?? {})}
         </output>
-        <button
-          type="button"
-          onClick={() => onManageAuthAccounts?.("codex_oauth")}
-        >
+        <button type="button" onClick={() => onManageAuthAccounts?.()}>
           manage-auth
         </button>
       </form>
@@ -126,8 +123,8 @@ vi.mock("@/components/providers/forms/ProviderForm", () => ({
 }));
 
 vi.mock("@/components/providers/AuthSettingsPanel", () => ({
-  AuthSettingsPanel: ({ target }: { target: string | null }) =>
-    target ? <div data-testid="auth-settings-panel">{target}</div> : null,
+  AuthSettingsPanel: ({ isOpen }: { isOpen: boolean }) =>
+    isOpen ? <div data-testid="auth-settings-panel" /> : null,
 }));
 
 import { EditProviderDialog } from "@/components/providers/EditProviderDialog";
@@ -316,9 +313,7 @@ describe("EditProviderDialog", () => {
     const { rerender } = render(<EditProviderDialog open {...props} />);
 
     fireEvent.click(await screen.findByRole("button", { name: "manage-auth" }));
-    expect(screen.getByTestId("auth-settings-panel")).toHaveTextContent(
-      "codex_oauth",
-    );
+    expect(screen.getByTestId("auth-settings-panel")).toBeInTheDocument();
 
     rerender(<EditProviderDialog open={false} {...props} />);
     rerender(<EditProviderDialog open {...props} />);

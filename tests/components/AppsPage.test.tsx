@@ -25,11 +25,6 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("@/lib/api", () => ({ settingsApi: mocks }));
-vi.mock("@/lib/api/providers", () => ({
-  providersApi: {
-    getClaudeDesktopStatus: async () => ({ supported: true, configured: true }),
-  },
-}));
 vi.mock("@/hooks/useSettings", () => ({
   useSettings: () => ({
     settings: { visibleApps: undefined },

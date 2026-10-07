@@ -122,9 +122,6 @@ export interface ProviderMeta {
   endpointAutoSelect?: boolean;
   // 合作伙伴促销 key（后端靠 "google-official" 识别 Google 官方 Gemini）
   partnerPromotionKey?: string;
-  // Codex：决定写进模型目录的工具形态，新存的第三方供应商一律是 "openai_responses"
-  //（去掉 Codex 的 freeform 自定义工具）。旧数据里可能还留着别的值。
-  apiFormat?: string;
   // 通用认证绑定
   authBinding?: AuthBinding;
   // Claude 认证字段名
@@ -270,8 +267,6 @@ export interface Settings {
   unifyCodexMigrateExisting?: boolean;
   // User has confirmed the first-run welcome notice
   firstRunNoticeConfirmed?: boolean;
-  // User has confirmed the one-time "new layout" dialog shown to upgrading users
-  newLayoutNoticeConfirmed?: boolean;
   // Highest app version whose "what's new" summary the user has seen on this device
   whatsNewSeenVersion?: string;
   // User has confirmed the auto-sync traffic warning

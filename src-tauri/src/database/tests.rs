@@ -301,22 +301,9 @@ fn schema_migration_aligns_column_defaults_and_types() {
 }
 
 #[test]
-fn schema_create_tables_include_pricing_model_columns() {
+fn schema_create_tables_include_request_model_column() {
     let conn = Connection::open_in_memory().expect("open memory db");
     Database::create_tables_on_conn(&conn).expect("create tables");
-
-    let multiplier = get_column_info(&conn, "proxy_config", "default_cost_multiplier");
-    assert_eq!(multiplier.r#type, "TEXT");
-    assert_eq!(multiplier.notnull, 1);
-    assert_eq!(normalize_default(&multiplier.default).as_deref(), Some("1"));
-
-    let pricing_source = get_column_info(&conn, "proxy_config", "pricing_model_source");
-    assert_eq!(pricing_source.r#type, "TEXT");
-    assert_eq!(pricing_source.notnull, 1);
-    assert_eq!(
-        normalize_default(&pricing_source.default).as_deref(),
-        Some("response")
-    );
 
     let request_model = get_column_info(&conn, "proxy_request_logs", "request_model");
     assert_eq!(request_model.r#type, "TEXT");
@@ -324,7 +311,7 @@ fn schema_create_tables_include_pricing_model_columns() {
 }
 
 #[test]
-fn schema_migration_v4_adds_pricing_model_columns() {
+fn schema_migration_v4_adds_request_model_column() {
     let conn = Connection::open_in_memory().expect("open memory db");
     conn.execute_batch(
         r#"
@@ -354,18 +341,8 @@ fn schema_migration_v4_adds_pricing_model_columns() {
     Database::set_user_version(&conn, 4).expect("set user_version=4");
     Database::apply_schema_migrations_on_conn(&conn).expect("apply migrations");
 
-    let multiplier = get_column_info(&conn, "proxy_config", "default_cost_multiplier");
-    assert_eq!(multiplier.r#type, "TEXT");
-    assert_eq!(multiplier.notnull, 1);
-    assert_eq!(normalize_default(&multiplier.default).as_deref(), Some("1"));
-
-    let pricing_source = get_column_info(&conn, "proxy_config", "pricing_model_source");
-    assert_eq!(pricing_source.r#type, "TEXT");
-    assert_eq!(pricing_source.notnull, 1);
-    assert_eq!(
-        normalize_default(&pricing_source.default).as_deref(),
-        Some("response")
-    );
+    // 代理配置表在 v21 删除。
+    assert!(!Database::table_exists(&conn, "proxy_config").expect("check proxy_config"));
 
     let request_model = get_column_info(&conn, "proxy_request_logs", "request_model");
     assert_eq!(request_model.r#type, "TEXT");
@@ -515,53 +492,6 @@ fn schema_create_tables_repairs_dev_global_profile_marker() {
 }
 
 #[test]
-fn schema_create_tables_repairs_legacy_proxy_config_singleton_to_per_app() {
-    let conn = Connection::open_in_memory().expect("open memory db");
-
-    // 模拟测试版 v2：user_version=2，但 proxy_config 仍是单例结构（无 app_type）
-    Database::set_user_version(&conn, 2).expect("set user_version");
-    conn.execute_batch(
-        r#"
-        CREATE TABLE proxy_config (
-            id INTEGER PRIMARY KEY,
-            enabled INTEGER NOT NULL DEFAULT 0,
-            listen_address TEXT NOT NULL DEFAULT '127.0.0.1',
-            listen_port INTEGER NOT NULL DEFAULT 5000,
-            max_retries INTEGER NOT NULL DEFAULT 3,
-            request_timeout INTEGER NOT NULL DEFAULT 300,
-            enable_logging INTEGER NOT NULL DEFAULT 1,
-            target_app TEXT NOT NULL DEFAULT 'claude',
-            created_at TEXT NOT NULL DEFAULT (datetime('now')),
-            updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-        );
-        INSERT INTO proxy_config (id, enabled) VALUES (1, 1);
-        "#,
-    )
-    .expect("seed legacy proxy_config");
-
-    Database::create_tables_on_conn(&conn).expect("create tables should repair proxy_config");
-
-    assert!(
-        Database::has_column(&conn, "proxy_config", "app_type").expect("check app_type"),
-        "proxy_config should be migrated to per-app structure"
-    );
-
-    let count: i32 = conn
-        .query_row("SELECT COUNT(*) FROM proxy_config", [], |r| r.get(0))
-        .expect("count rows");
-    assert_eq!(count, 4, "per-app proxy_config should have 4 rows");
-
-    // 新结构下应能按 app_type 查询
-    let _: i32 = conn
-        .query_row(
-            "SELECT COUNT(*) FROM proxy_config WHERE app_type = 'claude'",
-            [],
-            |r| r.get(0),
-        )
-        .expect("query by app_type");
-}
-
-#[test]
 fn migration_from_v3_8_schema_v1_to_current_schema_v3() {
     let conn = Connection::open_in_memory().expect("open memory db");
     conn.execute("PRAGMA foreign_keys = ON;", [])
@@ -611,7 +541,7 @@ fn migration_from_v3_8_schema_v1_to_current_schema_v3() {
         SCHEMA_VERSION
     );
 
-    // v1 -> v2：providers 新增字段必须补齐
+    // v21 删掉了路由时代的 providers 列
     for column in [
         "cost_multiplier",
         "limit_daily_usd",
@@ -620,12 +550,12 @@ fn migration_from_v3_8_schema_v1_to_current_schema_v3() {
         "in_failover_queue",
     ] {
         assert!(
-            Database::has_column(&conn, "providers", column).expect("check column"),
-            "providers.{column} should exist after migration"
+            !Database::has_column(&conn, "providers", column).expect("check column"),
+            "providers.{column} should be dropped after migration"
         );
     }
 
-    // 旧 provider 不应丢失，且新增字段应有默认值
+    // 旧 provider 不应丢失
     let provider_count: i64 = conn
         .query_row(
             "SELECT COUNT(*) FROM providers WHERE id = 'p1' AND app_type = 'claude'",
@@ -634,15 +564,6 @@ fn migration_from_v3_8_schema_v1_to_current_schema_v3() {
         )
         .expect("count providers");
     assert_eq!(provider_count, 1);
-
-    let cost_multiplier: String = conn
-        .query_row(
-            "SELECT cost_multiplier FROM providers WHERE id = 'p1' AND app_type = 'claude'",
-            [],
-            |r| r.get(0),
-        )
-        .expect("read cost_multiplier");
-    assert_eq!(cost_multiplier, "1.0");
 
     // v2 -> v3：skills 表重建为统一结构，并设置 pending 标记（后续由启动时扫描文件系统重建数据）
     assert!(
@@ -685,11 +606,12 @@ fn migration_from_v3_8_schema_v1_to_current_schema_v3() {
         "skills migration snapshot should preserve legacy app mapping"
     );
 
-    // v3.9+ 新增：proxy_config 三行 seed 必须存在（否则 UI 会查不到默认值）
-    let proxy_rows: i64 = conn
-        .query_row("SELECT COUNT(*) FROM proxy_config", [], |r| r.get(0))
-        .expect("count proxy_config rows");
-    assert_eq!(proxy_rows, 4);
+    for table in ["proxy_config", "provider_health", "proxy_live_backup"] {
+        assert!(
+            !Database::table_exists(&conn, table).expect("check table"),
+            "{table} should be dropped after migration"
+        );
+    }
 
     // model_pricing 应具备默认数据（迁移时会 seed）
     let pricing_rows: i64 = conn

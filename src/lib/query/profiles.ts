@@ -112,22 +112,14 @@ export const useClearProfileMutation = () => {
 };
 
 export const useApplyProfileMutation = () => {
-  const queryClient = useQueryClient();
   const { t } = useTranslation();
 
   return useMutation({
     mutationFn: ({ id, scope }: { id: string; scope: ProfileScope }) =>
       profilesApi.apply(id, scope),
+    // 后端 apply_profile 已重建托盘，并发出 provider-switched / profile-applied，
+    // App.tsx 的监听会刷新供应商、项目、MCP 和 Skills 缓存。
     onSuccess: async (warnings) => {
-      await queryClient.invalidateQueries({ queryKey: ["profiles"] });
-      await queryClient.invalidateQueries({
-        queryKey: ["providers", "claude"],
-      });
-      await queryClient.invalidateQueries({ queryKey: ["providers", "codex"] });
-      await queryClient.invalidateQueries({ queryKey: ["mcp", "all"] });
-      await queryClient.invalidateQueries({ queryKey: ["skills"] });
-      await updateTrayMenuSafely();
-
       if (warnings.length > 0) {
         toast.warning(
           t("profiles.applyWarnings", {

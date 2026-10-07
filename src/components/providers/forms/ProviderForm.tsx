@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Form, FormField, FormItem, FormMessage } from "@/components/ui/form";
 import { ImeSafeInput } from "@/components/ui/ime-safe-input";
 import { providerSchema, type ProviderFormData } from "@/lib/schemas/provider";
-import { providersApi, type AppId, type ManagedAuthProvider } from "@/lib/api";
+import { providersApi, type AppId } from "@/lib/api";
 import type { ProviderEditorInactiveField } from "@/lib/api/providers";
 import {
   overlayClaudeProviderFields,
@@ -199,7 +199,7 @@ export interface ProviderFormProps {
   onCancel: () => void;
   onUniversalPresetSelect?: (preset: UniversalProviderPreset) => void;
   onManageUniversalProviders?: () => void;
-  onManageAuthAccounts?: (target: ManagedAuthProvider) => void;
+  onManageAuthAccounts?: () => void;
   onSubmittingChange?: (isSubmitting: boolean) => void;
   onSubmitReadyChange?: (isReady: boolean) => void;
   initialData?: {
@@ -1376,11 +1376,6 @@ function ProviderFormFull({
             accountId: selectedCodexAccountId ?? undefined,
           }
         : undefined,
-      // Codex 直连只讲 Responses：模型目录按原生 Responses 生成
-      apiFormat:
-        appId === "codex" && category !== "official"
-          ? "openai_responses"
-          : undefined,
       apiKeyField:
         appId === "claude" &&
         category !== "official" &&

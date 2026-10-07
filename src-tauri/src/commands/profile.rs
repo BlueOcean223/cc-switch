@@ -70,13 +70,7 @@ pub fn emit_profile_apply_events(
             .ok()
             .flatten()
             .unwrap_or_default();
-        let event_data = serde_json::json!({
-            "appType": app_type.as_str(),
-            "providerId": provider_id,
-        });
-        if let Err(e) = app.emit("provider-switched", event_data) {
-            log::error!("发射 provider-switched 事件失败: {e}");
-        }
+        crate::tray::emit_switched(app, app_type, &provider_id);
     }
     if let Err(e) = app.emit(
         "profile-applied",

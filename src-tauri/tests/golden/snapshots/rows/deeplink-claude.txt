@@ -9,7 +9,6 @@ icon: anthropic
 icon_color: NULL
 meta: {"commonConfigEnabled":true}
 is_current: true
-in_failover_queue: false
 
 id: relayb-<ts>
 name: Relay B
@@ -22,6 +21,5 @@ icon: NULL
 icon_color: NULL
 meta: {"commonConfigEnabled":true}
 is_current: false
-in_failover_queue: false
 
 endpoint: relaya-<ts> https://backup.relay-a.example

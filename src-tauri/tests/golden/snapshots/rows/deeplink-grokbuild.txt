@@ -9,5 +9,4 @@ icon: NULL
 icon_color: NULL
 meta: {}
 is_current: true
-in_failover_queue: false
 

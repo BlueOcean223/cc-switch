@@ -60,7 +60,6 @@ interface ManagedAccountsGroupProps {
   iconName: string;
   /** 「?」里的说明：这个服务的账号用在哪里 */
   help: string;
-  helpSide?: "top" | "bottom";
   accounts: GroupAccountRow[];
   status: "loading" | "error" | "ready";
   statusErrorText: string;
@@ -91,7 +90,6 @@ export function ManagedAccountsGroup({
   name,
   iconName,
   help,
-  helpSide,
   accounts,
   status,
   statusErrorText,
@@ -204,7 +202,6 @@ export function ManagedAccountsGroup({
               defaultValue: "{{service}} 账号怎么用",
               service: name,
             })}
-            side={helpSide}
           >
             {help}
           </HelpTip>

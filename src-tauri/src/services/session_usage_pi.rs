@@ -799,7 +799,6 @@ fn insert_pi_record(conn: &rusqlite::Connection, record: &PiUsageRecord) -> Resu
         output_tokens: record.output_tokens,
         cache_read_tokens: record.cache_read_tokens,
         cache_creation_tokens: record.cache_write_tokens,
-        model: Some(record.model.clone()),
     };
     let costs = record.costs.reported().or_else(|| {
         find_model_pricing(conn, &record.model).map(|pricing| {

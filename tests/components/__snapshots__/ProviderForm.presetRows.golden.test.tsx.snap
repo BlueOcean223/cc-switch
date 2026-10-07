@@ -158,7 +158,6 @@ exports[`ProviderForm 预设新增行金标 > codex > CherryIN 1`] = `
     "icon": "cherryin",
     "iconColor": "",
     "meta": {
-      "apiFormat": "openai_responses",
       "endpointAutoSelect": true,
     },
     "name": "CherryIN",
@@ -216,7 +215,6 @@ exports[`ProviderForm 预设新增行金标 > codex > xAI (Grok) 1`] = `
     "icon": "xai",
     "iconColor": "#000000",
     "meta": {
-      "apiFormat": "openai_responses",
       "endpointAutoSelect": true,
     },
     "name": "xAI (Grok)",

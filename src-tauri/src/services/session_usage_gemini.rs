@@ -282,7 +282,6 @@ fn insert_gemini_session_entry(
         output_tokens,
         cache_read_tokens: tokens.cached,
         cache_creation_tokens: 0,
-        model: Some(model.to_string()),
     };
 
     let pricing = find_gemini_pricing(&conn, model);

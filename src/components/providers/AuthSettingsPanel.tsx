@@ -1,16 +1,14 @@
 import { useTranslation } from "react-i18next";
 import { FullScreenPanel } from "@/components/common/FullScreenPanel";
 import { AuthCenterPanel } from "@/components/settings/AuthCenterPanel";
-import type { ManagedAuthProvider } from "@/lib/api";
 
 interface AuthSettingsPanelProps {
-  target: ManagedAuthProvider | null;
+  isOpen: boolean;
   onClose: () => void;
 }
 
-export function AuthSettingsPanel({ target, onClose }: AuthSettingsPanelProps) {
+export function AuthSettingsPanel({ isOpen, onClose }: AuthSettingsPanelProps) {
   const { t } = useTranslation();
-  const isOpen = target !== null;
 
   return (
     <FullScreenPanel
@@ -19,7 +17,7 @@ export function AuthSettingsPanel({ target, onClose }: AuthSettingsPanelProps) {
       onClose={onClose}
       motionPreset="slide-from-right"
     >
-      {target ? <AuthCenterPanel /> : null}
+      {isOpen ? <AuthCenterPanel /> : null}
     </FullScreenPanel>
   );
 }

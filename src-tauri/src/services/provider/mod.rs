@@ -73,7 +73,7 @@ pub fn reapply_current_codex_official_live(state: &AppState) -> Result<bool, App
     if !codex_direct::is_official(provider) {
         return Ok(false);
     }
-    live::sync_live_for_provider(state, &AppType::Codex, provider, None)?;
+    write_live_for_state(state, &AppType::Codex, provider, None)?;
     Ok(true)
 }
 
@@ -1105,7 +1105,7 @@ mod tests {
             .expect("set current provider");
         crate::settings::set_current_provider(&AppType::Claude, Some("p1"))
             .expect("set local current provider");
-        write_live_for_state(&state, &AppType::Claude, &original).expect("seed live file");
+        write_live_for_state(&state, &AppType::Claude, &original, None).expect("seed live file");
 
         let mut updated = original.clone();
         updated.settings_config["env"]["ANTHROPIC_BASE_URL"] =
@@ -4123,7 +4123,7 @@ wire_api = "responses"
                     Some(third_party.id.as_str()),
                 )
                 .expect("switch local current to third party");
-                write_live_for_state(state, &AppType::Codex, &third_party)
+                write_live_for_state(state, &AppType::Codex, &third_party, None)
                     .expect("write third-party live");
                 let live_after_switch = crate::codex_config::CodexLiveStateSnapshot::capture()
                     .expect("capture third-party live");
@@ -4418,7 +4418,7 @@ impl ProviderService {
             if !add_to_live {
                 return Ok(true);
             }
-            write_live_for_state(state, &app_type, &provider)?;
+            write_live_for_state(state, &app_type, &provider, None)?;
             return Ok(true);
         }
 
@@ -4446,7 +4446,7 @@ impl ProviderService {
             state
                 .db
                 .set_current_provider(app_type.as_str(), &provider.id)?;
-            write_live_for_state(state, &app_type, &provider)?;
+            write_live_for_state(state, &app_type, &provider, None)?;
         }
 
         Ok(true)
@@ -4475,7 +4475,7 @@ impl ProviderService {
             state.db.as_ref(),
             &state.codex_oauth_manager,
             crate::mode::state::op::SWITCH,
-            codex_direct::Owner::None,
+            None,
             Some(&provider),
             crate::mode::state::PendingTarget::pointer(Some(provider.id.clone())),
         );
@@ -4998,7 +4998,7 @@ impl ProviderService {
             if !live_config_managed {
                 return Ok(true);
             }
-            write_live_for_state(state, &app_type, &provider)?;
+            write_live_for_state(state, &app_type, &provider, None)?;
             return Ok(true);
         }
 
@@ -5014,7 +5014,7 @@ impl ProviderService {
         state.db.save_provider(app_type.as_str(), &provider)?;
 
         if is_current {
-            live::sync_live_for_provider(state, &app_type, &provider, existing_provider.as_ref())?;
+            write_live_for_state(state, &app_type, &provider, existing_provider.as_ref())?;
             // MCP is stored in the database and projected after a successful
             // live write. Keep the failure best-effort so the provider save
             // itself is not reported as failed when MCP projection can retry.
@@ -5049,7 +5049,7 @@ impl ProviderService {
             state.db.as_ref(),
             &state.codex_oauth_manager,
             crate::mode::state::op::APPLY,
-            existing.map_or(codex_direct::Owner::None, codex_direct::Owner::Provider),
+            existing,
             Some(provider),
             crate::mode::state::PendingTarget::default(),
         )
@@ -5338,7 +5338,7 @@ impl ProviderService {
         }
 
         // 写 live（累加式应用；切换式应用在上面各自的分支里写完了）。
-        write_live_for_state(state, &app_type, provider)?;
+        write_live_for_state(state, &app_type, provider, None)?;
 
         // Hermes is additive, so "switching" doesn't overwrite a live config file
         // — we instead update the top-level `model:` section to point at this
@@ -5446,8 +5446,7 @@ impl ProviderService {
         let current_id = crate::mode::current::provider_id(&state.db, &AppType::Codex)?;
         let owner = current_id
             .as_deref()
-            .and_then(|current_id| providers.get(current_id))
-            .map_or(codex_direct::Owner::None, codex_direct::Owner::Provider);
+            .and_then(|current_id| providers.get(current_id));
         codex_direct::write_direct(
             state.db.as_ref(),
             &state.codex_oauth_manager,

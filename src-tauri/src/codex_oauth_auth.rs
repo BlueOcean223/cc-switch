@@ -30,33 +30,23 @@ use std::time::Duration;
 use tokio::sync::{Mutex, RwLock};
 use uuid::Uuid;
 
-/// 托管账号的公开信息（返回给前端）。结构沿用早先与 GitHub 账号共用的形状，
-/// 前端按这些字段渲染账号列表。
+/// 托管账号的公开信息（commands/auth.rs 转成前端的账号列表）。
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct GitHubAccount {
+pub struct CodexAccount {
     /// 账号唯一标识
     pub id: String,
     /// 显示名
     pub login: String,
-    /// 头像 URL
-    pub avatar_url: Option<String>,
     /// 认证时间戳
     pub authenticated_at: i64,
-    /// 来源域名
-    #[serde(default = "default_account_domain")]
-    pub github_domain: String,
     /// 托管账号是否需要重新登录以补全缺失的凭据（缺少持久化 id_token 的旧账号为 true）。
     #[serde(default)]
     pub reauth_required: bool,
 }
 
-fn default_account_domain() -> String {
-    "github.com".to_string()
-}
-
 /// 设备码登录的启动响应（字段对应 OpenAI device auth 的同名含义）
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct GitHubDeviceCodeResponse {
+pub struct DeviceCodeStart {
     /// 设备码（用于轮询）
     pub device_code: String,
     /// 用户码（显示给用户）
@@ -315,10 +305,10 @@ struct CodexAccountData {
     pub token_updated_at_ms: i64,
 }
 
-/// 公开的账号信息（返回给前端，复用 GitHubAccount 结构）
-impl From<&CodexAccountData> for GitHubAccount {
+/// 公开的账号信息
+impl From<&CodexAccountData> for CodexAccount {
     fn from(data: &CodexAccountData) -> Self {
-        GitHubAccount {
+        CodexAccount {
             id: data.account_id.clone(),
             // 用 email 作为显示名（若无则用上游 workspace ID）
             login: data.email.clone().unwrap_or_else(|| {
@@ -329,9 +319,7 @@ impl From<&CodexAccountData> for GitHubAccount {
                         .unwrap_or(&data.account_id)
                 )
             }),
-            avatar_url: None,
             authenticated_at: data.authenticated_at,
-            github_domain: "github.com".to_string(),
             // 旧账号可能缺少 id_token 或独立的上游 workspace 字段；两者都需要
             // 重新登录后才能安全参与本地 ID → workspace 的托管绑定。
             reauth_required: data
@@ -452,14 +440,14 @@ impl CodexOAuthManager {
 
     /// 启动 Device Code 流程
     ///
-    /// 返回 GitHubDeviceCodeResponse 复用现有前端结构，但字段含义对应 OpenAI 的字段：
+    /// 返回的 DeviceCodeStart 字段含义对应 OpenAI 的字段：
     /// - device_code = device_auth_id
     /// - user_code = user_code
     /// - verification_uri = https://auth.openai.com/codex/device
     pub async fn start_device_flow(
         &self,
         target_account_id: Option<&str>,
-    ) -> Result<GitHubDeviceCodeResponse, CodexOAuthError> {
+    ) -> Result<DeviceCodeStart, CodexOAuthError> {
         log::info!("[CodexOAuth] 启动 Device Code 流程");
         let login_epoch = self.login_epoch.load(Ordering::Acquire);
         let target_account_id = target_account_id
@@ -527,7 +515,7 @@ impl CodexOAuthManager {
             device.user_code
         );
 
-        Ok(GitHubDeviceCodeResponse {
+        Ok(DeviceCodeStart {
             device_code: device.device_auth_id,
             user_code: device.user_code,
             verification_uri: DEVICE_VERIFICATION_URL.to_string(),
@@ -579,7 +567,7 @@ impl CodexOAuthManager {
         &self,
         device_code: &str,
         before_commit: BeforeCommit,
-    ) -> Result<Option<GitHubAccount>, CodexOAuthError>
+    ) -> Result<Option<CodexAccount>, CodexOAuthError>
     where
         BeforeCommit: FnOnce() -> CommitFuture,
         CommitFuture: std::future::Future<Output = CommitGuard>,
@@ -1379,7 +1367,7 @@ impl CodexOAuthManager {
     // ==================== 多账号管理 ====================
 
     #[cfg(test)]
-    pub async fn list_accounts(&self) -> Vec<GitHubAccount> {
+    pub async fn list_accounts(&self) -> Vec<CodexAccount> {
         let accounts = self.accounts.read().await.clone();
         let default_id = self.resolve_default_account_id().await;
         Self::sorted_accounts(&accounts, default_id.as_deref())
@@ -1507,18 +1495,9 @@ impl CodexOAuthManager {
         let accounts_map = self.accounts.read().await.clone();
         let default_id = self.resolve_default_account_id().await;
         let account_list = Self::sorted_accounts(&accounts_map, default_id.as_deref());
-        let authenticated = !account_list.is_empty();
-        let username = default_id
-            .as_ref()
-            .and_then(|id| accounts_map.get(id))
-            .and_then(|a| a.email.clone())
-            .or_else(|| account_list.first().map(|a| a.login.clone()));
-
         CodexOAuthStatus {
+            authenticated: !account_list.is_empty(),
             accounts: account_list,
-            default_account_id: default_id,
-            authenticated,
-            username,
         }
     }
 
@@ -1624,7 +1603,7 @@ impl CodexOAuthManager {
         id_token: Option<String>,
         initial_access_token: Option<CachedAccessToken>,
         context: AccountLoginContext<'_>,
-    ) -> Result<GitHubAccount, CodexOAuthError> {
+    ) -> Result<CodexAccount, CodexOAuthError> {
         let _lifecycle = self.lifecycle_lock.read().await;
         let target_account_id = context
             .target_account_id
@@ -1710,7 +1689,7 @@ impl CodexOAuthManager {
             token_updated_at_ms: now_ms,
         };
 
-        let account = GitHubAccount::from(&data);
+        let account = CodexAccount::from(&data);
 
         // Linearize cancel/newer-flow against the actual commit, after waiting
         // for the account lock. Holding both guards through persistence means
@@ -1824,8 +1803,8 @@ impl CodexOAuthManager {
     fn sorted_accounts(
         accounts: &HashMap<String, CodexAccountData>,
         default_account_id: Option<&str>,
-    ) -> Vec<GitHubAccount> {
-        let mut list: Vec<GitHubAccount> = accounts.values().map(GitHubAccount::from).collect();
+    ) -> Vec<CodexAccount> {
+        let mut list: Vec<CodexAccount> = accounts.values().map(CodexAccount::from).collect();
         list.sort_by(|a, b| {
             let a_default = default_account_id == Some(a.id.as_str());
             let b_default = default_account_id == Some(b.id.as_str());
@@ -2034,10 +2013,8 @@ impl CodexOAuthManager {
 /// Codex OAuth 状态摘要
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CodexOAuthStatus {
-    pub accounts: Vec<GitHubAccount>,
-    pub default_account_id: Option<String>,
+    pub accounts: Vec<CodexAccount>,
     pub authenticated: bool,
-    pub username: Option<String>,
 }
 
 // ==================== 工具函数 ====================

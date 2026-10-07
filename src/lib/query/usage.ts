@@ -150,8 +150,6 @@ export const usageKeys = {
   pricing: () => [...usageKeys.all, "pricing"] as const,
   session: (appType: string, sessionId: string) =>
     [...usageKeys.all, "session", appType, sessionId] as const,
-  limits: (providerId: string, appType: string) =>
-    [...usageKeys.all, "limits", providerId, appType] as const,
   script: (providerId: string, appType: string) =>
     [...usageKeys.all, providerId, appType] as const,
 };

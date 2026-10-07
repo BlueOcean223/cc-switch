@@ -9,7 +9,6 @@ icon: openai
 icon_color: #00A67E
 meta: {}
 is_current: false
-in_failover_queue: false
 
 id: default
 name: default
@@ -22,7 +21,6 @@ icon: NULL
 icon_color: NULL
 meta: {"commonConfigEnabled":true}
 is_current: true
-in_failover_queue: false
 
 
 common config snippet: [projects."/Users/me/repo"]

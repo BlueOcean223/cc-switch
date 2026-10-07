@@ -1,18 +1,16 @@
 //! 写 Grok Build 的 `config.toml`：只替换 `models.default` 和 CC Switch 写的那张模型表，
 //! 其余字节不碰。
 //!
-//! 写 Grok live 的入口（切换、新增第一个供应商、编辑当前供应商、同步、统一供应商、
-//! 进入 / 退出代理）都走这里：先拿应用写锁，再经 `mode::operation` 记下 pending，文件、
-//! 指针和写入记录在同一个操作里提交。不回填：用户的设置和 MCP 本来就留在 live 里。
+//! 写 Grok live 的入口（切换、新增第一个供应商、编辑当前供应商、同步、统一供应商）
+//! 都走这里：先拿应用写锁，再经 `mode::operation` 记下 pending，文件、指针和写入记录在
+//! 同一个操作里提交。不回填：用户的设置和 MCP 本来就留在 live 里。
 
 use crate::app_config::AppType;
 use crate::database::Database;
 use crate::error::AppError;
 use crate::grok_config::get_grok_config_path;
-
 use crate::live::engine::{DeviceStore, LiveFile};
 use crate::live::patch::toml::{TomlDocPatch, TomlSteps};
-use crate::live::project::claude::PROXY_TOKEN_PLACEHOLDER;
 use crate::live::project::grok::{GrokConfigPatch, GrokProjection};
 use crate::mode::operation::{AppWrite, FileChange, OperationReport};
 use crate::mode::state::{self, op, PendingTarget, Written};
@@ -141,7 +139,6 @@ pub(crate) fn run_with_edits(
             Some(GrokConfigPatch::direct(
                 projection,
                 retired_tables(&app_write.store, live_owner)?,
-                PROXY_TOKEN_PLACEHOLDER,
             ))
         }
         None => None,

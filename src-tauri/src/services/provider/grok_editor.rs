@@ -16,7 +16,6 @@ use crate::database::Database;
 use crate::error::AppError;
 use crate::live::engine::{read_current, DeviceStore};
 use crate::live::patch::toml::parse;
-use crate::live::project::claude::PROXY_TOKEN_PLACEHOLDER;
 use crate::live::project::grok::{GrokConfigPatch, GrokProjection};
 use crate::mode::state::{op, PendingTarget};
 use crate::provider::Provider;
@@ -85,8 +84,7 @@ pub fn view(
     let live_owner =
         crate::mode::current::provider(&state.db, &crate::app_config::AppType::GrokBuild)?;
     let retired = grok_direct::retired_tables(&DeviceStore::for_device(), live_owner.as_ref())?;
-    GrokConfigPatch::direct(&projection, retired, PROXY_TOKEN_PLACEHOLDER)
-        .apply_to(&file.path, &mut doc)?;
+    GrokConfigPatch::direct(&projection, retired).apply_to(&file.path, &mut doc)?;
 
     let mut settings = settings_config
         .as_object()
@@ -187,12 +185,7 @@ fn store_into_row(
     let stored_text = stored_row.map(config_text).unwrap_or("");
     let mut doc = parse_text(stored_text, "stored")?;
     let retired: Vec<String> = stored_row.and_then(row_table_name).into_iter().collect();
-    let patch = GrokConfigPatch {
-        target: projection.table.clone(),
-        retired,
-        placeholder: None,
-    };
-    patch
+    GrokConfigPatch::direct(projection, retired)
         .apply_to(std::path::Path::new("config.toml"), &mut doc)
         .map_err(AppError::from)?;
     row["config"] = Value::String(doc.to_string());

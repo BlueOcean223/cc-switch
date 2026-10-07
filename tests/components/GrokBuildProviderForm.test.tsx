@@ -155,7 +155,6 @@ context_window = 500000
           name: "Chat Relay",
           category: "custom",
           settingsConfig: { config: configToml },
-          meta: { apiFormat: "openai_chat" },
         }}
       />,
     );
@@ -166,7 +165,6 @@ context_window = 500000
     const submitted = onSubmit.mock.calls[0][0];
     const settings = JSON.parse(submitted.settingsConfig);
     const config = parseToml(settings.config) as any;
-    expect(submitted.meta.apiFormat).toBeUndefined();
     const selected = config.model[config.models.default];
     expect(selected.api_backend).toBe("responses");
     expect(selected.model).toBe("grok-4.5");
@@ -264,7 +262,6 @@ context_window = 500000
           name: "Chat Relay",
           category: "custom",
           settingsConfig: { config: configToml },
-          meta: { apiFormat: "openai_chat" },
         }}
       />,
     );

@@ -1,6 +1,7 @@
 use crate::database::{lock_conn, Database};
 use crate::error::AppError;
 use crate::provider::{Provider, ProviderMeta};
+use crate::settings::CustomEndpoint;
 use indexmap::IndexMap;
 use rusqlite::params;
 use std::collections::{HashMap, HashSet};
@@ -65,39 +66,47 @@ impl Database {
             })
             .map_err(|e| AppError::Database(e.to_string()))?;
 
+        // 这个应用全部供应商的端点一次查出来，按供应商分组。
+        let mut endpoints_by_provider: HashMap<String, HashMap<String, CustomEndpoint>> =
+            HashMap::new();
+        {
+            let mut stmt_endpoints = conn
+                .prepare(
+                    "SELECT provider_id, url, added_at FROM provider_endpoints WHERE app_type = ?1",
+                )
+                .map_err(|e| AppError::Database(e.to_string()))?;
+            let endpoints_iter = stmt_endpoints
+                .query_map(params![app_type], |row| {
+                    let provider_id: String = row.get(0)?;
+                    let url: String = row.get(1)?;
+                    let added_at: Option<i64> = row.get(2)?;
+                    Ok((provider_id, url, added_at.unwrap_or(0)))
+                })
+                .map_err(|e| AppError::Database(e.to_string()))?;
+            for ep_res in endpoints_iter {
+                let (provider_id, url, added_at) =
+                    ep_res.map_err(|e| AppError::Database(e.to_string()))?;
+                endpoints_by_provider
+                    .entry(provider_id)
+                    .or_default()
+                    .insert(
+                        url.clone(),
+                        CustomEndpoint {
+                            url,
+                            added_at,
+                            last_used: None,
+                        },
+                    );
+            }
+        }
+
         let mut providers = IndexMap::new();
         for provider_res in provider_iter {
             let (id, mut provider) = provider_res.map_err(|e| AppError::Database(e.to_string()))?;
             provider.id = id.clone();
 
-            let mut stmt_endpoints = conn.prepare(
-                "SELECT url, added_at FROM provider_endpoints WHERE provider_id = ?1 AND app_type = ?2 ORDER BY added_at ASC, url ASC"
-            ).map_err(|e| AppError::Database(e.to_string()))?;
-
-            let endpoints_iter = stmt_endpoints
-                .query_map(params![id, app_type], |row| {
-                    let url: String = row.get(0)?;
-                    let added_at: Option<i64> = row.get(1)?;
-                    Ok((
-                        url,
-                        crate::settings::CustomEndpoint {
-                            url: "".to_string(),
-                            added_at: added_at.unwrap_or(0),
-                            last_used: None,
-                        },
-                    ))
-                })
-                .map_err(|e| AppError::Database(e.to_string()))?;
-
-            let mut custom_endpoints = HashMap::new();
-            for ep_res in endpoints_iter {
-                let (url, mut ep) = ep_res.map_err(|e| AppError::Database(e.to_string()))?;
-                ep.url = url.clone();
-                custom_endpoints.insert(url, ep);
-            }
-
             if let Some(meta) = &mut provider.meta {
-                meta.custom_endpoints = custom_endpoints;
+                meta.custom_endpoints = endpoints_by_provider.remove(&id).unwrap_or_default();
             }
 
             providers.insert(id, provider);

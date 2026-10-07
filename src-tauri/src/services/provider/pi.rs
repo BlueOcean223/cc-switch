@@ -314,7 +314,6 @@ mod tests {
                 common_config_enabled: Some(true),
                 endpoint_auto_select: Some(true),
                 live_config_managed: Some(false),
-                api_format: Some("openai_chat".to_string()),
                 partner_promotion_key: Some("pi-test".to_string()),
                 ..ProviderMeta::default()
             }),
@@ -362,7 +361,6 @@ mod tests {
         assert_eq!(meta.common_config_enabled, None);
         assert_eq!(meta.live_config_managed, None);
         assert_eq!(meta.endpoint_auto_select, None);
-        assert_eq!(meta.api_format, None);
         assert_eq!(meta.partner_promotion_key.as_deref(), Some("pi-test"));
 
         ProviderService::switch(&state, AppType::Pi, "cc-switch-test").expect("enable provider");

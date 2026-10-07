@@ -177,16 +177,13 @@ pub struct GrokConfigPatch {
     pub target: Option<(String, Table)>,
     /// 上次写入记录里的表。目标自己的表不删，由整表替换覆盖。
     pub retired: Vec<String>,
-    /// 这个值作为 `api_key` 的表都是旧版代理模式留下的，一律删（目标自己的表除外）。
-    pub placeholder: Option<String>,
 }
 
 impl GrokConfigPatch {
-    pub fn direct(target: &GrokProjection, retired: Vec<String>, placeholder: &str) -> Self {
+    pub fn direct(target: &GrokProjection, retired: Vec<String>) -> Self {
         Self {
             target: target.table.clone(),
             retired,
-            placeholder: Some(placeholder.to_string()),
         }
     }
 
@@ -216,18 +213,10 @@ impl GrokConfigPatch {
         }
 
         if let Some(tables) = table_mut(path, root, "model", false)? {
-            let placeholder = self.placeholder.as_deref();
             let doomed: Vec<String> = tables
                 .iter()
-                .filter(|(name, item)| {
-                    Some(*name) != target_name
-                        && (self.retired.iter().any(|retired| retired == name)
-                            || placeholder.is_some_and(|placeholder| {
-                                item.as_table_like()
-                                    .and_then(|table| table.get("api_key"))
-                                    .and_then(Item::as_str)
-                                    == Some(placeholder)
-                            }))
+                .filter(|(name, _)| {
+                    Some(*name) != target_name && self.retired.iter().any(|retired| retired == name)
                 })
                 .map(|(name, _)| name.to_string())
                 .collect();
@@ -306,8 +295,6 @@ mod tests {
     use crate::live::patch::LivePatch;
     use serde_json::json;
 
-    const PLACEHOLDER: &str = "PROXY_MANAGED";
-
     fn row(config: &str) -> Value {
         json!({ "config": config })
     }
@@ -363,10 +350,7 @@ context_window = 200000
             "# mine\n[ui]\ntheme = \"dark\"\n\n{ROW_A}\n[model.mine]\nmodel = \"m\"\n\n[mcp_servers.fs]\ncommand = \"fs\"\n"
         );
         let b = GrokProjection::of(&row(ROW_B), false).unwrap();
-        let out = apply(
-            &GrokConfigPatch::direct(&b, vec!["grok-4.5".into()], PLACEHOLDER),
-            &live,
-        );
+        let out = apply(&GrokConfigPatch::direct(&b, vec!["grok-4.5".into()]), &live);
         let doc: DocumentMut = out.parse().unwrap();
         assert_eq!(doc["models"]["default"].as_str(), Some("b"));
         assert!(doc["model"].get("grok-4.5").is_none(), "{out}");
@@ -382,7 +366,7 @@ context_window = 200000
         let live = ROW_A.replace("default = \"grok-4.5\"", "default = \"grok-4.6\"");
         let official = GrokProjection::of(&row(""), true).unwrap();
         let out = apply(
-            &GrokConfigPatch::direct(&official, vec!["grok-4.5".into()], PLACEHOLDER),
+            &GrokConfigPatch::direct(&official, vec!["grok-4.5".into()]),
             &live,
         );
         assert_eq!(out, "");
@@ -394,7 +378,7 @@ context_window = 200000
         let renamed = ROW_A.replace("grok-4.5", "grok-4.6");
         let target = GrokProjection::of(&row(&renamed), false).unwrap();
         let out = apply(
-            &GrokConfigPatch::direct(&target, vec!["grok-4.5".into()], PLACEHOLDER),
+            &GrokConfigPatch::direct(&target, vec!["grok-4.5".into()]),
             &live,
         );
         let doc: DocumentMut = out.parse().unwrap();
@@ -409,33 +393,11 @@ context_window = 200000
     }
 
     #[test]
-    fn stale_proxy_tables_are_removed_and_user_keys_in_models_stay() {
-        let live = r#"[models]
-default = "grok-4.5"
-web_search = "grok-4.6"
-
-[model."grok-4.5"]
-model = "a"
-base_url = "http://127.0.0.1:15721/grokbuild/v1"
-api_key = "PROXY_MANAGED"
-"#;
-        let official = GrokProjection::of(&row(""), true).unwrap();
-        let out = apply(
-            &GrokConfigPatch::direct(&official, Vec::new(), PLACEHOLDER),
-            live,
-        );
-        assert_eq!(out, "[models]\nweb_search = \"grok-4.6\"\n");
-    }
-
-    #[test]
     fn sub_tables_follow_their_parent() {
         let with_headers = format!("{ROW_B}\n[model.b.extra_headers]\nX-Team = \"t\"\n");
         let target = GrokProjection::of(&row(&with_headers), false).unwrap();
         let live = "[a]\nx = 1\n\n[b]\ny = 2\n\n[c]\nz = 3\n";
-        let out = apply(
-            &GrokConfigPatch::direct(&target, Vec::new(), PLACEHOLDER),
-            live,
-        );
+        let out = apply(&GrokConfigPatch::direct(&target, Vec::new()), live);
         let headers = out.find("[model.b.extra_headers]").unwrap();
         let table = out.find("[model.b]").unwrap();
         assert!(out.starts_with(live), "{out}");

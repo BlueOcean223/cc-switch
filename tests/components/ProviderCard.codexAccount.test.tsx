@@ -33,14 +33,12 @@ vi.mock("@/components/UsageFooter", () => ({ default: () => null }));
 vi.mock("@/components/SubscriptionQuotaFooter", () => ({
   default: () => null,
 }));
-vi.mock("@/components/CopilotQuotaFooter", () => ({ default: () => null }));
 vi.mock("@/components/CodexOauthQuotaFooter", () => ({
   default: (props: unknown) => {
     codexQuotaFooterProps(props);
     return <div>codex-oauth-quota</div>;
   },
 }));
-vi.mock("@/components/XaiOauthQuotaFooter", () => ({ default: () => null }));
 
 vi.mock("@/lib/query/failover", () => ({
   useProviderHealth: () => ({ data: undefined }),

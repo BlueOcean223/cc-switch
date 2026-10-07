@@ -12,13 +12,3 @@ export function normalizeRequestHeaders(
   }
   return normalized;
 }
-
-export function findRequestHeaderValue(
-  headers: Record<string, string>,
-  name: string,
-): string | undefined {
-  const normalizedName = name.toLowerCase();
-  return Object.entries(headers).find(
-    ([key]) => key.toLowerCase() === normalizedName,
-  )?.[1];
-}

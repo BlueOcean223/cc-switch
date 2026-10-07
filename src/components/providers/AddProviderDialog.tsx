@@ -34,7 +34,6 @@ import { extractGrokBuildBaseUrl } from "@/utils/grokBuildConfig";
 import { GROKBUILD_OFFICIAL_PROVIDER_ID } from "@/utils/providerCapabilities";
 import type { OpenClawSuggestedDefaults } from "@/config/openclawProviderPresets";
 import type { UniversalProviderPreset } from "@/config/universalProviderPresets";
-import type { ManagedAuthProvider } from "@/lib/api";
 
 interface AddProviderDialogProps {
   open: boolean;
@@ -87,11 +86,10 @@ export function AddProviderDialog({
   const [selectedUniversalPreset, setSelectedUniversalPreset] =
     useState<UniversalProviderPreset | null>(null);
   const [isFormSubmitting, setIsFormSubmitting] = useState(false);
-  const [authSettingsTarget, setAuthSettingsTarget] =
-    useState<ManagedAuthProvider | null>(null);
+  const [authSettingsOpen, setAuthSettingsOpen] = useState(false);
 
   useEffect(() => {
-    setAuthSettingsTarget(null);
+    setAuthSettingsOpen(false);
   }, [appId, open]);
 
   // Claude：预设的关键字段套在当前 live 上显示（去掉当前供应商的关键字段），保存时
@@ -145,15 +143,15 @@ export function AddProviderDialog({
   }, [open, appId, t]);
 
   const closeDialog = useCallback(() => {
-    setAuthSettingsTarget(null);
+    setAuthSettingsOpen(false);
     // 表单每次打开都会重新投影；这里清掉，免得下次打开时先用上一次的底。
     setDraftEditorBase(null);
     onOpenChange(false);
   }, [onOpenChange]);
 
   const handlePanelClose = useCallback(() => {
-    if (authSettingsTarget) {
-      setAuthSettingsTarget(null);
+    if (authSettingsOpen) {
+      setAuthSettingsOpen(false);
       return;
     }
     // 第 2 步的返回回到选预设
@@ -162,7 +160,7 @@ export function AddProviderDialog({
       return;
     }
     closeDialog();
-  }, [authSettingsTarget, closeDialog, step]);
+  }, [authSettingsOpen, closeDialog, step]);
   const formReadyToken = useMemo(
     () => Symbol("provider-form-ready"),
     [appId, open],
@@ -466,7 +464,7 @@ export function AddProviderDialog({
       submitLabel={t("common.add")}
       onSubmit={handleSubmit}
       onCancel={closeDialog}
-      onManageAuthAccounts={setAuthSettingsTarget}
+      onManageAuthAccounts={() => setAuthSettingsOpen(true)}
       onSubmittingChange={setIsFormSubmitting}
       onSubmitReadyChange={handleSubmitReadyChange}
       showButtons={false}
@@ -544,8 +542,8 @@ export function AddProviderDialog({
       )}
 
       <AuthSettingsPanel
-        target={authSettingsTarget}
-        onClose={() => setAuthSettingsTarget(null)}
+        isOpen={authSettingsOpen}
+        onClose={() => setAuthSettingsOpen(false)}
       />
       {conflictDialog}
     </FullScreenPanel>

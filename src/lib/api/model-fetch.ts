@@ -29,14 +29,12 @@ export async function fetchModelsForConfig(
   baseUrl: string,
   apiKey: string,
   modelsUrl?: string,
-  customUserAgent?: string,
   options?: ModelFetchOptions,
 ): Promise<FetchedModel[]> {
   return invoke("fetch_models_for_config", {
     baseUrl,
     apiKey,
     modelsUrl,
-    customUserAgent,
     apiFormat: options?.apiFormat,
     requestHeaders: options?.requestHeaders,
   });

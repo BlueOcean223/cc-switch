@@ -59,30 +59,9 @@ fn managed_account(provider: &Provider) -> Option<String> {
     ProviderService::managed_codex_oauth_account_id(provider)
 }
 
-/// 官方直连时 live 里已有的 custom 表改写成的休眠形态指向这个地址（不需要有服务在
-/// 监听）：Codex 按 provider id 给会话分桶，表一删，第三方的旧会话就 resume 不了。
-const DORMANT_BASE_URL: &str = "http://127.0.0.1:15721/v1";
-
 /// 写成什么样：这个供应商（`None`：没有当前供应商，只清掉关键字段）。
 #[derive(Clone, Copy)]
 pub(crate) struct Target<'a>(pub Option<&'a Provider>);
-
-/// live 现在是谁写进去的：删它带进来的独有字段、认出要切走的托管账号、判断用户是不是
-/// 登出了，都看它。
-#[derive(Clone, Copy)]
-pub(crate) enum Owner<'a> {
-    Provider(&'a Provider),
-    None,
-}
-
-impl<'a> Owner<'a> {
-    fn provider(&self) -> Option<&'a Provider> {
-        match self {
-            Self::Provider(provider) => Some(provider),
-            Self::None => None,
-        }
-    }
-}
 
 /// 拿写锁之前准备好的托管账号凭据。
 #[derive(Default)]
@@ -102,9 +81,12 @@ fn target_account(target: &Target<'_>) -> Option<String> {
 
 /// 取目标托管账号的登录（必要时刷新 token），并在切走托管账号前采纳 Codex CLI 轮换过的
 /// refresh token。都可能联网，所以在拿写锁之前做。
+///
+/// `owner` 是 live 现在对应的供应商（`None`：没有）：删它带进来的独有字段、认出要切走的
+/// 托管账号、判断用户是不是登出了，都看它。
 pub(crate) fn prepare(
     manager: &Arc<CodexOAuthManager>,
-    owner: &Owner<'_>,
+    owner: Option<&Provider>,
     target: &Target<'_>,
 ) -> Result<Prepared, AppError> {
     let target_account = target_account(target);
@@ -116,7 +98,6 @@ pub(crate) fn prepare(
         None => None,
     };
     let outgoing = match owner
-        .provider()
         .and_then(managed_account)
         .filter(|account| target_account.as_ref() != Some(account))
     {
@@ -187,12 +168,7 @@ fn project(provider: &Provider) -> Result<CodexProjection, AppError> {
 /// 这个供应商的独有字段，含 `web_search`（需要时为 `"disabled"`）。
 fn exclusive_of(provider: &Provider, projection: &CodexProjection) -> Vec<(String, TomlValue)> {
     let mut exclusive = projection.exclusive.clone();
-    let profile = crate::codex_provider::resolve_codex_catalog_tool_profile(provider);
-    if codex_disables_web_search(
-        &provider.settings_config,
-        &projection.catalog_input_text(),
-        profile,
-    ) {
+    if codex_disables_web_search(&provider.settings_config, &projection.catalog_input_text()) {
         exclusive.retain(|(key, _)| key != "web_search");
         exclusive.push((
             "web_search".to_string(),
@@ -203,19 +179,19 @@ fn exclusive_of(provider: &Provider, projection: &CodexProjection) -> Vec<(Strin
 }
 
 /// live 现在对应的那一家带进来的独有字段：切走时值还相同就删。
-pub(crate) fn outgoing_exclusive(owner: &Owner<'_>) -> Vec<(String, TomlValue)> {
-    match owner {
-        Owner::Provider(provider) => match project(provider) {
-            Ok(projection) => exclusive_of(provider, &projection),
-            Err(err) => {
-                log::warn!(
-                    "无法投影 Codex 供应商 {} 的独有字段，切走时不清理它们: {err}",
-                    provider.id
-                );
-                Vec::new()
-            }
-        },
-        Owner::None => Vec::new(),
+pub(crate) fn outgoing_exclusive(owner: Option<&Provider>) -> Vec<(String, TomlValue)> {
+    let Some(provider) = owner else {
+        return Vec::new();
+    };
+    match project(provider) {
+        Ok(projection) => exclusive_of(provider, &projection),
+        Err(err) => {
+            log::warn!(
+                "无法投影 Codex 供应商 {} 的独有字段，切走时不清理它们: {err}",
+                provider.id
+            );
+            Vec::new()
+        }
     }
 }
 
@@ -334,7 +310,7 @@ impl Planned {
 /// 算出写入内容；行有问题（比如会把官方登录发给第三方）就在这里报错，什么都不写。
 pub(crate) fn plan(
     db: &Database,
-    owner: &Owner<'_>,
+    owner: Option<&Provider>,
     target: &Target<'_>,
     prepared: &Prepared,
 ) -> Result<Planned, AppError> {
@@ -365,13 +341,7 @@ pub(crate) fn plan(
                 Route::Official if crate::settings::unify_codex_session_history() => {
                     (RouteWrite::OfficialMirror, None, auth)
                 }
-                Route::Official => (
-                    RouteWrite::Official {
-                        dormant_base_url: DORMANT_BASE_URL.to_string(),
-                    },
-                    None,
-                    auth,
-                ),
+                Route::Official => (RouteWrite::Official, None, auth),
                 Route::Custom { table, auth: kind } => {
                     (RouteWrite::Custom(table.clone()), Some(*kind), auth)
                 }
@@ -390,12 +360,8 @@ pub(crate) fn plan(
 
     let catalog = match (provider, &projection) {
         (Some(provider), Some(projection)) => {
-            plan_codex_model_catalog(
-                &provider.settings_config,
-                &projection.catalog_input_text(),
-                crate::codex_provider::resolve_codex_catalog_tool_profile(provider),
-            )?
-            .catalog
+            plan_codex_model_catalog(&provider.settings_config, &projection.catalog_input_text())
+                .catalog
         }
         _ => None,
     };
@@ -404,7 +370,6 @@ pub(crate) fn plan(
         .transpose()?;
 
     let leaving_official = owner
-        .provider()
         .filter(|provider| is_official(provider) && managed_account(provider).is_none())
         .map(row_auth);
 
@@ -660,18 +625,18 @@ pub(crate) fn write_direct(
     db: &Database,
     manager: &Arc<CodexOAuthManager>,
     op: &str,
-    owner: Owner<'_>,
+    owner: Option<&Provider>,
     target: Option<&Provider>,
     pending: PendingTarget,
 ) -> Result<OperationReport, AppError> {
     let target = Target(target);
-    let prepared = prepare(manager, &owner, &target)?;
-    let planned = plan(db, &owner, &target, &prepared)?;
+    let prepared = prepare(manager, owner, &target)?;
+    let planned = plan(db, owner, &target, &prepared)?;
     run(db, op, planned, &prepared, pending)
 }
 
 /// 只校验，不写：切换前用它挡住会被拒绝的目标（行有问题时指针不能先动）。
 pub(crate) fn preflight(db: &Database, provider: &Provider) -> Result<(), AppError> {
     let target = Target(Some(provider));
-    plan(db, &Owner::None, &target, &Prepared::default()).map(|_| ())
+    plan(db, None, &target, &Prepared::default()).map(|_| ())
 }

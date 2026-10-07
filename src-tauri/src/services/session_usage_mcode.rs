@@ -49,7 +49,6 @@ fn sync_from_database(
             output_tokens: row.get::<_, u32>(5)?.saturating_add(row.get(6)?),
             cache_read_tokens: row.get(7)?,
             cache_creation_tokens: row.get(8)?,
-            model: Some(model.into()),
         };
         let native_cost: Option<f64> = row.get(9)?;
         let cost = match native_cost {

@@ -61,9 +61,7 @@ describe("PiProviderForm", () => {
     );
 
     // 表单直接铺在添加页里，不再套一层卡片
-    expect(container.querySelector("#provider-form")).not.toHaveClass(
-      "glass",
-    );
+    expect(container.querySelector("#provider-form")).not.toHaveClass("glass");
     expect(screen.getByLabelText("provider.name")).toBeInTheDocument();
     expect(screen.getByLabelText("provider.notes")).toBeInTheDocument();
     expect(screen.getByLabelText("provider.websiteUrl")).toBeInTheDocument();
@@ -980,7 +978,6 @@ describe("PiProviderForm", () => {
       expect(requestBody).toEqual({
         baseUrl: "https://models.example/v1",
         apiKey: "literal-key",
-        customUserAgent: "pi-test-agent/1.0",
         apiFormat: "openai-completions",
         requestHeaders: {
           "user-agent": "pi-test-agent/1.0",

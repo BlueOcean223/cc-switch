@@ -272,16 +272,6 @@ pub fn record_models_dev_sync_result(
     crate::services::model_pricing::record_models_dev_sync_result(&state.db, synced_at, error)
 }
 
-/// 检查 Provider 使用限额
-#[tauri::command]
-pub fn check_provider_limits(
-    state: State<'_, AppState>,
-    provider_id: String,
-    app_type: String,
-) -> Result<crate::services::usage_stats::ProviderLimitStatus, AppError> {
-    state.db.check_provider_limits(&provider_id, &app_type)
-}
-
 /// 删除模型定价
 #[tauri::command]
 pub fn delete_model_pricing(state: State<'_, AppState>, model_id: String) -> Result<(), AppError> {

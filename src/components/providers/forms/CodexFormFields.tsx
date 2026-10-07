@@ -58,7 +58,6 @@ import {
   metadataFilledAnything,
 } from "./modelMetadataFill";
 import type { CodexCatalogModel, ProviderCategory } from "@/types";
-import type { ManagedAuthProvider } from "@/lib/api";
 import type { AppId } from "@/lib/api";
 
 interface EndpointCandidate {
@@ -79,7 +78,7 @@ interface CodexFormFieldsProps {
   onCodexAccountSelect?: (accountId: string | null) => void;
   onCodexAuthSelectionConfirmed?: () => void;
   onCodexAuthSelectionInvalidated?: () => void;
-  onManageAuthAccounts?: (target: ManagedAuthProvider) => void;
+  onManageAuthAccounts?: () => void;
   codexOauthSelectionLabel?: string;
   codexOauthNoneOptionLabel?: string;
   codexOauthNoneOptionDescription?: string;
@@ -787,11 +786,7 @@ export function CodexFormFields({
           onAccountSelect={onCodexAccountSelect}
           onSelectionConfirmed={onCodexAuthSelectionConfirmed}
           onSelectionInvalidated={onCodexAuthSelectionInvalidated}
-          onManageAccounts={
-            onManageAuthAccounts
-              ? () => onManageAuthAccounts("codex_oauth")
-              : undefined
-          }
+          onManageAccounts={onManageAuthAccounts}
           selectionLabel={codexOauthSelectionLabel}
           noneOptionLabel={codexOauthNoneOptionLabel}
           noneOptionDescription={codexOauthNoneOptionDescription}

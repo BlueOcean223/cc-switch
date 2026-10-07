@@ -19,7 +19,6 @@ use tauri::menu::{
     CheckMenuItem, Menu, MenuBuilder, MenuItem, MenuItemKind, Submenu, SubmenuBuilder,
 };
 use tauri::{Emitter, Manager};
-use tauri_plugin_opener::OpenerExt;
 
 use crate::app_config::AppType;
 use crate::error::AppError;
@@ -77,7 +76,6 @@ static TRAY_SECTION_SUBMENUS: Lazy<Mutex<HashMap<AppType, Submenu<tauri::Wry>>>>
 #[derive(Clone, Copy)]
 pub struct TrayTexts {
     pub show_main: &'static str,
-    pub open_website: &'static str,
     pub lightweight_mode: &'static str,
     pub quit: &'static str,
     pub projects_label: &'static str,
@@ -157,7 +155,6 @@ impl TrayTexts {
         match language {
             "en" => Self {
                 show_main: "Open CC Switch",
-                open_website: "Open official website",
                 lightweight_mode: "Lightweight mode",
                 quit: "Quit CC Switch",
                 projects_label: "Projects",
@@ -194,7 +191,6 @@ impl TrayTexts {
             },
             "ja" => Self {
                 show_main: "CC Switch を開く",
-                open_website: "公式サイトを開く",
                 lightweight_mode: "軽量モード",
                 quit: "CC Switch を終了",
                 projects_label: "プロジェクト",
@@ -233,7 +229,6 @@ impl TrayTexts {
             },
             "zh-TW" => Self {
                 show_main: "開啟 CC Switch",
-                open_website: "開啟官方網站",
                 lightweight_mode: "輕量模式",
                 quit: "退出 CC Switch",
                 projects_label: "專案",
@@ -270,7 +265,6 @@ impl TrayTexts {
             },
             _ => Self {
                 show_main: "打开 CC Switch",
-                open_website: "打开官方网站",
                 lightweight_mode: "轻量模式",
                 quit: "退出 CC Switch",
                 projects_label: "项目",
@@ -1343,7 +1337,6 @@ fn build_menu_model(
         lightweight,
     ));
     menu.push(TrayEntry::Separator);
-    menu.push(TrayEntry::item("open_website", texts.open_website));
     // 不换成系统自带的 quit：它不经过 app.exit(0) 的退出流程。
     menu.push(TrayEntry::item("quit", texts.quit));
     menu
@@ -1356,47 +1349,44 @@ struct TrayModel {
     status: MenuStatus,
 }
 
+fn visible_tray_apps(settings: &crate::settings::AppSettings) -> Vec<AppType> {
+    let visible_apps = settings.visible_apps.clone().unwrap_or_default();
+    TRAY_APPS
+        .iter()
+        .filter(|app| visible_apps.is_visible(app))
+        .cloned()
+        .collect()
+}
+
 fn collect_snapshots(
     app_state: &AppState,
     texts: &TrayTexts,
-) -> Result<(Vec<AppSnapshot>, Vec<TrayProblem>), AppError> {
+) -> Result<Vec<AppSnapshot>, AppError> {
     let settings = crate::settings::get_settings();
-    let visible_apps = settings.visible_apps.clone().unwrap_or_default();
     let profiles = if settings.show_profile_switcher {
         app_state.db.get_all_profiles()?
     } else {
         Vec::new()
     };
 
-    let mut snapshots = Vec::new();
-    for app in TRAY_APPS.iter().filter(|app| visible_apps.is_visible(app)) {
-        snapshots.push(collect_app_snapshot(
-            app_state, texts, &settings, app, &profiles,
-        )?);
-    }
-
-    let visible: Vec<AppType> = snapshots
+    visible_tray_apps(&settings)
         .iter()
-        .map(|snapshot| snapshot.app.clone())
-        .collect();
-    let problems = collect_problems(&visible);
-    Ok((snapshots, problems))
+        .map(|app| collect_app_snapshot(app_state, texts, &settings, app, &profiles))
+        .collect()
 }
 
-fn collect_status(
-    app_state: &AppState,
-    texts: &TrayTexts,
-) -> Result<(Vec<AppSnapshot>, MenuStatus), AppError> {
-    let (snapshots, problems) = collect_snapshots(app_state, texts)?;
-    let status = MenuStatus {
-        problems,
+/// 问题区和反馈行：只看内存里的状态，不读库。
+fn collect_status() -> MenuStatus {
+    let visible = visible_tray_apps(&crate::settings::get_settings());
+    MenuStatus {
+        problems: collect_problems(&visible),
         feedback: current_feedback(),
-    };
-    Ok((snapshots, status))
+    }
 }
 
 fn collect_model(app_state: &AppState, texts: &TrayTexts) -> Result<TrayModel, AppError> {
-    let (snapshots, status) = collect_status(app_state, texts)?;
+    let snapshots = collect_snapshots(app_state, texts)?;
+    let status = collect_status();
     let entries = build_menu_model(
         texts,
         &status,
@@ -1629,7 +1619,7 @@ fn update_tray_usage_labels(app: &tauri::AppHandle) {
             return;
         };
         let texts = TrayTexts::current();
-        let Ok((snapshots, _)) = collect_snapshots(app_state.inner(), &texts) else {
+        let Ok(snapshots) = collect_snapshots(app_state.inner(), &texts) else {
             return;
         };
         // 先拷出句柄再改标题：`set_text` 要回主线程执行，不能拿着锁等。
@@ -1685,14 +1675,7 @@ pub fn schedule_tray_status_check(app: &tauri::AppHandle) {
 }
 
 fn refresh_tray_if_status_changed(app: &tauri::AppHandle) {
-    let Some(state) = app.try_state::<AppState>() else {
-        return;
-    };
-    let texts = TrayTexts::current();
-    let Ok((_, status)) = collect_status(state.inner(), &texts) else {
-        return;
-    };
-    if *lock(&LAST_STATUS) != status {
+    if *lock(&LAST_STATUS) != collect_status() {
         refresh_tray_menu(app);
     }
 }
@@ -1960,7 +1943,8 @@ fn handle_provider_click(
     })
 }
 
-fn emit_switched(app: &tauri::AppHandle, app_type: &AppType, provider_id: &str) {
+/// 发 `provider-switched`：前端 App.tsx 的监听按这个形状刷新供应商列表。
+pub(crate) fn emit_switched(app: &tauri::AppHandle, app_type: &AppType, provider_id: &str) {
     let event_data = serde_json::json!({
         "appType": app_type.as_str(),
         "providerId": provider_id
@@ -1995,11 +1979,6 @@ pub fn handle_tray_menu_event(app: &tauri::AppHandle, event_id: &str) {
 
     match event_id {
         "show_main" => show_main_window(app),
-        "open_website" => {
-            if let Err(e) = app.opener().open_url("https://ccswitch.io", None::<String>) {
-                log::error!("打开官方网站失败: {e}");
-            }
-        }
         "lightweight_mode" => {
             if crate::lightweight::is_lightweight_mode() {
                 if let Err(e) = crate::lightweight::exit_lightweight_mode(app) {
@@ -2802,7 +2781,7 @@ mod tests {
     }
 
     #[test]
-    fn top_level_order_is_open_apps_lightweight_website_quit() {
+    fn top_level_order_is_open_apps_lightweight_quit() {
         let apps = [
             snapshot(AppType::Claude, vec![entry("kimi", "Kimi For Coding")]),
             snapshot(AppType::GrokBuild, vec![]),
@@ -2818,12 +2797,11 @@ mod tests {
                 "---",
                 "轻量模式",
                 "---",
-                "打开官方网站",
                 "退出 CC Switch",
             ]
         );
         assert!(matches!(&menu[3], TrayEntry::Item { id, .. } if id == "nav:add:grokbuild"));
-        assert!(matches!(&menu[8], TrayEntry::Item { id, .. } if id == "quit"));
+        assert!(matches!(&menu[7], TrayEntry::Item { id, .. } if id == "quit"));
     }
 
     #[test]

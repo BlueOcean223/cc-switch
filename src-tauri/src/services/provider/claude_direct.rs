@@ -1,7 +1,7 @@
 //! 写 Claude Code 的 `settings.json`：只替换关键字段和独有字段，其余字节不碰。
 //!
-//! 写 Claude live 的入口（切换、新增第一个供应商、编辑当前供应商、同步、统一供应商、
-//! 进入 / 退出代理）都走这里：先拿应用写锁，再经 `mode::operation` 记下 pending、发布。
+//! 写 Claude live 的入口（切换、新增第一个供应商、编辑当前供应商、同步、统一供应商）
+//! 都走这里：先拿应用写锁，再经 `mode::operation` 记下 pending、发布。
 //! 不回填、不合并通用配置片段、不注入上下文默认值：用户的设置本来就留在 live 里。
 
 use crate::app_config::AppType;

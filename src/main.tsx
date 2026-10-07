@@ -25,7 +25,6 @@ import {
   MODELS_DEV_SYNC_CONFIG_QUERY_KEY,
   syncModelsDevPricingOnStartup,
 } from "./lib/modelsDevAutoSync";
-import { initializeWindowActivity } from "@/lib/windowActivity";
 import { initializeInputModality } from "@/lib/inputModality";
 
 installGlobalErrorHandlers();
@@ -118,7 +117,6 @@ async function bootstrap() {
     reportFrontendError("get_init_error", e);
   }
 
-  initializeWindowActivity();
   initializeInputModality();
 
   ReactDOM.createRoot(document.getElementById("root")!).render(

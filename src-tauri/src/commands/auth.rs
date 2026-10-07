@@ -3,7 +3,7 @@
 use tauri::State;
 
 use crate::app_config::AppType;
-use crate::codex_oauth_auth::{CodexOAuthError, GitHubAccount, GitHubDeviceCodeResponse};
+use crate::codex_oauth_auth::{CodexAccount, CodexOAuthError, DeviceCodeStart};
 use crate::commands::codex_oauth::CodexOAuthState;
 use crate::store::AppState;
 
@@ -44,7 +44,7 @@ fn ensure_auth_provider(auth_provider: &str) -> Result<(), String> {
     }
 }
 
-fn map_account(account: GitHubAccount) -> ManagedAuthAccount {
+fn map_account(account: CodexAccount) -> ManagedAuthAccount {
     ManagedAuthAccount {
         reauth_required: account.reauth_required,
         id: account.id,
@@ -54,7 +54,7 @@ fn map_account(account: GitHubAccount) -> ManagedAuthAccount {
     }
 }
 
-fn map_device_code_response(response: GitHubDeviceCodeResponse) -> ManagedAuthDeviceCodeResponse {
+fn map_device_code_response(response: DeviceCodeStart) -> ManagedAuthDeviceCodeResponse {
     ManagedAuthDeviceCodeResponse {
         provider: AUTH_PROVIDER_CODEX_OAUTH.to_string(),
         device_code: response.device_code,

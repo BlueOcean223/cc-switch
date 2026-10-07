@@ -11,13 +11,7 @@ import {
   type ProviderFormValues,
 } from "@/components/providers/forms/ProviderForm";
 import { AuthSettingsPanel } from "@/components/providers/AuthSettingsPanel";
-import {
-  openclawApi,
-  providersApi,
-  vscodeApi,
-  type AppId,
-  type ManagedAuthProvider,
-} from "@/lib/api";
+import { openclawApi, providersApi, vscodeApi, type AppId } from "@/lib/api";
 import type {
   EditorConflictPolicy,
   ProviderEditorSave,
@@ -64,11 +58,10 @@ export function EditProviderDialog({
 }: EditProviderDialogProps) {
   const { t } = useTranslation();
   const [isFormSubmitting, setIsFormSubmitting] = useState(false);
-  const [authSettingsTarget, setAuthSettingsTarget] =
-    useState<ManagedAuthProvider | null>(null);
+  const [authSettingsOpen, setAuthSettingsOpen] = useState(false);
 
   useEffect(() => {
-    setAuthSettingsTarget(null);
+    setAuthSettingsOpen(false);
   }, [appId, open, provider?.id]);
 
   const formReadyToken = useMemo(
@@ -108,17 +101,17 @@ export function EditProviderDialog({
   const { submitWithConflictRetry, conflictDialog } = useLiveEditConflict();
 
   const closeDialog = useCallback(() => {
-    setAuthSettingsTarget(null);
+    setAuthSettingsOpen(false);
     onOpenChange(false);
   }, [onOpenChange]);
 
   const handlePanelClose = useCallback(() => {
-    if (authSettingsTarget) {
-      setAuthSettingsTarget(null);
+    if (authSettingsOpen) {
+      setAuthSettingsOpen(false);
       return;
     }
     closeDialog();
-  }, [authSettingsTarget, closeDialog]);
+  }, [authSettingsOpen, closeDialog]);
 
   useEffect(() => {
     let cancelled = false;
@@ -375,7 +368,7 @@ export function EditProviderDialog({
           submitLabel={t("common.save")}
           onSubmit={handleSubmit}
           onCancel={closeDialog}
-          onManageAuthAccounts={setAuthSettingsTarget}
+          onManageAuthAccounts={() => setAuthSettingsOpen(true)}
           onSubmittingChange={setIsFormSubmitting}
           onSubmitReadyChange={handleSubmitReadyChange}
           initialData={initialData}
@@ -385,8 +378,8 @@ export function EditProviderDialog({
       )}
       {conflictDialog}
       <AuthSettingsPanel
-        target={authSettingsTarget}
-        onClose={() => setAuthSettingsTarget(null)}
+        isOpen={authSettingsOpen}
+        onClose={() => setAuthSettingsOpen(false)}
       />
     </FullScreenPanel>
   );

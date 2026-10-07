@@ -39,7 +39,6 @@ export function useSetGlobalProxyUrl() {
     onSuccess: () => {
       toast.success(t("settings.globalProxy.saved"));
       queryClient.invalidateQueries({ queryKey: ["globalProxyUrl"] });
-      queryClient.invalidateQueries({ queryKey: ["upstreamProxyStatus"] });
     },
     onError: (error: unknown) => {
       const message =

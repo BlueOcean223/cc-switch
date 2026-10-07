@@ -5,7 +5,7 @@
 //!
 //! ## 数据流
 //! ```text
-//! updates.jsonl（逐轮 turn_completed） → 沉降窗/接管守卫 → 费用计算 → proxy_request_logs
+//! updates.jsonl（逐轮 turn_completed） → 接管守卫 → 费用计算 → proxy_request_logs
 //! ```
 //!
 //! ## 事件口径（2026-07-23 单进程双 prompt 实测 + CLI 二进制逆向双重确证）
@@ -25,11 +25,9 @@
 //!   修复路径，所以定价漂移窗口不能押在本地价上）；本地定价负责分项成本与
 //!   漂移告警。`costIsPartial` 标记自报为下界：有本地价回退本地全额复算并
 //!   抑制漂移告警，无价才用下界入账（分项记 0）。
-//! - 防接管态双算不用指纹去重：接管态下 CLI 照写 updates.jsonl，但轮事件是
-//!   聚合值（多 loop 求和），与代理逐请求行结构性不相等。改用「沉降窗 +
-//!   接管活动时间窗守卫」：只导入足够旧的事件（届时接管态的代理行必已
-//!   落库），插入前按事件时刻查询附近是否存在代理直录行（见
-//!   `has_recent_grokbuild_proxy_activity`）。
+//! - 旧版本地路由记过的轮次不重复入账：插入前按事件时刻查询附近是否存在代理
+//!   直录行（见 `has_recent_grokbuild_proxy_activity`）。轮事件是聚合值（多 loop
+//!   求和），与代理逐请求行结构性不相等，所以不用指纹去重。
 
 use crate::database::{lock_conn, Database};
 use crate::error::AppError;
@@ -37,24 +35,12 @@ use crate::services::session_usage::{
     metadata_modified_nanos, update_sync_state, SessionSyncResult,
 };
 use crate::services::sql_helpers::INPUT_TOKEN_SEMANTICS_TOTAL;
-use crate::services::usage_stats::{
-    find_model_pricing, has_recent_grokbuild_proxy_activity, SESSION_PROXY_DEDUP_WINDOW_SECONDS,
-};
+use crate::services::usage_stats::{find_model_pricing, has_recent_grokbuild_proxy_activity};
 use crate::token_usage::calculator::CostCalculator;
 use crate::token_usage::parser::TokenUsage;
 use rust_decimal::Decimal;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::time::SystemTime;
-
-/// 事件沉降窗：只导入早于「现在 − 窗口」的事件。
-///
-/// 接管态下 CLI 照写 updates.jsonl，同一请求代理已逐请求记账；代理行与
-/// 会话事件几乎同时产生，若导入抢在代理行落库前运行，接管守卫会因查不到
-/// 代理行而放行，双算永久留存。让事件先「沉降」再导入后，守卫查询必然
-/// 能看到已落库的代理行，竞态从源头消除。代价：官方态用量最多延迟约一个
-/// 窗口 + 一次后台同步周期（60s）上屏。
-const SETTLE_WINDOW_SECONDS: i64 = SESSION_PROXY_DEDUP_WINDOW_SECONDS;
 
 /// 单个模型的本轮用量（从 `modelUsage` 或顶层 usage 提取，均为逐轮口径）
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -220,24 +206,9 @@ fn sync_single_grok_file(
         .unwrap_or("unknown")
         .to_string();
 
-    let now = SystemTime::now()
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0);
-
     let mut result = SessionSyncResult::default();
-    let mut deferred = false;
 
     for (idx, event) in events.iter().enumerate() {
-        // 沉降窗：事件按 append 顺序时间单调，遇到第一条未沉降的事件即停，
-        // 后续事件与它一起等下一轮（保持"文件前缀已导入"的简单不变量）。
-        // 已知局限：未来时间戳（时钟误设）会让该文件持续延后并整文件重扫，
-        // 墙钟越过 事件时刻+窗口 后自愈；活跃会话每周期全量重读为设计代价。
-        if now.saturating_sub(event.created_at) < SETTLE_WINDOW_SECONDS {
-            deferred = true;
-            break;
-        }
-
         // 接管守卫按事件时刻判定一次，整条事件的所有模型行同进退；
         // 被守卫跳过的 token 已由代理行记账，跳过即终态（同步状态照常
         // 推进）。已知局限：守卫无 session 维度，见 usage_stats.rs 注释。
@@ -290,12 +261,7 @@ fn sync_single_grok_file(
         }
     }
 
-    if deferred {
-        // 不落同步状态：下一轮重读整个文件，把沉降后的事件补入。
-        result.deferred_files += 1;
-    } else {
-        update_sync_state(db, &file_path_str, file_modified, events.len() as i64)?;
-    }
+    update_sync_state(db, &file_path_str, file_modified, events.len() as i64)?;
 
     Ok(result)
 }
@@ -422,7 +388,6 @@ fn insert_grok_session_entry(
         output_tokens: clamp(turn.output),
         cache_read_tokens: clamp(turn.cached),
         cache_creation_tokens: 0,
-        model: Some(model.to_string()),
     };
 
     let pricing = find_model_pricing(&conn, model);
@@ -579,10 +544,12 @@ fn insert_grok_session_entry(
 mod tests {
     use super::*;
     use crate::services::session_usage::get_sync_state;
+    use crate::services::usage_stats::SESSION_PROXY_DEDUP_WINDOW_SECONDS;
     use std::io::Write;
+    use std::time::SystemTime;
     use tempfile::tempdir;
 
-    /// 早于沉降窗的固定基准时刻（2023-11-14T22:13:20Z）
+    /// 固定的过去时刻（2023-11-14T22:13:20Z）
     const OLD_EPOCH: i64 = 1_700_000_000;
 
     fn epoch_to_rfc3339(epoch: i64) -> String {
@@ -855,23 +822,19 @@ mod tests {
     }
 
     #[test]
-    fn settle_window_defers_recent_events_without_recording_sync_state() -> Result<(), AppError> {
+    fn recent_events_are_imported_and_sync_state_is_recorded() -> Result<(), AppError> {
         let db = Database::memory()?;
         let temp = tempdir().expect("tempdir");
         let now = SystemTime::now()
             .duration_since(SystemTime::UNIX_EPOCH)
             .expect("now")
             .as_secs() as i64;
-        let lines = vec![
-            usage_event_line(
-                OLD_EPOCH,
-                "p1",
-                &model_counters("grok-4.5-build", 100, 10, 0, 1),
-            ),
-            // 未沉降的新事件：本轮延后，且不落同步状态以便下一轮重读
-            usage_event_line(now, "p2", &model_counters("grok-4.5-build", 250, 30, 0, 1)),
-        ];
-        let path = write_session_file(temp.path(), "sess-settle", &lines);
+        let lines = vec![usage_event_line(
+            now,
+            "p1",
+            &model_counters("grok-4.5-build", 250, 30, 0, 1),
+        )];
+        let path = write_session_file(temp.path(), "sess-recent", &lines);
 
         let result = sync_single_grok_file(
             &db,
@@ -879,22 +842,10 @@ mod tests {
             &crate::services::session_usage::load_sync_cursors(&db).unwrap(),
         )?;
         assert_eq!(result.imported, 1);
-        assert_eq!(result.deferred_files, 1);
-        assert_eq!(query_rows(&db)?.len(), 1);
+        assert_eq!(result.deferred_files, 0);
 
         let (last_modified, _) = get_sync_state(&db, &path.to_string_lossy())?;
-        assert_eq!(last_modified, 0, "延后时不得记录同步状态");
-
-        // 下一轮重读：旧事件 UPSERT 无变化，新事件仍未沉降继续延后
-        let rerun = sync_single_grok_file(
-            &db,
-            &path,
-            &crate::services::session_usage::load_sync_cursors(&db).unwrap(),
-        )?;
-        assert_eq!(rerun.imported, 0);
-        assert_eq!(rerun.skipped, 1);
-        assert_eq!(rerun.deferred_files, 1);
-        assert_eq!(query_rows(&db)?.len(), 1);
+        assert_ne!(last_modified, 0, "导入后记录同步状态");
         Ok(())
     }
 
