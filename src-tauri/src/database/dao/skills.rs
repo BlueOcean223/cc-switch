@@ -12,6 +12,7 @@ use crate::error::AppError;
 use crate::services::skill::SkillRepo;
 use indexmap::IndexMap;
 use rusqlite::params;
+use std::collections::HashMap;
 
 impl Database {
     // ========== InstalledSkill CRUD ==========
@@ -189,14 +190,48 @@ impl Database {
         let affected = conn
             .execute("DELETE FROM skills WHERE id = ?1", params![id])
             .map_err(|e| AppError::Database(e.to_string()))?;
+        conn.execute(
+            "DELETE FROM skill_remote_commits WHERE skill_id = ?1",
+            params![id],
+        )
+        .map_err(|e| AppError::Database(e.to_string()))?;
         Ok(affected > 0)
     }
 
     /// 清空所有 Skills（用于迁移）
     pub fn clear_skills(&self) -> Result<(), AppError> {
         let conn = lock_conn!(self.conn);
-        conn.execute("DELETE FROM skills", [])
+        conn.execute_batch("DELETE FROM skills; DELETE FROM skill_remote_commits;")
             .map_err(|e| AppError::Database(e.to_string()))?;
+        Ok(())
+    }
+
+    /// 更新检查记下的「哪个提交里的版本与本地内容相同」：skill_id → (提交, 内容哈希)
+    pub fn get_skill_remote_commits(&self) -> Result<HashMap<String, (String, String)>, AppError> {
+        let conn = lock_conn!(self.conn);
+        let mut stmt = conn
+            .prepare("SELECT skill_id, commit_sha, content_hash FROM skill_remote_commits")
+            .map_err(|e| AppError::Database(e.to_string()))?;
+        let rows = stmt
+            .query_map([], |row| Ok((row.get(0)?, (row.get(1)?, row.get(2)?))))
+            .map_err(|e| AppError::Database(e.to_string()))?;
+        rows.collect::<Result<_, _>>()
+            .map_err(|e| AppError::Database(e.to_string()))
+    }
+
+    pub fn set_skill_remote_commit(
+        &self,
+        id: &str,
+        commit_sha: &str,
+        content_hash: &str,
+    ) -> Result<(), AppError> {
+        let conn = lock_conn!(self.conn);
+        conn.execute(
+            "INSERT OR REPLACE INTO skill_remote_commits (skill_id, commit_sha, content_hash)
+             VALUES (?1, ?2, ?3)",
+            params![id, commit_sha, content_hash],
+        )
+        .map_err(|e| AppError::Database(e.to_string()))?;
         Ok(())
     }
 

@@ -38,6 +38,7 @@ First release of this fork of [farion1231/cc-switch](https://github.com/farion12
 
 ### Fixed
 
+- **Skill update check**: each repository is asked which commit its branch or tag points to (git's `ls-refs`, about 150 bytes) before anything is downloaded. Skills whose installed content already matches that commit are not compared again, so a check of unchanged repositories no longer downloads every repository archive. When the commit cannot be read, the check downloads and compares as before.
 - **Codex subagents and forks**: the parent history they replay at the fork instant is no longer counted again. A child whose parent stopped writing before the fork is imported instead of waiting forever.
 - **Claude**: a reply stored while a subagent was still writing it gets its final output tokens and cost.
 - **Codex**: cache writes and the priority / fast tier from thread settings are recorded.

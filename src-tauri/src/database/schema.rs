@@ -107,6 +107,18 @@ impl Database {
         )
         .map_err(|e| AppError::Database(e.to_string()))?;
 
+        // 技能更新检查的缓存：skill_id 当前的内容（content_hash）与仓库提交 commit_sha
+        // 里的版本相同。提交和内容都没变时更新检查不再下载仓库。只是缓存，丢了会重新下载。
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS skill_remote_commits (
+            skill_id TEXT PRIMARY KEY,
+            commit_sha TEXT NOT NULL,
+            content_hash TEXT NOT NULL
+        )",
+            [],
+        )
+        .map_err(|e| AppError::Database(e.to_string()))?;
+
         // 6. Skill Repos 表
         conn.execute(
             "CREATE TABLE IF NOT EXISTS skill_repos (
