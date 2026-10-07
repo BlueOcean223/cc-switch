@@ -1594,7 +1594,7 @@ export const openclawProviderPresets: OpenClawProviderPreset[] = [
     websiteUrl: "https://platform.qianwenai.com/",
     apiKeyUrl: "https://platform.qianwenai.com/home/api-keys",
     settingsConfig: {
-      baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+      baseUrl: "https://maas.qianwenaiapi.com/compatible-mode/v1",
       apiKey: "",
       api: "openai-completions",
       models: [
@@ -1611,8 +1611,8 @@ export const openclawProviderPresets: OpenClawProviderPreset[] = [
     templateValues: {
       baseUrl: {
         label: "Base URL",
-        placeholder: "https://dashscope.aliyuncs.com/compatible-mode/v1",
-        defaultValue: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        placeholder: "https://maas.qianwenaiapi.com/compatible-mode/v1",
+        defaultValue: "https://maas.qianwenaiapi.com/compatible-mode/v1",
         editorValue: "",
       },
       apiKey: {
@@ -1633,7 +1633,7 @@ export const openclawProviderPresets: OpenClawProviderPreset[] = [
     websiteUrl: "https://platform.qianwenai.com/pricing/token-plan",
     apiKeyUrl: "https://platform.qianwenai.com/home/api-keys",
     settingsConfig: {
-      baseUrl: "https://token-plan.cn-beijing.maas.aliyuncs.com/apps/anthropic",
+      baseUrl: "https://token-plan.maas.qianwenaiapi.com/apps/anthropic",
       apiKey: "",
       api: "anthropic-messages",
       models: [
@@ -1661,10 +1661,8 @@ export const openclawProviderPresets: OpenClawProviderPreset[] = [
     templateValues: {
       baseUrl: {
         label: "Base URL",
-        placeholder:
-          "https://token-plan.cn-beijing.maas.aliyuncs.com/apps/anthropic",
-        defaultValue:
-          "https://token-plan.cn-beijing.maas.aliyuncs.com/apps/anthropic",
+        placeholder: "https://token-plan.maas.qianwenaiapi.com/apps/anthropic",
+        defaultValue: "https://token-plan.maas.qianwenaiapi.com/apps/anthropic",
         editorValue: "",
       },
       apiKey: {
@@ -1681,7 +1679,7 @@ export const openclawProviderPresets: OpenClawProviderPreset[] = [
       },
     },
   },
-  // ===== QwenCloud（DashScope 国际站）=====
+  // ===== QwenCloud（国际站，API 域名 qwencloudapi.com）=====
   // 与上面国内条目是两套独立站点：域名、控制台、密钥互不通用。
   // QwenCloud 与 Token Plan 都走 anthropic-messages，地址比 Claude Code 的
   // 多一段 /v1；国内 Token Plan 是唯一例外，官方文档给的就是不带 /v1 的
@@ -1695,7 +1693,7 @@ export const openclawProviderPresets: OpenClawProviderPreset[] = [
     websiteUrl: "https://home.qwencloud.com/",
     apiKeyUrl: "https://home.qwencloud.com/api-keys",
     settingsConfig: {
-      baseUrl: "https://dashscope-intl.aliyuncs.com/apps/anthropic/v1",
+      baseUrl: "https://maas.qwencloudapi.com/apps/anthropic/v1",
       apiKey: "",
       api: "anthropic-messages",
       models: [
@@ -1730,8 +1728,8 @@ export const openclawProviderPresets: OpenClawProviderPreset[] = [
     templateValues: {
       baseUrl: {
         label: "Base URL",
-        placeholder: "https://dashscope-intl.aliyuncs.com/apps/anthropic/v1",
-        defaultValue: "https://dashscope-intl.aliyuncs.com/apps/anthropic/v1",
+        placeholder: "https://maas.qwencloudapi.com/apps/anthropic/v1",
+        defaultValue: "https://maas.qwencloudapi.com/apps/anthropic/v1",
         editorValue: "",
       },
       apiKey: {
@@ -1809,8 +1807,7 @@ export const openclawProviderPresets: OpenClawProviderPreset[] = [
     websiteUrl: "https://www.qwencloud.com/pricing/token-plan",
     apiKeyUrl: "https://home.qwencloud.com/api-keys",
     settingsConfig: {
-      baseUrl:
-        "https://token-plan.ap-southeast-1.maas.aliyuncs.com/apps/anthropic/v1",
+      baseUrl: "https://token-plan.maas.qwencloudapi.com/apps/anthropic/v1",
       apiKey: "",
       api: "anthropic-messages",
       models: [
@@ -1846,9 +1843,9 @@ export const openclawProviderPresets: OpenClawProviderPreset[] = [
       baseUrl: {
         label: "Base URL",
         placeholder:
-          "https://token-plan.ap-southeast-1.maas.aliyuncs.com/apps/anthropic/v1",
+          "https://token-plan.maas.qwencloudapi.com/apps/anthropic/v1",
         defaultValue:
-          "https://token-plan.ap-southeast-1.maas.aliyuncs.com/apps/anthropic/v1",
+          "https://token-plan.maas.qwencloudapi.com/apps/anthropic/v1",
         editorValue: "",
       },
       apiKey: {

@@ -704,6 +704,10 @@ export const providerPresets: ProviderPreset[] = [
     icon: "baidu",
     iconColor: "#2932E1",
   },
+  // 千问AI平台 / QwenCloud 的 API 域名在 2026-09 下旬换成 maas.qianwenaiapi.com
+  // 与 maas.qwencloudapi.com，Token Plan 再加 token-plan. 前缀，路径不变（两站
+  // developer-guides/clients-and-developer-tools/claude-code.md，2026-10-07 核对）。
+  // Coding Plan 属于百炼 / Model Studio，仍用 coding(-intl).dashscope 域名。
   {
     name: "千问AI平台",
     family: "qianwen",
@@ -712,7 +716,7 @@ export const providerPresets: ProviderPreset[] = [
     apiKeyUrl: "https://platform.qianwenai.com/home/api-keys",
     settingsConfig: {
       env: {
-        ANTHROPIC_BASE_URL: "https://dashscope.aliyuncs.com/apps/anthropic",
+        ANTHROPIC_BASE_URL: "https://maas.qianwenaiapi.com/apps/anthropic",
         ANTHROPIC_AUTH_TOKEN: "",
         ANTHROPIC_MODEL: "qwen3.8-max",
         ANTHROPIC_DEFAULT_HAIKU_MODEL: "qwen3.8-flash",
@@ -752,7 +756,7 @@ export const providerPresets: ProviderPreset[] = [
     settingsConfig: {
       env: {
         ANTHROPIC_BASE_URL:
-          "https://token-plan.cn-beijing.maas.aliyuncs.com/apps/anthropic",
+          "https://token-plan.maas.qianwenaiapi.com/apps/anthropic",
         ANTHROPIC_AUTH_TOKEN: "",
         ANTHROPIC_MODEL: "qwen3.8-max",
         ANTHROPIC_DEFAULT_HAIKU_MODEL: "qwen3.8-flash",
@@ -766,8 +770,8 @@ export const providerPresets: ProviderPreset[] = [
     icon: "qianwenai",
     iconColor: "#624AFF",
   },
-  // ===== QwenCloud（DashScope 国际站）=====
-  // 与上面国内百炼是两套独立站点：域名、控制台、密钥互不通用。
+  // ===== QwenCloud（国际站，API 域名 qwencloudapi.com）=====
+  // 与上面的国内站是两套独立站点：域名、控制台、密钥互不通用。
   // 三条线各有专属 base_url 与专属 API Key，官方文档明示密钥类型与
   // base_url 不匹配会 401，因此拆成三个预设而非共用一条加候选地址。
   {
@@ -778,8 +782,7 @@ export const providerPresets: ProviderPreset[] = [
     apiKeyUrl: "https://home.qwencloud.com/api-keys",
     settingsConfig: {
       env: {
-        ANTHROPIC_BASE_URL:
-          "https://dashscope-intl.aliyuncs.com/apps/anthropic",
+        ANTHROPIC_BASE_URL: "https://maas.qwencloudapi.com/apps/anthropic",
         ANTHROPIC_AUTH_TOKEN: "",
         ANTHROPIC_MODEL: "qwen3.8-max",
         ANTHROPIC_DEFAULT_HAIKU_MODEL: "qwen3.8-flash",
@@ -821,7 +824,7 @@ export const providerPresets: ProviderPreset[] = [
     settingsConfig: {
       env: {
         ANTHROPIC_BASE_URL:
-          "https://token-plan.ap-southeast-1.maas.aliyuncs.com/apps/anthropic",
+          "https://token-plan.maas.qwencloudapi.com/apps/anthropic",
         ANTHROPIC_AUTH_TOKEN: "",
         ANTHROPIC_MODEL: "qwen3.8-max",
         ANTHROPIC_DEFAULT_HAIKU_MODEL: "qwen3.8-flash",

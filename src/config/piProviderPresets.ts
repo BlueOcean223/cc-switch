@@ -78,7 +78,7 @@ const XIAOMI_THINKING_COMPAT = {
   thinkingFormat: "deepseek",
 } as const;
 
-// DashScope's /compatible-mode/v1 returns reasoning in Qwen's own envelope and
+// Qwen's /compatible-mode/v1 returns reasoning in Qwen's own envelope and
 // rejects the `developer` role, so neither OpenAI nor DeepSeek thinking applies.
 const QWEN_THINKING_COMPAT = {
   thinkingFormat: "qwen",
@@ -470,7 +470,7 @@ const piProviderPresetDefinitions: PiProviderPreset[] = [
     apiKeyUrl: "https://platform.qianwenai.com/home/api-keys",
     settingsConfig: {
       name: "千问AI平台",
-      baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+      baseUrl: "https://maas.qianwenaiapi.com/compatible-mode/v1",
       api: "openai-completions",
       apiKey: "",
       models: [
@@ -495,8 +495,7 @@ const piProviderPresetDefinitions: PiProviderPreset[] = [
     apiKeyUrl: "https://platform.qianwenai.com/home/api-keys",
     settingsConfig: {
       name: "千问AI平台 Token Plan",
-      baseUrl:
-        "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1",
+      baseUrl: "https://token-plan.maas.qianwenaiapi.com/compatible-mode/v1",
       api: "openai-completions",
       apiKey: "",
       models: [
@@ -514,7 +513,7 @@ const piProviderPresetDefinitions: PiProviderPreset[] = [
     icon: "qianwenai",
     iconColor: "#624AFF",
   },
-  // ===== QwenCloud（DashScope 国际站）=====
+  // ===== QwenCloud（国际站，API 域名 qwencloudapi.com）=====
   // 与上面国内条目是两套独立站点：域名、控制台、密钥互不通用。
   // 按量付费与 Token Plan 都走 OpenAI 兼容层（/compatible-mode/v1）。
   {
@@ -526,7 +525,7 @@ const piProviderPresetDefinitions: PiProviderPreset[] = [
     apiKeyUrl: "https://home.qwencloud.com/api-keys",
     settingsConfig: {
       name: "QwenCloud",
-      baseUrl: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+      baseUrl: "https://maas.qwencloudapi.com/compatible-mode/v1",
       api: "openai-completions",
       apiKey: "",
       models: [
@@ -575,8 +574,7 @@ const piProviderPresetDefinitions: PiProviderPreset[] = [
     apiKeyUrl: "https://home.qwencloud.com/api-keys",
     settingsConfig: {
       name: "QwenCloud Token Plan",
-      baseUrl:
-        "https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1",
+      baseUrl: "https://token-plan.maas.qwencloudapi.com/compatible-mode/v1",
       api: "openai-completions",
       apiKey: "",
       models: [

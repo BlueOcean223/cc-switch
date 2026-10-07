@@ -724,11 +724,11 @@ requires_openai_auth = true`,
     auth: generateThirdPartyAuth(""),
     config: generateThirdPartyConfig(
       "qianwenai",
-      "https://dashscope.aliyuncs.com/compatible-mode/v1",
+      "https://maas.qianwenaiapi.com/compatible-mode/v1",
       "qwen3.8-max",
     ),
-    endpointCandidates: ["https://dashscope.aliyuncs.com/compatible-mode/v1"],
-    // DashScope 原生支持 OpenAI Responses API（/compatible-mode/v1/responses，同一 base_url）
+    endpointCandidates: ["https://maas.qianwenaiapi.com/compatible-mode/v1"],
+    // 千问AI平台原生支持 OpenAI Responses API（/compatible-mode/v1/responses，同一 base_url）
     // 档位与窗口照抄官方 Codex model-catalog.local.json——该元数据段落不分
     // 套餐，按量付费与 Token Plan 用同一份（qwen3.8 系只收 low/medium/xhigh，
     // 默认 xhigh；无 high 档，勿按常规四档补齐）
@@ -778,11 +778,11 @@ requires_openai_auth = true`,
     auth: generateThirdPartyAuth(""),
     config: generateThirdPartyConfig(
       "qianwenai_token_plan",
-      "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1",
+      "https://token-plan.maas.qianwenaiapi.com/compatible-mode/v1",
       "qwen3.8-max",
     ),
     endpointCandidates: [
-      "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1",
+      "https://token-plan.maas.qianwenaiapi.com/compatible-mode/v1",
     ],
     // 档位与窗口照抄官方 Codex model-catalogs.json（qwen3.8 系只收
     // low/medium/xhigh，默认 xhigh；无 high 档，勿按常规四档补齐）
@@ -808,7 +808,7 @@ requires_openai_auth = true`,
     icon: "qianwenai",
     iconColor: "#624AFF",
   },
-  // ===== QwenCloud（DashScope 国际站）=====
+  // ===== QwenCloud（国际站，API 域名 qwencloudapi.com）=====
   // 与上面国内条目是两套独立站点：域名、控制台、密钥互不通用。
   // 按量付费与 Token Plan 走 /compatible-mode/v1 原生 Responses。
   {
@@ -820,12 +820,10 @@ requires_openai_auth = true`,
     auth: generateThirdPartyAuth(""),
     config: generateThirdPartyConfig(
       "qwencloud",
-      "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+      "https://maas.qwencloudapi.com/compatible-mode/v1",
       "qwen3.8-max",
     ),
-    endpointCandidates: [
-      "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
-    ],
+    endpointCandidates: ["https://maas.qwencloudapi.com/compatible-mode/v1"],
     // 档位与窗口照抄官方 Codex model-catalogs.json（qwen3.8 系只收
     // low/medium/xhigh，默认 xhigh；无 high 档，勿按常规四档补齐）
     modelCatalog: modelCatalog([
@@ -888,11 +886,11 @@ requires_openai_auth = true`,
     auth: generateThirdPartyAuth(""),
     config: generateThirdPartyConfig(
       "qwencloud_token_plan",
-      "https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1",
+      "https://token-plan.maas.qwencloudapi.com/compatible-mode/v1",
       "qwen3.8-max",
     ),
     endpointCandidates: [
-      "https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1",
+      "https://token-plan.maas.qwencloudapi.com/compatible-mode/v1",
     ],
     // 档位与窗口照抄官方 Codex model-catalogs.json（qwen3.8 系只收
     // low/medium/xhigh，默认 xhigh；无 high 档，勿按常规四档补齐）
