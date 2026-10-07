@@ -145,6 +145,27 @@ fn build_client(proxy_url: Option<&str>) -> Result<Client, String> {
         .map_err(|e| format!("Failed to build HTTP client: {e}"))
 }
 
+/// 读出响应体并按 JSON 解析，供额度、余额查询使用。
+///
+/// 外层 `Err` 是读体中断（超时、连接断开），属于瞬时失败，调用方用 `?` 原样返回。
+/// 内层 `Err` 是确定性失败的文案：非 2xx 写成 `API error (HTTP <code>): <body>`
+/// （前端按其中的状态码判断要不要沿用上次的读数），或响应不是预期的 JSON。
+/// 先 `bytes()` 再解析：reqwest 的 `json()` 把读体错误也包成 decode 错误，两者分不开。
+pub async fn read_json<T: serde::de::DeserializeOwned>(
+    resp: reqwest::Response,
+) -> Result<Result<T, String>, String> {
+    let status = resp.status();
+    if !status.is_success() {
+        let body = resp.text().await.unwrap_or_default();
+        return Ok(Err(format!("API error (HTTP {status}): {body}")));
+    }
+    let raw = resp
+        .bytes()
+        .await
+        .map_err(|e| format!("Failed to read response: {e}"))?;
+    Ok(serde_json::from_slice(&raw).map_err(|e| format!("Failed to parse response: {e}")))
+}
+
 /// 隐藏 URL 中的敏感信息（用于日志）
 pub fn mask_url(url: &str) -> String {
     if let Ok(parsed) = url::Url::parse(url) {

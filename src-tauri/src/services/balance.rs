@@ -9,6 +9,7 @@
 //! - `Ok(success:false)` = 确定性失败（空 key/未知供应商/鉴权/非 2xx/响应体非法 JSON），
 //!   立即透出错误文案。判定按 reqwest 错误种类在折叠点完成，不依赖错误文案匹配。
 
+use crate::http_client::read_json;
 use crate::provider::{UsageData, UsageResult};
 use std::time::Duration;
 
@@ -83,31 +84,17 @@ async fn query_deepseek(api_key: &str) -> Result<UsageResult, String> {
         .header("Accept", "application/json")
         .timeout(Duration::from_secs(15))
         .send()
-        .await;
-
-    let resp = match resp {
-        Ok(r) => r,
-        Err(e) => return Err(format!("Network error: {e}")),
-    };
+        .await
+        .map_err(|e| format!("Network error: {e}"))?;
 
     let status = resp.status();
     if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
         return Ok(make_auth_error(status));
     }
-    if !status.is_success() {
-        let body = resp.text().await.unwrap_or_default();
-        return Ok(make_error(format!("API error (HTTP {status}): {body}")));
-    }
 
-    // 先 bytes() 再解析：读体失败（超时/连接中断）是瞬时 → Err；拿到完整响应体
-    // 后解析失败才是确定性。reqwest 的 json() 把读体错误也包成 decode，无法区分。
-    let raw = match resp.bytes().await {
-        Ok(b) => b,
-        Err(e) => return Err(format!("Failed to read response: {e}")),
-    };
-    let body: serde_json::Value = match serde_json::from_slice(&raw) {
-        Ok(v) => v,
-        Err(e) => return Ok(make_error(format!("Failed to parse response: {e}"))),
+    let body: serde_json::Value = match read_json(resp).await? {
+        Ok(body) => body,
+        Err(error) => return Ok(make_error(error)),
     };
 
     let is_available = body
@@ -171,31 +158,17 @@ async fn query_stepfun(api_key: &str, intl: bool) -> Result<UsageResult, String>
         .header("Accept", "application/json")
         .timeout(Duration::from_secs(15))
         .send()
-        .await;
-
-    let resp = match resp {
-        Ok(r) => r,
-        Err(e) => return Err(format!("Network error: {e}")),
-    };
+        .await
+        .map_err(|e| format!("Network error: {e}"))?;
 
     let status = resp.status();
     if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
         return Ok(make_auth_error(status));
     }
-    if !status.is_success() {
-        let body = resp.text().await.unwrap_or_default();
-        return Ok(make_error(format!("API error (HTTP {status}): {body}")));
-    }
 
-    // 先 bytes() 再解析：读体失败（超时/连接中断）是瞬时 → Err；拿到完整响应体
-    // 后解析失败才是确定性。reqwest 的 json() 把读体错误也包成 decode，无法区分。
-    let raw = match resp.bytes().await {
-        Ok(b) => b,
-        Err(e) => return Err(format!("Failed to read response: {e}")),
-    };
-    let body: serde_json::Value = match serde_json::from_slice(&raw) {
-        Ok(v) => v,
-        Err(e) => return Ok(make_error(format!("Failed to parse response: {e}"))),
+    let body: serde_json::Value = match read_json(resp).await? {
+        Ok(body) => body,
+        Err(error) => return Ok(make_error(error)),
     };
 
     let balance = parse_f64_field(&body, "balance").unwrap_or(0.0);
@@ -236,31 +209,17 @@ async fn query_siliconflow(api_key: &str) -> Result<UsageResult, String> {
         .header("Accept", "application/json")
         .timeout(Duration::from_secs(15))
         .send()
-        .await;
-
-    let resp = match resp {
-        Ok(r) => r,
-        Err(e) => return Err(format!("Network error: {e}")),
-    };
+        .await
+        .map_err(|e| format!("Network error: {e}"))?;
 
     let status = resp.status();
     if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
         return Ok(make_auth_error(status));
     }
-    if !status.is_success() {
-        let body = resp.text().await.unwrap_or_default();
-        return Ok(make_error(format!("API error (HTTP {status}): {body}")));
-    }
 
-    // 先 bytes() 再解析：读体失败（超时/连接中断）是瞬时 → Err；拿到完整响应体
-    // 后解析失败才是确定性。reqwest 的 json() 把读体错误也包成 decode，无法区分。
-    let raw = match resp.bytes().await {
-        Ok(b) => b,
-        Err(e) => return Err(format!("Failed to read response: {e}")),
-    };
-    let body: serde_json::Value = match serde_json::from_slice(&raw) {
-        Ok(v) => v,
-        Err(e) => return Ok(make_error(format!("Failed to parse response: {e}"))),
+    let body: serde_json::Value = match read_json(resp).await? {
+        Ok(body) => body,
+        Err(error) => return Ok(make_error(error)),
     };
 
     let data = match body.get("data") {
@@ -303,31 +262,17 @@ async fn query_openrouter(api_key: &str) -> Result<UsageResult, String> {
         .header("Accept", "application/json")
         .timeout(Duration::from_secs(15))
         .send()
-        .await;
-
-    let resp = match resp {
-        Ok(r) => r,
-        Err(e) => return Err(format!("Network error: {e}")),
-    };
+        .await
+        .map_err(|e| format!("Network error: {e}"))?;
 
     let status = resp.status();
     if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
         return Ok(make_auth_error(status));
     }
-    if !status.is_success() {
-        let body = resp.text().await.unwrap_or_default();
-        return Ok(make_error(format!("API error (HTTP {status}): {body}")));
-    }
 
-    // 先 bytes() 再解析：读体失败（超时/连接中断）是瞬时 → Err；拿到完整响应体
-    // 后解析失败才是确定性。reqwest 的 json() 把读体错误也包成 decode，无法区分。
-    let raw = match resp.bytes().await {
-        Ok(b) => b,
-        Err(e) => return Err(format!("Failed to read response: {e}")),
-    };
-    let body: serde_json::Value = match serde_json::from_slice(&raw) {
-        Ok(v) => v,
-        Err(e) => return Ok(make_error(format!("Failed to parse response: {e}"))),
+    let body: serde_json::Value = match read_json(resp).await? {
+        Ok(body) => body,
+        Err(error) => return Ok(make_error(error)),
     };
 
     Ok(openrouter_key_usage(body.get("data").unwrap_or(&body)))
@@ -384,31 +329,17 @@ async fn query_novita(api_key: &str) -> Result<UsageResult, String> {
         .header("Accept", "application/json")
         .timeout(Duration::from_secs(15))
         .send()
-        .await;
-
-    let resp = match resp {
-        Ok(r) => r,
-        Err(e) => return Err(format!("Network error: {e}")),
-    };
+        .await
+        .map_err(|e| format!("Network error: {e}"))?;
 
     let status = resp.status();
     if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
         return Ok(make_auth_error(status));
     }
-    if !status.is_success() {
-        let body = resp.text().await.unwrap_or_default();
-        return Ok(make_error(format!("API error (HTTP {status}): {body}")));
-    }
 
-    // 先 bytes() 再解析：读体失败（超时/连接中断）是瞬时 → Err；拿到完整响应体
-    // 后解析失败才是确定性。reqwest 的 json() 把读体错误也包成 decode，无法区分。
-    let raw = match resp.bytes().await {
-        Ok(b) => b,
-        Err(e) => return Err(format!("Failed to read response: {e}")),
-    };
-    let body: serde_json::Value = match serde_json::from_slice(&raw) {
-        Ok(v) => v,
-        Err(e) => return Ok(make_error(format!("Failed to parse response: {e}"))),
+    let body: serde_json::Value = match read_json(resp).await? {
+        Ok(body) => body,
+        Err(error) => return Ok(make_error(error)),
     };
 
     Ok(novita_balance(&body))

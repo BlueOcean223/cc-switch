@@ -6,6 +6,7 @@
 use super::subscription::{
     CredentialStatus, QuotaTier, SubscriptionQuota, TIER_FIVE_HOUR, TIER_MONTHLY, TIER_WEEKLY_LIMIT,
 };
+use crate::http_client::read_json;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 // ── 供应商检测 ──────────────────────────────────────────────
@@ -105,6 +106,36 @@ fn parse_f64(value: &serde_json::Value) -> Option<f64> {
         .or_else(|| value.as_str().and_then(|s| s.parse().ok()))
 }
 
+fn quota_ok(tiers: Vec<QuotaTier>, plan: Option<String>) -> SubscriptionQuota {
+    SubscriptionQuota {
+        tool: "coding_plan".to_string(),
+        credential_status: CredentialStatus::Valid,
+        credential_message: plan,
+        success: true,
+        tiers,
+        extra_usage: None,
+        reset_credits: None,
+        credits_balance: None,
+        error: None,
+        queried_at: Some(now_millis()),
+    }
+}
+
+fn auth_failed(status: reqwest::StatusCode) -> SubscriptionQuota {
+    SubscriptionQuota {
+        tool: "coding_plan".to_string(),
+        credential_status: CredentialStatus::Expired,
+        credential_message: Some("Invalid API key".to_string()),
+        success: false,
+        tiers: vec![],
+        extra_usage: None,
+        reset_credits: None,
+        credits_balance: None,
+        error: Some(format!("Authentication failed (HTTP {status})")),
+        queried_at: Some(now_millis()),
+    }
+}
+
 fn make_error(msg: String) -> SubscriptionQuota {
     SubscriptionQuota {
         tool: "coding_plan".to_string(),
@@ -137,61 +168,24 @@ async fn query_kimi(api_key: &str, is_cn: bool) -> Result<SubscriptionQuota, Str
         .header("Accept", "application/json")
         .timeout(std::time::Duration::from_secs(15))
         .send()
-        .await;
-
-    let resp = match resp {
-        Ok(r) => r,
-        Err(e) => return Err(format!("Network error: {e}")),
-    };
+        .await
+        .map_err(|e| format!("Network error: {e}"))?;
 
     let status = resp.status();
     if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
-        return Ok(SubscriptionQuota {
-            tool: "coding_plan".to_string(),
-            credential_status: CredentialStatus::Expired,
-            credential_message: Some("Invalid API key".to_string()),
-            success: false,
-            tiers: vec![],
-            extra_usage: None,
-            reset_credits: None,
-            credits_balance: None,
-            error: Some(format!("Authentication failed (HTTP {status})")),
-            queried_at: Some(now_millis()),
-        });
+        return Ok(auth_failed(status));
     }
 
-    if !status.is_success() {
-        let body = resp.text().await.unwrap_or_default();
-        return Ok(make_error(format!("API error (HTTP {status}): {body}")));
-    }
-
-    // 先 bytes() 再解析：读体失败（超时/连接中断）是瞬时 → Err；拿到完整响应体
-    // 后解析失败才是确定性。reqwest 的 json() 把读体错误也包成 decode，无法区分。
-    let raw = match resp.bytes().await {
-        Ok(b) => b,
-        Err(e) => return Err(format!("Failed to read response: {e}")),
-    };
-    let body: serde_json::Value = match serde_json::from_slice(&raw) {
-        Ok(v) => v,
-        Err(e) => return Ok(make_error(format!("Failed to parse response: {e}"))),
+    let body: serde_json::Value = match read_json(resp).await? {
+        Ok(body) => body,
+        Err(error) => return Ok(make_error(error)),
     };
 
     let Some(tiers) = parse_kimi_tiers(&body) else {
         return Ok(make_error("Unrecognized Kimi usage response".to_string()));
     };
 
-    Ok(SubscriptionQuota {
-        tool: "coding_plan".to_string(),
-        credential_status: CredentialStatus::Valid,
-        credential_message: None,
-        success: true,
-        tiers,
-        extra_usage: None,
-        reset_credits: None,
-        credits_balance: None,
-        error: None,
-        queried_at: Some(now_millis()),
-    })
+    Ok(quota_ok(tiers, None))
 }
 
 /// 解析 Kimi `/coding/v1/usages` 响应，形态不认识时返回 None。
@@ -395,43 +389,17 @@ async fn query_zhipu(base_url: &str, api_key: &str) -> Result<SubscriptionQuota,
         .header("Accept-Language", "en-US,en")
         .timeout(std::time::Duration::from_secs(15))
         .send()
-        .await;
-
-    let resp = match resp {
-        Ok(r) => r,
-        Err(e) => return Err(format!("Network error: {e}")),
-    };
+        .await
+        .map_err(|e| format!("Network error: {e}"))?;
 
     let status = resp.status();
     if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
-        return Ok(SubscriptionQuota {
-            tool: "coding_plan".to_string(),
-            credential_status: CredentialStatus::Expired,
-            credential_message: Some("Invalid API key".to_string()),
-            success: false,
-            tiers: vec![],
-            extra_usage: None,
-            reset_credits: None,
-            credits_balance: None,
-            error: Some(format!("Authentication failed (HTTP {status})")),
-            queried_at: Some(now_millis()),
-        });
+        return Ok(auth_failed(status));
     }
 
-    if !status.is_success() {
-        let body = resp.text().await.unwrap_or_default();
-        return Ok(make_error(format!("API error (HTTP {status}): {body}")));
-    }
-
-    // 先 bytes() 再解析：读体失败（超时/连接中断）是瞬时 → Err；拿到完整响应体
-    // 后解析失败才是确定性。reqwest 的 json() 把读体错误也包成 decode，无法区分。
-    let raw = match resp.bytes().await {
-        Ok(b) => b,
-        Err(e) => return Err(format!("Failed to read response: {e}")),
-    };
-    let body: serde_json::Value = match serde_json::from_slice(&raw) {
-        Ok(v) => v,
-        Err(e) => return Ok(make_error(format!("Failed to parse response: {e}"))),
+    let body: serde_json::Value = match read_json(resp).await? {
+        Ok(body) => body,
+        Err(error) => return Ok(make_error(error)),
     };
 
     Ok(zhipu_quota_from_body(&body))
@@ -463,18 +431,7 @@ fn zhipu_quota_from_body(body: &serde_json::Value) -> SubscriptionQuota {
         .and_then(|v| v.as_str())
         .map(|s| s.to_string());
 
-    SubscriptionQuota {
-        tool: "coding_plan".to_string(),
-        credential_status: CredentialStatus::Valid,
-        credential_message: level,
-        success: true,
-        tiers,
-        extra_usage: None,
-        reset_credits: None,
-        credits_balance: None,
-        error: None,
-        queried_at: Some(now_millis()),
-    }
+    quota_ok(tiers, level)
 }
 
 // ── MiniMax ─────────────────────────────────────────────────
@@ -503,43 +460,17 @@ async fn query_minimax(api_key: &str, is_cn: bool) -> Result<SubscriptionQuota, 
         .header("Content-Type", "application/json")
         .timeout(std::time::Duration::from_secs(15))
         .send()
-        .await;
-
-    let resp = match resp {
-        Ok(r) => r,
-        Err(e) => return Err(format!("Network error: {e}")),
-    };
+        .await
+        .map_err(|e| format!("Network error: {e}"))?;
 
     let status = resp.status();
     if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
-        return Ok(SubscriptionQuota {
-            tool: "coding_plan".to_string(),
-            credential_status: CredentialStatus::Expired,
-            credential_message: Some("Invalid API key".to_string()),
-            success: false,
-            tiers: vec![],
-            extra_usage: None,
-            reset_credits: None,
-            credits_balance: None,
-            error: Some(format!("Authentication failed (HTTP {status})")),
-            queried_at: Some(now_millis()),
-        });
+        return Ok(auth_failed(status));
     }
 
-    if !status.is_success() {
-        let body = resp.text().await.unwrap_or_default();
-        return Ok(make_error(format!("API error (HTTP {status}): {body}")));
-    }
-
-    // 先 bytes() 再解析：读体失败（超时/连接中断）是瞬时 → Err；拿到完整响应体
-    // 后解析失败才是确定性。reqwest 的 json() 把读体错误也包成 decode，无法区分。
-    let raw = match resp.bytes().await {
-        Ok(b) => b,
-        Err(e) => return Err(format!("Failed to read response: {e}")),
-    };
-    let body: serde_json::Value = match serde_json::from_slice(&raw) {
-        Ok(v) => v,
-        Err(e) => return Ok(make_error(format!("Failed to parse response: {e}"))),
+    let body: serde_json::Value = match read_json(resp).await? {
+        Ok(body) => body,
+        Err(error) => return Ok(make_error(error)),
     };
 
     Ok(minimax_quota_from_body(&body))
@@ -570,18 +501,7 @@ fn minimax_quota_from_body(body: &serde_json::Value) -> SubscriptionQuota {
         }
     }
 
-    SubscriptionQuota {
-        tool: "coding_plan".to_string(),
-        credential_status: CredentialStatus::Valid,
-        credential_message: None,
-        success: true,
-        tiers: parse_minimax_tiers(body),
-        extra_usage: None,
-        reset_credits: None,
-        credits_balance: None,
-        error: None,
-        queried_at: Some(now_millis()),
-    }
+    quota_ok(parse_minimax_tiers(body), None)
 }
 
 // ── ZenMux ──────────────────────────────────────────────────
@@ -604,12 +524,8 @@ async fn query_zenmux_at(url: &str, api_key: &str) -> Result<SubscriptionQuota, 
         .header("Accept", "application/json")
         .timeout(std::time::Duration::from_secs(15))
         .send()
-        .await;
-
-    let resp = match resp {
-        Ok(r) => r,
-        Err(e) => return Err(format!("Network error: {e}")),
-    };
+        .await
+        .map_err(|e| format!("Network error: {e}"))?;
 
     let status = resp.status();
     if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
@@ -634,20 +550,9 @@ async fn query_zenmux_at(url: &str, api_key: &str) -> Result<SubscriptionQuota, 
         return Ok(make_error(format!("Rate limited (HTTP {status})")));
     }
 
-    if !status.is_success() {
-        let body = resp.text().await.unwrap_or_default();
-        return Ok(make_error(format!("API error (HTTP {status}): {body}")));
-    }
-
-    // 先 bytes() 再解析：读体失败（超时/连接中断）是瞬时 → Err；拿到完整响应体
-    // 后解析失败才是确定性。reqwest 的 json() 把读体错误也包成 decode，无法区分。
-    let raw = match resp.bytes().await {
-        Ok(b) => b,
-        Err(e) => return Err(format!("Failed to read response: {e}")),
-    };
-    let body: serde_json::Value = match serde_json::from_slice(&raw) {
-        Ok(v) => v,
-        Err(e) => return Ok(make_error(format!("Failed to parse response: {e}"))),
+    let body: serde_json::Value = match read_json(resp).await? {
+        Ok(body) => body,
+        Err(error) => return Ok(make_error(error)),
     };
 
     // 检查业务级别错误
@@ -718,28 +623,9 @@ async fn query_zenmux_at(url: &str, api_key: &str) -> Result<SubscriptionQuota, 
         .get("account_status")
         .and_then(|v| v.as_str())
         .unwrap_or("");
-    let plan_info = if !plan_tier.is_empty() {
-        format!("{plan_tier} ({account_status})")
-    } else {
-        String::new()
-    };
+    let plan_info = (!plan_tier.is_empty()).then(|| format!("{plan_tier} ({account_status})"));
 
-    Ok(SubscriptionQuota {
-        tool: "coding_plan".to_string(),
-        credential_status: CredentialStatus::Valid,
-        credential_message: if plan_info.is_empty() {
-            None
-        } else {
-            Some(plan_info)
-        },
-        success: true,
-        tiers,
-        extra_usage: None,
-        reset_credits: None,
-        credits_balance: None,
-        error: None,
-        queried_at: Some(now_millis()),
-    })
+    Ok(quota_ok(tiers, plan_info))
 }
 
 /// 从 `/v1/token_plan/remains` 响应中解析 MiniMax Token Plan 的额度 tier。
@@ -875,12 +761,8 @@ async fn query_opencode_go(api_key: &str) -> Result<SubscriptionQuota, String> {
         .header("Accept", "application/json")
         .timeout(std::time::Duration::from_secs(15))
         .send()
-        .await;
-
-    let resp = match resp {
-        Ok(r) => r,
-        Err(e) => return Err(format!("Network error: {e}")),
-    };
+        .await
+        .map_err(|e| format!("Network error: {e}"))?;
 
     let status = resp.status();
     // 403 EntitlementError：key 本身有效（Zen 与 Go 共用同一把 workspace
@@ -891,31 +773,11 @@ async fn query_opencode_go(api_key: &str) -> Result<SubscriptionQuota, String> {
         ));
     }
     if status == reqwest::StatusCode::UNAUTHORIZED {
-        return Ok(SubscriptionQuota {
-            tool: "coding_plan".to_string(),
-            credential_status: CredentialStatus::Expired,
-            credential_message: Some("Invalid API key".to_string()),
-            success: false,
-            tiers: vec![],
-            extra_usage: None,
-            reset_credits: None,
-            credits_balance: None,
-            error: Some(format!("Authentication failed (HTTP {status})")),
-            queried_at: Some(now_millis()),
-        });
+        return Ok(auth_failed(status));
     }
-    if !status.is_success() {
-        let body = resp.text().await.unwrap_or_default();
-        return Ok(make_error(format!("API error (HTTP {status}): {body}")));
-    }
-
-    let raw = match resp.bytes().await {
-        Ok(b) => b,
-        Err(e) => return Err(format!("Failed to read response: {e}")),
-    };
-    let body: serde_json::Value = match serde_json::from_slice(&raw) {
-        Ok(v) => v,
-        Err(e) => return Ok(make_error(format!("Failed to parse response: {e}"))),
+    let body: serde_json::Value = match read_json(resp).await? {
+        Ok(body) => body,
+        Err(error) => return Ok(make_error(error)),
     };
 
     let tiers = parse_opencode_go_tiers(&body);
@@ -925,18 +787,7 @@ async fn query_opencode_go(api_key: &str) -> Result<SubscriptionQuota, String> {
         return Ok(make_error("Unexpected usage response shape".to_string()));
     }
 
-    Ok(SubscriptionQuota {
-        tool: "coding_plan".to_string(),
-        credential_status: CredentialStatus::Valid,
-        credential_message: None,
-        success: true,
-        tiers,
-        extra_usage: None,
-        reset_credits: None,
-        credits_balance: None,
-        error: None,
-        queried_at: Some(now_millis()),
-    })
+    Ok(quota_ok(tiers, None))
 }
 
 // ── Command Code ─────────────────────────────────────────────
@@ -944,12 +795,6 @@ async fn query_opencode_go(api_key: &str) -> Result<SubscriptionQuota, String> {
 /// Command Code 的 `/alpha` 控制面接口固定在根域名；推理数据面才使用
 /// `/provider` / `/provider/v1`。不要复用 provider 的 base_url。
 const COMMAND_CODE_API_BASE: &str = "https://api.commandcode.ai";
-
-enum CommandCodeFetch {
-    Body(serde_json::Value),
-    AuthExpired,
-    Error(String),
-}
 
 fn command_code_url(base_url: &str, path: &str, params: &[(&str, &str)]) -> Result<String, String> {
     let mut url = url::Url::parse(&format!("{}{}", base_url.trim_end_matches('/'), path))
@@ -964,13 +809,14 @@ fn command_code_url(base_url: &str, path: &str, params: &[(&str, &str)]) -> Resu
 }
 
 /// `/alpha` 是官方 CLI 使用的私有路由，未公开文档化；保持宽松解析。
+/// 外层 `Err` 是瞬时失败；内层 `Err` 是要直接返回的失败结果。
 async fn fetch_command_code_json(
     client: &reqwest::Client,
     base_url: &str,
     path: &str,
     params: &[(&str, &str)],
     api_key: &str,
-) -> Result<CommandCodeFetch, String> {
+) -> Result<Result<serde_json::Value, SubscriptionQuota>, String> {
     let url = command_code_url(base_url, path, params)?;
     let response = client
         .get(url)
@@ -983,41 +829,9 @@ async fn fetch_command_code_json(
 
     let status = response.status();
     if status == reqwest::StatusCode::UNAUTHORIZED {
-        return Ok(CommandCodeFetch::AuthExpired);
+        return Ok(Err(auth_failed(status)));
     }
-
-    let raw = response
-        .bytes()
-        .await
-        .map_err(|e| format!("Failed to read response: {e}"))?;
-    if !status.is_success() {
-        let body = String::from_utf8_lossy(&raw);
-        return Ok(CommandCodeFetch::Error(format!(
-            "API error (HTTP {status}): {body}"
-        )));
-    }
-
-    match serde_json::from_slice(&raw) {
-        Ok(body) => Ok(CommandCodeFetch::Body(body)),
-        Err(e) => Ok(CommandCodeFetch::Error(format!(
-            "Failed to parse response: {e}"
-        ))),
-    }
-}
-
-fn command_code_auth_error() -> SubscriptionQuota {
-    SubscriptionQuota {
-        tool: "coding_plan".to_string(),
-        credential_status: CredentialStatus::Expired,
-        credential_message: Some("Invalid API key".to_string()),
-        success: false,
-        tiers: vec![],
-        extra_usage: None,
-        reset_credits: None,
-        credits_balance: None,
-        error: Some("Authentication failed (HTTP 401 Unauthorized)".to_string()),
-        queried_at: Some(now_millis()),
-    }
+    Ok(read_json(response).await?.map_err(make_error))
 }
 
 fn command_code_window_tier(window: Option<&serde_json::Value>, name: &str) -> Option<QuotaTier> {
@@ -1118,18 +932,7 @@ fn parse_command_code_quota(
         max_value_usd: None,
     });
 
-    SubscriptionQuota {
-        tool: "coding_plan".to_string(),
-        credential_status: CredentialStatus::Valid,
-        credential_message: plan_id,
-        success: true,
-        tiers,
-        extra_usage: None,
-        reset_credits: None,
-        credits_balance: None,
-        error: None,
-        queried_at: Some(now_millis()),
-    }
+    quota_ok(tiers, plan_id)
 }
 
 async fn query_command_code_at(base_url: &str, api_key: &str) -> Result<SubscriptionQuota, String> {
@@ -1144,9 +947,8 @@ async fn query_command_code_at(base_url: &str, api_key: &str) -> Result<Subscrip
     )
     .await?
     {
-        CommandCodeFetch::Body(body) => body,
-        CommandCodeFetch::AuthExpired => return Ok(command_code_auth_error()),
-        CommandCodeFetch::Error(error) => return Ok(make_error(error)),
+        Ok(body) => body,
+        Err(failed) => return Ok(failed),
     };
 
     let org_id = whoami
@@ -1168,9 +970,8 @@ async fn query_command_code_at(base_url: &str, api_key: &str) -> Result<Subscrip
     )
     .await?
     {
-        CommandCodeFetch::Body(body) => body,
-        CommandCodeFetch::AuthExpired => return Ok(command_code_auth_error()),
-        CommandCodeFetch::Error(error) => return Ok(make_error(error)),
+        Ok(body) => body,
+        Err(failed) => return Ok(failed),
     };
 
     let subscription = match fetch_command_code_json(
@@ -1182,9 +983,8 @@ async fn query_command_code_at(base_url: &str, api_key: &str) -> Result<Subscrip
     )
     .await?
     {
-        CommandCodeFetch::Body(body) => Some(body),
-        CommandCodeFetch::AuthExpired => return Ok(command_code_auth_error()),
-        CommandCodeFetch::Error(error) => return Ok(make_error(error)),
+        Ok(body) => Some(body),
+        Err(failed) => return Ok(failed),
     };
 
     let period_start = subscription
@@ -1209,9 +1009,8 @@ async fn query_command_code_at(base_url: &str, api_key: &str) -> Result<Subscrip
     )
     .await?
     {
-        CommandCodeFetch::Body(body) => body,
-        CommandCodeFetch::AuthExpired => return Ok(command_code_auth_error()),
-        CommandCodeFetch::Error(error) => return Ok(make_error(error)),
+        Ok(body) => body,
+        Err(failed) => return Ok(failed),
     };
 
     Ok(parse_command_code_quota(
@@ -1573,21 +1372,6 @@ fn parse_coding_plan_tiers(result: &serde_json::Value) -> Vec<QuotaTier> {
         .collect()
 }
 
-fn volcengine_success(tiers: Vec<QuotaTier>, plan: Option<String>) -> SubscriptionQuota {
-    SubscriptionQuota {
-        tool: "coding_plan".to_string(),
-        credential_status: CredentialStatus::Valid,
-        credential_message: plan,
-        success: true,
-        tiers,
-        extra_usage: None,
-        reset_credits: None,
-        credits_balance: None,
-        error: None,
-        queried_at: Some(now_millis()),
-    }
-}
-
 fn volcengine_auth_error(detail: String) -> SubscriptionQuota {
     SubscriptionQuota {
         tool: "coding_plan".to_string(),
@@ -1640,7 +1424,7 @@ async fn query_volcengine(
             "No active {product} subscription found for this credential"
         )));
     }
-    Ok(volcengine_success(tiers, plan))
+    Ok(quota_ok(tiers, plan))
 }
 
 // ── 公开入口 ────────────────────────────────────────────────
@@ -1698,43 +1482,17 @@ async fn query_zhipu_team_at(
         .header("Accept-Language", "en-US,en")
         .timeout(std::time::Duration::from_secs(15))
         .send()
-        .await;
-
-    let resp = match resp {
-        Ok(r) => r,
-        Err(e) => return Err(format!("Network error: {e}")),
-    };
+        .await
+        .map_err(|e| format!("Network error: {e}"))?;
 
     let status = resp.status();
     if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
-        return Ok(SubscriptionQuota {
-            tool: "coding_plan".to_string(),
-            credential_status: CredentialStatus::Expired,
-            credential_message: Some("Invalid API key".to_string()),
-            success: false,
-            tiers: vec![],
-            extra_usage: None,
-            reset_credits: None,
-            credits_balance: None,
-            error: Some(format!("Authentication failed (HTTP {status})")),
-            queried_at: Some(now_millis()),
-        });
+        return Ok(auth_failed(status));
     }
 
-    if !status.is_success() {
-        let body = resp.text().await.unwrap_or_default();
-        return Ok(make_error(format!("API error (HTTP {status}): {body}")));
-    }
-
-    // 先 bytes() 再解析：读体失败（超时/连接中断）是瞬时 → Err；拿到完整响应体
-    // 后解析失败才是确定性。reqwest 的 json() 把读体错误也包成 decode，无法区分。
-    let raw = match resp.bytes().await {
-        Ok(b) => b,
-        Err(e) => return Err(format!("Failed to read response: {e}")),
-    };
-    let body: serde_json::Value = match serde_json::from_slice(&raw) {
-        Ok(v) => v,
-        Err(e) => return Ok(make_error(format!("Failed to parse response: {e}"))),
+    let body: serde_json::Value = match read_json(resp).await? {
+        Ok(body) => body,
+        Err(error) => return Ok(make_error(error)),
     };
 
     Ok(zhipu_quota_from_body(&body))

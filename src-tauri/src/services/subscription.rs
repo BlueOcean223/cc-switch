@@ -11,6 +11,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use std::collections::{HashMap, HashSet};
 
 use crate::config;
+use crate::http_client::read_json;
 
 // ── 数据类型 ──────────────────────────────────────────────
 
@@ -181,6 +182,25 @@ fn claude_keychain_services(override_dir: Option<&Path>, default_dir: &Path) -> 
     }
 }
 
+/// 用 `security find-generic-password -w` 读 macOS Keychain 里的一条密码。
+/// 没有这一条、内容为空、读不出来（访问被拒、`security` 跑不起来）都返回 None，
+/// 调用方回退到凭据文件。
+#[cfg(target_os = "macos")]
+fn read_keychain_password(service: &str, account: Option<&str>) -> Option<String> {
+    let mut command = std::process::Command::new("security");
+    command.args(["find-generic-password", "-s", service]);
+    if let Some(account) = account {
+        command.args(["-a", account]);
+    }
+    let output = command.arg("-w").output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let secret = String::from_utf8(output.stdout).ok()?;
+    let secret = secret.trim();
+    (!secret.is_empty()).then(|| secret.to_string())
+}
+
 /// 从 macOS Keychain 读取 Claude 凭据
 #[cfg(target_os = "macos")]
 fn read_claude_credentials_from_keychain(
@@ -190,16 +210,8 @@ fn read_claude_credentials_from_keychain(
     claude_keychain_services(override_dir.as_deref(), &default_dir)
         .iter()
         .find_map(|service| {
-            let output = std::process::Command::new("security")
-                .args(["find-generic-password", "-s", service, "-w"])
-                .output()
-                .ok()?;
-            if !output.status.success() {
-                return None; // Keychain 中无此条目
-            }
-            let json_str = String::from_utf8(output.stdout).ok()?;
-            let json_str = json_str.trim();
-            (!json_str.is_empty()).then(|| parse_claude_credentials_json(json_str))
+            read_keychain_password(service, None)
+                .map(|json_str| parse_claude_credentials_json(&json_str))
         })
     // 全部没有时回退到文件
 }
@@ -430,15 +442,10 @@ async fn query_claude_quota(access_token: &str) -> Result<SubscriptionQuota, Str
         .header("Accept", "application/json")
         .timeout(std::time::Duration::from_secs(15))
         .send()
-        .await;
-
-    let resp = match resp {
-        Ok(r) => r,
-        Err(e) => return Err(format!("Network error: {e}")),
-    };
+        .await
+        .map_err(|e| format!("Network error: {e}"))?;
 
     let status = resp.status();
-
     if !status.is_success() {
         let retry_after = resp
             .headers()
@@ -449,20 +456,14 @@ async fn query_claude_quota(access_token: &str) -> Result<SubscriptionQuota, Str
         return Ok(claude_http_error(status, retry_after.as_deref(), &body));
     }
 
-    // 先 bytes() 再解析：读体失败（超时/连接中断）是瞬时 → Err；拿到完整响应体
-    // 后解析失败才是确定性。reqwest 的 json() 把读体错误也包成 decode，无法区分。
-    let raw = match resp.bytes().await {
-        Ok(b) => b,
-        Err(e) => return Err(format!("Failed to read API response: {e}")),
-    };
-    let body: serde_json::Value = match serde_json::from_slice(&raw) {
-        Ok(v) => v,
-        Err(e) => {
+    let body: serde_json::Value = match read_json(resp).await? {
+        Ok(body) => body,
+        Err(error) => {
             return Ok(SubscriptionQuota::error(
                 "claude",
                 CredentialStatus::Valid,
-                format!("Failed to parse API response: {e}"),
-            ));
+                error,
+            ))
         }
     };
 
@@ -698,12 +699,12 @@ fn read_codex_credentials() -> CodexCredentials {
     read_codex_credentials_from_file()
 }
 
-/// 从 macOS Keychain 读取 Codex 凭据
+/// 从 macOS Keychain 读取 Codex 凭据。服务名所有配置目录共用，必须带上账户名：
+/// 只按服务名查，本机有别的配置目录的登录时 `security` 返回第一条匹配的。
 #[cfg(target_os = "macos")]
 fn read_codex_credentials_from_keychain() -> Option<CodexCredentials> {
-    read_codex_keychain_secret()
-        .ok()
-        .flatten()
+    let account = codex_keychain_account(&crate::codex_config::get_codex_config_dir());
+    read_keychain_password("Codex Auth", Some(&account))
         .map(|json_str| parse_codex_credentials_json(&json_str))
 }
 
@@ -717,44 +718,6 @@ fn codex_keychain_account(codex_home: &std::path::Path) -> String {
         .unwrap_or_else(|_| codex_home.to_path_buf());
     let hex = crate::live::engine::sha256_hex(canonical.to_string_lossy().as_bytes());
     format!("cli|{}", &hex[..16])
-}
-
-/// `security` 找不到条目时的退出码（errSecItemNotFound）。
-#[cfg(target_os = "macos")]
-const SECURITY_ITEM_NOT_FOUND: i32 = 44;
-
-/// Keychain 里当前 Codex 配置目录的登录 JSON。服务名所有配置目录共用，必须带上账户名：
-/// 只按服务名查，本机有别的配置目录的登录时 `security` 返回第一条匹配的。
-///
-/// `Ok(None)`：确定没有这一条。`Err`：读不出来（访问被拒、`security` 跑不起来），
-/// 不知道里面有什么。
-#[cfg(target_os = "macos")]
-fn read_codex_keychain_secret() -> Result<Option<String>, String> {
-    let account = codex_keychain_account(&crate::codex_config::get_codex_config_dir());
-    let output = std::process::Command::new("security")
-        .args([
-            "find-generic-password",
-            "-s",
-            "Codex Auth",
-            "-a",
-            &account,
-            "-w",
-        ])
-        .output()
-        .map_err(|error| format!("运行 security 失败: {error}"))?;
-    if output.status.code() == Some(SECURITY_ITEM_NOT_FOUND) {
-        return Ok(None);
-    }
-    if !output.status.success() {
-        return Err(format!(
-            "security 退出码 {:?}: {}",
-            output.status.code(),
-            String::from_utf8_lossy(&output.stderr).trim()
-        ));
-    }
-    let secret = String::from_utf8_lossy(&output.stdout);
-    let secret = secret.trim();
-    Ok((!secret.is_empty()).then(|| secret.to_string()))
 }
 
 /// 从文件读取 Codex 凭据
@@ -1078,13 +1041,13 @@ async fn query_codex_usage(
         req = req.header("ChatGPT-Account-Id", id);
     }
 
-    let resp = match req.timeout(std::time::Duration::from_secs(15)).send().await {
-        Ok(r) => r,
-        Err(e) => return Err(format!("Network error: {e}")),
-    };
+    let resp = req
+        .timeout(std::time::Duration::from_secs(15))
+        .send()
+        .await
+        .map_err(|e| format!("Network error: {e}"))?;
 
     let status = resp.status();
-
     if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
         return Ok(SubscriptionQuota::error(
             tool_label,
@@ -1093,27 +1056,14 @@ async fn query_codex_usage(
         ));
     }
 
-    if !status.is_success() {
-        let body = resp.text().await.unwrap_or_default();
-        return Ok(SubscriptionQuota::error(
-            tool_label,
-            CredentialStatus::Valid,
-            format!("API error (HTTP {status}): {body}"),
-        ));
-    }
-
-    let raw = match resp.bytes().await {
-        Ok(b) => b,
-        Err(e) => return Err(format!("Failed to read API response: {e}")),
-    };
-    let body: CodexUsageResponse = match serde_json::from_slice(&raw) {
-        Ok(v) => v,
-        Err(e) => {
+    let body: CodexUsageResponse = match read_json(resp).await? {
+        Ok(body) => body,
+        Err(error) => {
             return Ok(SubscriptionQuota::error(
                 tool_label,
                 CredentialStatus::Valid,
-                format!("Failed to parse API response: {e}"),
-            ));
+                error,
+            ))
         }
     };
 
@@ -1192,29 +1142,8 @@ fn read_gemini_credentials() -> GeminiCredentials {
 /// 从 macOS Keychain 读取 Gemini 凭据
 #[cfg(target_os = "macos")]
 fn read_gemini_credentials_from_keychain() -> Option<GeminiCredentials> {
-    let output = std::process::Command::new("security")
-        .args([
-            "find-generic-password",
-            "-s",
-            "gemini-cli-oauth",
-            "-a",
-            "main-account",
-            "-w",
-        ])
-        .output()
-        .ok()?;
-
-    if !output.status.success() {
-        return None;
-    }
-
-    let json_str = String::from_utf8(output.stdout).ok()?;
-    let json_str = json_str.trim();
-    if json_str.is_empty() {
-        return None;
-    }
-
-    Some(parse_gemini_keychain_json(json_str))
+    read_keychain_password("gemini-cli-oauth", Some("main-account"))
+        .map(|json_str| parse_gemini_keychain_json(&json_str))
 }
 
 /// 解析 Keychain 格式的 Gemini 凭据
@@ -1561,12 +1490,8 @@ async fn query_gemini_quota(access_token: &str) -> Result<SubscriptionQuota, Str
         .json(&load_request)
         .timeout(std::time::Duration::from_secs(15))
         .send()
-        .await;
-
-    let load_resp = match load_resp {
-        Ok(r) => r,
-        Err(e) => return Err(format!("Network error (loadCodeAssist): {e}")),
-    };
+        .await
+        .map_err(|e| format!("Network error (loadCodeAssist): {e}"))?;
 
     let load_status = load_resp.status();
     if load_status == reqwest::StatusCode::UNAUTHORIZED
@@ -1578,27 +1503,17 @@ async fn query_gemini_quota(access_token: &str) -> Result<SubscriptionQuota, Str
             format!("Authentication failed (HTTP {load_status}). Please re-login with Gemini CLI."),
         ));
     }
-    if !load_status.is_success() {
-        let body = load_resp.text().await.unwrap_or_default();
-        return Ok(SubscriptionQuota::error(
-            "gemini",
-            CredentialStatus::Valid,
-            format!("loadCodeAssist failed (HTTP {load_status}): {body}"),
-        ));
-    }
-
-    let load_raw = match load_resp.bytes().await {
-        Ok(b) => b,
-        Err(e) => return Err(format!("Failed to read loadCodeAssist response: {e}")),
-    };
-    let load_body: GeminiLoadCodeAssistResponse = match serde_json::from_slice(&load_raw) {
-        Ok(v) => v,
-        Err(e) => {
+    let load_body: GeminiLoadCodeAssistResponse = match read_json(load_resp)
+        .await
+        .map_err(|e| format!("loadCodeAssist: {e}"))?
+    {
+        Ok(body) => body,
+        Err(error) => {
             return Ok(SubscriptionQuota::error(
                 "gemini",
                 CredentialStatus::Valid,
-                format!("Failed to parse loadCodeAssist response: {e}"),
-            ));
+                format!("loadCodeAssist: {error}"),
+            ))
         }
     };
 
@@ -1625,12 +1540,8 @@ async fn query_gemini_quota(access_token: &str) -> Result<SubscriptionQuota, Str
         .json(&quota_body)
         .timeout(std::time::Duration::from_secs(15))
         .send()
-        .await;
-
-    let quota_resp = match quota_resp {
-        Ok(r) => r,
-        Err(e) => return Err(format!("Network error (retrieveUserQuota): {e}")),
-    };
+        .await
+        .map_err(|e| format!("Network error (retrieveUserQuota): {e}"))?;
 
     let quota_status = quota_resp.status();
     if quota_status == reqwest::StatusCode::UNAUTHORIZED
@@ -1642,27 +1553,17 @@ async fn query_gemini_quota(access_token: &str) -> Result<SubscriptionQuota, Str
             format!("Authentication failed (HTTP {quota_status})."),
         ));
     }
-    if !quota_status.is_success() {
-        let body = quota_resp.text().await.unwrap_or_default();
-        return Ok(SubscriptionQuota::error(
-            "gemini",
-            CredentialStatus::Valid,
-            format!("retrieveUserQuota failed (HTTP {quota_status}): {body}"),
-        ));
-    }
-
-    let quota_raw = match quota_resp.bytes().await {
-        Ok(b) => b,
-        Err(e) => return Err(format!("Failed to read quota response: {e}")),
-    };
-    let quota_data: GeminiQuotaResponse = match serde_json::from_slice(&quota_raw) {
-        Ok(v) => v,
-        Err(e) => {
+    let quota_data: GeminiQuotaResponse = match read_json(quota_resp)
+        .await
+        .map_err(|e| format!("retrieveUserQuota: {e}"))?
+    {
+        Ok(body) => body,
+        Err(error) => {
             return Ok(SubscriptionQuota::error(
                 "gemini",
                 CredentialStatus::Valid,
-                format!("Failed to parse quota response: {e}"),
-            ));
+                format!("retrieveUserQuota: {error}"),
+            ))
         }
     };
 
