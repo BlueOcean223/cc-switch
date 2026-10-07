@@ -75,6 +75,10 @@ describe("isTransientUsageError", () => {
     ).toBe(false);
   });
 
+  it("后端标记的限流 → 瞬时（true），不看其中的状态码", () => {
+    expect(isTransientUsageError(fail("Rate limited (HTTP 422)"))).toBe(true);
+  });
+
   it("成功 / 无错误信息 → false", () => {
     expect(isTransientUsageError(ok(1))).toBe(false);
     expect(isTransientUsageError({ success: false })).toBe(false);

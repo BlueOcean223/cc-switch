@@ -1777,6 +1777,7 @@
     "officialSubscriptionHint": "读取本机 CLI 的 OAuth 凭据，并调用官方接口查询订阅额度。默认关闭，只有启用后才会请求。",
     "credentialsConfig": "凭证配置",
     "credentialsHint": "留空则自动使用供应商配置",
+    "zenmuxManagementKeyHint": "ZenMux 用量查询需要 Management API Key（在 zenmux.ai/platform/management 创建），普通 API Key 不能用",
     "optional": "可选",
     "apiKeyPlaceholder": "留空则使用供应商的 API Key",
     "baseUrlPlaceholder": "留空则使用供应商的请求地址",

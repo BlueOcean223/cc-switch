@@ -144,6 +144,12 @@ export function isTransientUsageError(result: UsageLikeResult): boolean {
     return true;
   }
 
+  // 后端把上游限流统一写成 "Rate limited (…)"，上游的状态码可能不是 429
+  // （ZenMux 回 422），所以先于状态码判断。
+  if (e.includes("rate limited")) {
+    return true;
+  }
+
   // HTTP 状态码：5xx 与 429（限流）视为瞬时，其余 4xx 视为确定性。错误文案里第一处
   // "HTTP <code>" 即为上游状态码（原生 "API error (HTTP 500…)"、JS 脚本 "HTTP 500 …"）。
   const httpMatch = e.match(/http\s+(\d{3})/);

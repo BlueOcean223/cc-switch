@@ -1777,6 +1777,7 @@
     "officialSubscriptionHint": "ローカル CLI の OAuth 認証情報を読み取り、公式 API でサブスクリプション枠を照会します。既定では無効で、有効化した後のみリクエストします。",
     "credentialsConfig": "認証情報",
     "credentialsHint": "空欄の場合はプロバイダー設定を使用",
+    "zenmuxManagementKeyHint": "ZenMux の使用量照会には Management API Key が必要です（zenmux.ai/platform/management で作成）。通常の API Key は使えません",
     "optional": "オプション",
     "apiKeyPlaceholder": "空欄の場合はプロバイダーの API Key を使用",
     "baseUrlPlaceholder": "空欄の場合はプロバイダーの Base URL を使用",

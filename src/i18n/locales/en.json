@@ -1777,6 +1777,7 @@
     "officialSubscriptionHint": "Reads the local CLI OAuth credentials and calls the official API to query subscription quota. Disabled by default and only requests after you enable it.",
     "credentialsConfig": "Credentials",
     "credentialsHint": "Leave empty to use provider config",
+    "zenmuxManagementKeyHint": "ZenMux usage needs a Management API Key (create one at zenmux.ai/platform/management); a regular API key does not work",
     "optional": "optional",
     "apiKeyPlaceholder": "Leave empty to use provider's API Key",
     "baseUrlPlaceholder": "Leave empty to use provider's base URL",

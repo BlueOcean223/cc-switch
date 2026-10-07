@@ -329,26 +329,13 @@ fn resolve_coding_plan_credentials(
         return resolve_native_credentials(app_type, provider);
     }
 
-    let script_base_url = usage_script
-        .and_then(|s| s.base_url.as_deref())
-        .unwrap_or("")
-        .trim_end_matches('/')
-        .to_string();
+    // ZenMux 用量接口地址固定、只认 Management API Key，推理用的 base_url 和 key
+    // 都用不上，只取用户在用量设置里单独填的 key。
     let script_api_key = usage_script
         .and_then(|s| s.api_key.as_deref())
         .unwrap_or("")
         .to_string();
-
-    if !script_base_url.is_empty() && !script_api_key.is_empty() {
-        return (script_base_url, script_api_key);
-    }
-
-    let native = resolve_native_credentials(app_type, provider);
-    if !native.0.is_empty() && !native.1.is_empty() {
-        native
-    } else {
-        (script_base_url, script_api_key)
-    }
+    (String::new(), script_api_key)
 }
 
 async fn query_provider_usage_inner(
@@ -787,50 +774,27 @@ mod native_query_credentials_tests {
     }
 
     #[test]
-    fn zenmux_coding_plan_uses_script_credentials_first() {
+    fn zenmux_coding_plan_uses_only_the_management_key() {
         let provider = Provider::with_id(
             "test".to_string(),
             "Test".to_string(),
             json!({
                 "env": {
-                    "ANTHROPIC_BASE_URL": "https://provider.zenmux.example/v1",
+                    "ANTHROPIC_BASE_URL": "https://zenmux.ai/api/anthropic",
                     "ANTHROPIC_AUTH_TOKEN": "sk-provider"
                 }
             }),
             None,
         );
-        let script = usage_script(
-            Some("zenmux"),
-            Some("https://script.zenmux.example/api/usage/"),
-            Some("sk-script"),
-        );
-
-        let (base_url, api_key) =
+        let script = usage_script(Some("zenmux"), None, Some("sk-mgmt"));
+        let (_, api_key) =
             resolve_coding_plan_credentials(&AppType::Claude, Some(&provider), Some(&script));
+        assert_eq!(api_key, "sk-mgmt");
 
-        assert_eq!(base_url, "https://script.zenmux.example/api/usage");
-        assert_eq!(api_key, "sk-script");
-    }
-
-    #[test]
-    fn zenmux_coding_plan_falls_back_to_provider_credentials() {
-        let provider = Provider::with_id(
-            "test".to_string(),
-            "Test".to_string(),
-            json!({
-                "env": {
-                    "ANTHROPIC_BASE_URL": "https://provider.zenmux.example/v1",
-                    "ANTHROPIC_AUTH_TOKEN": "sk-provider"
-                }
-            }),
-            None,
-        );
-        let script = usage_script(Some("zenmux"), Some("https://script.zenmux.example"), None);
-
-        let (base_url, api_key) =
+        // 没填 Management Key 时不拿推理 key 顶替（普通 key 调不通该接口）
+        let script = usage_script(Some("zenmux"), None, None);
+        let (_, api_key) =
             resolve_coding_plan_credentials(&AppType::Claude, Some(&provider), Some(&script));
-
-        assert_eq!(base_url, "https://provider.zenmux.example/v1");
-        assert_eq!(api_key, "sk-provider");
+        assert!(api_key.is_empty());
     }
 }

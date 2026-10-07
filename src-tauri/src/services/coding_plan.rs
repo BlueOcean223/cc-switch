@@ -587,11 +587,20 @@ fn minimax_quota_from_body(body: &serde_json::Value) -> SubscriptionQuota {
 
 // ── ZenMux ──────────────────────────────────────────────────
 
-async fn query_zenmux(base_url: &str, api_key: &str) -> Result<SubscriptionQuota, String> {
+/// 官方文档 zenmux.ai/docs/api/platform/subscription-detail.html：只接受
+/// Management API Key（在 zenmux.ai/platform/management 创建），普通 API Key 不行；
+/// 超过频率限制回 422。
+const ZENMUX_SUBSCRIPTION_URL: &str = "https://zenmux.ai/api/v1/management/subscription/detail";
+
+async fn query_zenmux(api_key: &str) -> Result<SubscriptionQuota, String> {
+    query_zenmux_at(ZENMUX_SUBSCRIPTION_URL, api_key).await
+}
+
+async fn query_zenmux_at(url: &str, api_key: &str) -> Result<SubscriptionQuota, String> {
     let client = crate::http_client::get();
 
     let resp = client
-        .get(base_url)
+        .get(url)
         .header("Authorization", format!("Bearer {api_key}"))
         .header("Accept", "application/json")
         .timeout(std::time::Duration::from_secs(15))
@@ -608,15 +617,22 @@ async fn query_zenmux(base_url: &str, api_key: &str) -> Result<SubscriptionQuota
         return Ok(SubscriptionQuota {
             tool: "coding_plan".to_string(),
             credential_status: CredentialStatus::Expired,
-            credential_message: Some("Invalid API key".to_string()),
+            credential_message: Some("Invalid Management API key".to_string()),
             success: false,
             tiers: vec![],
             extra_usage: None,
             reset_credits: None,
             credits_balance: None,
-            error: Some(format!("Authentication failed (HTTP {status})")),
+            error: Some(format!(
+                "Authentication failed (HTTP {status}); ZenMux usage needs a Management API Key"
+            )),
             queried_at: Some(now_millis()),
         });
+    }
+
+    if status == reqwest::StatusCode::UNPROCESSABLE_ENTITY {
+        // 前端按 "rate limited" 归为瞬时失败，沿用上次成功的读数
+        return Ok(make_error(format!("Rate limited (HTTP {status})")));
     }
 
     if !status.is_success() {
@@ -1818,6 +1834,19 @@ pub async fn get_coding_plan_quota(
         return query_zhipu_team(api_key, organization_id, project_id).await;
     }
 
+    // ZenMux：用量接口地址固定，只认用户单独填的 Management API Key，与推理配置无关。
+    if coding_plan_provider
+        .map(|p| p.eq_ignore_ascii_case("zenmux"))
+        .unwrap_or(false)
+    {
+        if api_key.trim().is_empty() {
+            return Ok(coding_plan_not_found(
+                "ZenMux usage query needs a Management API Key",
+            ));
+        }
+        return query_zenmux(api_key).await;
+    }
+
     let provider = match detect_provider(base_url) {
         Some(p) => p,
         // 域名未命中已知套餐供应商（如第三方中转站）：给出明确错误而非静默失败
@@ -1851,7 +1880,7 @@ pub async fn get_coding_plan_quota(
         }
         CodingPlanProvider::MiniMaxCn => query_minimax(api_key, true).await,
         CodingPlanProvider::MiniMaxEn => query_minimax(api_key, false).await,
-        CodingPlanProvider::ZenMux => query_zenmux(base_url, api_key).await,
+        CodingPlanProvider::ZenMux => query_zenmux(api_key).await,
         CodingPlanProvider::OpencodeGo => query_opencode_go(api_key).await,
         CodingPlanProvider::CommandCode => query_command_code(api_key).await,
         // 火山已在上面的 AK/SK 分支提前返回，此处不可达。
@@ -3121,7 +3150,7 @@ mod tests {
     // balance / subscription 服务与本文件共用同一折叠模式，这里的用例同时充当
     // 三个服务的语义回归锚。
 
-    use super::get_coding_plan_quota;
+    use super::{get_coding_plan_quota, query_zenmux_at};
     use std::io::{Read, Write};
 
     /// 测试进程内可能有其他用例临时 set_var HTTP_PROXY（http_client 的
@@ -3135,7 +3164,7 @@ mod tests {
     }
 
     /// 起一个只服务一次连接的本地 HTTP server。`response=None` 表示读完请求
-    /// 直接断开（模拟响应前连接中断）。返回可命中 ZenMux 分支的 base_url。
+    /// 直接断开（模拟响应前连接中断）。返回的 URL 交给 `query_zenmux_at`。
     fn spawn_once_server(response: Option<String>) -> (String, std::thread::JoinHandle<()>) {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind local listener");
         let port = listener.local_addr().expect("local addr").port();
@@ -3202,16 +3231,7 @@ mod tests {
         let port = listener.local_addr().expect("local addr").port();
         drop(listener);
 
-        let result = get_coding_plan_quota(
-            &format!("http://127.0.0.1:{port}/zenmux"),
-            "k",
-            None,
-            None,
-            None,
-            None,
-            None,
-        )
-        .await;
+        let result = query_zenmux_at(&format!("http://127.0.0.1:{port}/zenmux"), "k").await;
         let err = result.expect_err("send 失败必须走 Err 通道（瞬时，前端 reject 后重试）");
         assert!(err.contains("Network error"), "err={err}");
     }
@@ -3221,7 +3241,7 @@ mod tests {
         ensure_no_proxy_for_loopback();
         let (base_url, handle) = spawn_once_server(None);
 
-        let result = get_coding_plan_quota(&base_url, "k", None, None, None, None, None).await;
+        let result = query_zenmux_at(&base_url, "k").await;
         let err = result.expect_err("响应前连接中断必须走 Err 通道（瞬时）");
         assert!(err.contains("Network error"), "err={err}");
         handle.join().expect("server thread");
@@ -3238,7 +3258,7 @@ mod tests {
                 .to_string(),
         ));
 
-        let result = get_coding_plan_quota(&base_url, "k", None, None, None, None, None).await;
+        let result = query_zenmux_at(&base_url, "k").await;
         let err = result.expect_err("读体中断必须走 Err 通道（瞬时，前端 reject 后重试）");
         assert!(err.contains("Failed to read response"), "err={err}");
         handle.join().expect("server thread");
@@ -3249,7 +3269,7 @@ mod tests {
         ensure_no_proxy_for_loopback();
         let (base_url, handle) = spawn_once_server(Some(http_response("401 Unauthorized", "{}")));
 
-        let quota = get_coding_plan_quota(&base_url, "k", None, None, None, None, None)
+        let quota = query_zenmux_at(&base_url, "k")
             .await
             .expect("鉴权失败是确定性失败，必须保持 Ok(success:false) 展示文案");
         assert!(!quota.success);
@@ -3265,7 +3285,7 @@ mod tests {
         let (base_url, handle) =
             spawn_once_server(Some(http_response("429 Too Many Requests", "slow down")));
 
-        let quota = get_coding_plan_quota(&base_url, "k", None, None, None, None, None)
+        let quota = query_zenmux_at(&base_url, "k")
             .await
             .expect("非 2xx 保持 Ok(success:false)，状态码留在文案里交前端分类");
         assert!(!quota.success);
@@ -3277,12 +3297,47 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn zenmux_422_is_reported_as_rate_limited() {
+        ensure_no_proxy_for_loopback();
+        // ZenMux 文档：超过频率限制回 422；前端靠 "rate limited" 归为瞬时
+        let (base_url, handle) =
+            spawn_once_server(Some(http_response("422 Unprocessable Entity", "{}")));
+
+        let quota = query_zenmux_at(&base_url, "k").await.expect("Ok");
+        assert!(!quota.success);
+        let err = quota.error.expect("应有错误文案");
+        assert!(err.starts_with("Rate limited (HTTP 422"), "err={err}");
+        handle.join().expect("server thread");
+    }
+
+    #[tokio::test]
+    async fn zenmux_without_management_key_is_not_found() {
+        // 显式选了 ZenMux 但没填 Management Key：不联网，引导补全
+        let quota = get_coding_plan_quota(
+            "https://zenmux.ai/api/anthropic",
+            " ",
+            None,
+            None,
+            Some("zenmux"),
+            None,
+            None,
+        )
+        .await
+        .expect("Ok");
+        assert!(matches!(
+            quota.credential_status,
+            CredentialStatus::NotFound
+        ));
+        assert!(quota.error.unwrap().contains("Management API Key"));
+    }
+
+    #[tokio::test]
     async fn deterministic_invalid_json_body_stays_ok_with_parse_error() {
         ensure_no_proxy_for_loopback();
         // 完整读到响应体但不是 JSON → is_decode → 确定性解析失败
         let (base_url, handle) = spawn_once_server(Some(http_response("200 OK", "not-json")));
 
-        let quota = get_coding_plan_quota(&base_url, "k", None, None, None, None, None)
+        let quota = query_zenmux_at(&base_url, "k")
             .await
             .expect("完整但非法的响应体是确定性失败，必须保持 Ok(success:false)");
         assert!(!quota.success);
