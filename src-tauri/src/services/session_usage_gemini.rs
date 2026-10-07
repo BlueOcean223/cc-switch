@@ -20,22 +20,50 @@ use crate::gemini_config::get_gemini_dir;
 use crate::services::session_usage::{
     metadata_modified_nanos, update_sync_state, SessionSyncResult,
 };
-use crate::services::usage_stats::{find_model_pricing, should_skip_session_insert, DedupKey};
+use crate::services::sql_helpers::INPUT_TOKEN_SEMANTICS_FRESH;
+use crate::services::usage_stats::find_model_pricing;
 use crate::session_manager::providers::gemini::{is_session_file, parse_session_document};
-use crate::token_usage::calculator::{CostCalculator, ModelPricing};
+use crate::token_usage::calculator::{CostBreakdown, CostCalculator, ServiceTier};
 use crate::token_usage::parser::TokenUsage;
-use rust_decimal::Decimal;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
-/// 从 Gemini message 中提取的 token 数据
-#[derive(Debug)]
+/// Gemini CLI 会话里一条回复的 `tokens`。
+#[derive(Debug, Clone, Default)]
 struct GeminiTokens {
+    /// promptTokenCount：通常含 `cached`
     input: u32,
     output: u32,
     cached: u32,
     thoughts: u32,
+    /// toolUsePromptTokenCount，按输入计费
+    tool: u32,
+    total: Option<u64>,
+}
+
+impl GeminiTokens {
+    /// 换成互不重叠的几桶。`input` 含缓存时 `total = input + output + thoughts + tool`
+    /// （缓存不另计）；只有这样才从 input 里减掉 `cached`，和 ccusage / tokscale 一致。
+    fn token_usage(&self) -> TokenUsage {
+        let inclusive_total = u64::from(self.input)
+            + u64::from(self.output)
+            + u64::from(self.thoughts)
+            + u64::from(self.tool);
+        let input_includes_cached = self.total.is_none_or(|total| total == inclusive_total);
+        let fresh_input = if input_includes_cached {
+            self.input.saturating_sub(self.cached)
+        } else {
+            self.input
+        };
+        TokenUsage {
+            input_tokens: fresh_input.saturating_add(self.tool),
+            output_tokens: self.output.saturating_add(self.thoughts),
+            cache_read_tokens: self.cached,
+            cache_creation_tokens: 0,
+            cache_creation_1h_tokens: 0,
+        }
+    }
 }
 
 /// 同步 Gemini 使用数据（从 JSON 会话日志）
@@ -48,7 +76,6 @@ pub fn sync_gemini_usage(db: &Database) -> Result<SessionSyncResult, AppError> {
         imported: 0,
         skipped: 0,
         files_scanned: files.len() as u32,
-        suspected_duplicates: 0,
         deferred_files: 0,
         errors: vec![],
     };
@@ -185,7 +212,7 @@ fn sync_single_gemini_file(
         };
 
         let tokens = parse_gemini_tokens(tokens_obj);
-        if tokens.input == 0 && tokens.output == 0 && tokens.thoughts == 0 && tokens.cached == 0 {
+        if tokens.token_usage().is_empty() {
             continue; // 跳过全零的空 token 消息
         }
 
@@ -233,6 +260,8 @@ fn parse_gemini_tokens(tokens: &serde_json::Value) -> GeminiTokens {
         output: tokens.get("output").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
         cached: tokens.get("cached").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
         thoughts: tokens.get("thoughts").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
+        tool: tokens.get("tool").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
+        total: tokens.get("total").and_then(|v| v.as_u64()),
     }
 }
 
@@ -260,52 +289,20 @@ fn insert_gemini_session_entry(
                 .unwrap_or(0)
         });
 
-    // 合并 thoughts 到 output（思考 token 按输出计费）
-    let output_tokens = tokens.output + tokens.thoughts;
-
-    let dedup_key = DedupKey {
-        app_type: "gemini",
-        model,
-        input_tokens: tokens.input,
-        output_tokens,
-        cache_read_tokens: tokens.cached,
-        cache_creation_tokens: 0,
-        created_at,
-    };
-    if should_skip_session_insert(&conn, request_id, &dedup_key)? {
+    // 保留期以前的日期已经汇总，再导入会在下次汇总时重复计入
+    if crate::services::usage_rebuild::is_below_import_floor(created_at) {
         return Ok(false);
     }
 
-    // 计算费用
-    let usage = TokenUsage {
-        input_tokens: tokens.input,
-        output_tokens,
-        cache_read_tokens: tokens.cached,
-        cache_creation_tokens: 0,
-    };
+    // 已入库的行不跳过：整份文件重读时要用下面的 UPSERT 补全写到一半的回复
+    let usage = tokens.token_usage();
 
-    let pricing = find_gemini_pricing(&conn, model);
-    let multiplier = Decimal::from(1);
-    let (input_cost, output_cost, cache_read_cost, cache_creation_cost, total_cost) = match pricing
-    {
-        Some(p) => {
-            let cost = CostCalculator::calculate_for_app("gemini", &usage, &p, multiplier);
-            (
-                cost.input_cost.to_string(),
-                cost.output_cost.to_string(),
-                cost.cache_read_cost.to_string(),
-                cost.cache_creation_cost.to_string(),
-                cost.total_cost.to_string(),
-            )
-        }
-        None => (
-            "0".to_string(),
-            "0".to_string(),
-            "0".to_string(),
-            "0".to_string(),
-            "0".to_string(),
-        ),
-    };
+    let [input_cost, output_cost, cache_read_cost, cache_creation_cost, total_cost] =
+        match find_model_pricing(&conn, model) {
+            Some(p) => CostCalculator::calculate(&usage, &p, ServiceTier::Standard, created_at)
+                .to_strings(),
+            None => CostBreakdown::zero_strings(),
+        };
 
     // 使用 UPSERT：新记录插入，已存在记录更新 token 和费用（Gemini 全量重读可能携带更新值）
     conn.execute(
@@ -314,8 +311,9 @@ fn insert_gemini_session_entry(
             input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens,
             input_cost_usd, output_cost_usd, cache_read_cost_usd, cache_creation_cost_usd, total_cost_usd,
             latency_ms, first_token_ms, status_code, error_message, session_id,
-            provider_type, is_streaming, cost_multiplier, created_at, data_source
-        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24)
+            provider_type, is_streaming, cost_multiplier, created_at, data_source,
+            input_token_semantics
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25)
         ON CONFLICT(request_id) DO UPDATE SET
             model = excluded.model,
             input_tokens = excluded.input_tokens,
@@ -325,7 +323,8 @@ fn insert_gemini_session_entry(
             output_cost_usd = excluded.output_cost_usd,
             cache_read_cost_usd = excluded.cache_read_cost_usd,
             cache_creation_cost_usd = excluded.cache_creation_cost_usd,
-            total_cost_usd = excluded.total_cost_usd
+            total_cost_usd = excluded.total_cost_usd,
+            input_token_semantics = excluded.input_token_semantics
         WHERE input_tokens != excluded.input_tokens
            OR output_tokens != excluded.output_tokens
            OR cache_read_tokens != excluded.cache_read_tokens
@@ -336,9 +335,9 @@ fn insert_gemini_session_entry(
             "gemini",            // app_type
             model,
             model,               // request_model = model
-            tokens.input,
-            output_tokens,
-            tokens.cached,
+            usage.input_tokens,
+            usage.output_tokens,
+            usage.cache_read_tokens,
             0i64,                // cache_creation_tokens
             input_cost,
             output_cost,
@@ -355,6 +354,7 @@ fn insert_gemini_session_entry(
             "1.0",               // cost_multiplier
             created_at,
             "gemini_session",    // data_source
+            INPUT_TOKEN_SEMANTICS_FRESH,
         ],
     )
     .map_err(|e| AppError::Database(format!("插入 Gemini 会话日志失败: {e}")))?;
@@ -362,11 +362,6 @@ fn insert_gemini_session_entry(
     // changes() > 0 表示新插入或已更新，== 0 表示值完全相同（无实际变更）
     let changed = conn.changes() > 0;
     Ok(changed)
-}
-
-/// 查找 Gemini 模型定价
-fn find_gemini_pricing(conn: &rusqlite::Connection, model_id: &str) -> Option<ModelPricing> {
-    find_model_pricing(conn, model_id)
 }
 
 #[cfg(test)]
@@ -380,57 +375,34 @@ mod tests {
     }
 
     #[test]
-    fn test_insert_gemini_session_skips_matching_proxy_log() -> Result<(), AppError> {
+    fn test_insert_gemini_session_stores_exclusive_buckets() -> Result<(), AppError> {
         let db = Database::memory()?;
-        {
-            let conn = lock_conn!(db.conn);
-            conn.execute(
-                "INSERT INTO proxy_request_logs (
-                    request_id, provider_id, app_type, model, request_model,
-                    input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens,
-                    total_cost_usd, latency_ms, status_code, created_at, data_source
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                rusqlite::params![
-                    "gemini-proxy",
-                    "google",
-                    "gemini",
-                    "gemini-2.5-pro",
-                    "gemini-2.5-pro",
-                    10,
-                    7,
-                    1,
-                    0,
-                    "0.01",
-                    100,
-                    200,
-                    1000,
-                    "proxy"
-                ],
-            )?;
-        }
-
         let tokens = GeminiTokens {
             input: 10,
             output: 2,
             cached: 1,
             thoughts: 5,
+            ..Default::default()
         };
         let inserted = insert_gemini_session_entry(
             &db,
-            "gemini-session-dup",
+            "gemini-session-1",
             &tokens,
             "gemini-2.5-pro",
             Some("session-1"),
             Some("1970-01-01T00:16:45Z"),
         )?;
-        assert!(!inserted);
+        assert!(inserted);
 
         let conn = lock_conn!(db.conn);
-        let count: i64 = conn.query_row("SELECT COUNT(*) FROM proxy_request_logs", [], |row| {
-            row.get(0)
-        })?;
-        assert_eq!(count, 1);
-
+        let stored: (i64, i64, i64) = conn.query_row(
+            "SELECT input_tokens, output_tokens, cache_read_tokens
+             FROM proxy_request_logs WHERE request_id = 'gemini-session-1'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )?;
+        // 输入减掉缓存命中，输出含 thoughts
+        assert_eq!(stored, (9, 7, 1));
         Ok(())
     }
 

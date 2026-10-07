@@ -10,7 +10,7 @@ use crate::services::session_usage::{
 };
 use crate::services::sql_helpers::INPUT_TOKEN_SEMANTICS_FRESH;
 use crate::services::usage_stats::find_model_pricing;
-use crate::token_usage::calculator::CostCalculator;
+use crate::token_usage::calculator::{CostCalculator, ServiceTier};
 use crate::token_usage::parser::TokenUsage;
 use rust_decimal::Decimal;
 use serde_json::Value;
@@ -799,20 +799,24 @@ fn insert_pi_record(conn: &rusqlite::Connection, record: &PiUsageRecord) -> Resu
         output_tokens: record.output_tokens,
         cache_read_tokens: record.cache_read_tokens,
         cache_creation_tokens: record.cache_write_tokens,
+        cache_creation_1h_tokens: 0,
     };
-    let costs = record.costs.reported().or_else(|| {
-        find_model_pricing(conn, &record.model).map(|pricing| {
-            let calculated =
-                CostCalculator::calculate_for_app(APP_TYPE, &usage, &pricing, Decimal::ONE);
-            (
-                calculated.input_cost,
-                calculated.output_cost,
-                calculated.cache_read_cost,
-                calculated.cache_creation_cost,
-                calculated.total_cost,
-            )
-        })
+    // 有定价就按 cc-switch 的定价算，和其他应用用同一套价格：Pi 记的费用来自它自己的
+    // 价格表或用户配置，官方调价后不一定跟上（GPT-5.6 Sol 2026-08-21 降价后 Pi 仍按
+    // 旧价记账）。没有定价才用 Pi 记的费用（标记 native_cost，按定价重算时不覆盖）。
+    let calculated = find_model_pricing(conn, &record.model).map(|pricing| {
+        let cost =
+            CostCalculator::calculate(&usage, &pricing, ServiceTier::Standard, record.created_at);
+        (
+            cost.input_cost,
+            cost.output_cost,
+            cost.cache_read_cost,
+            cost.cache_creation_cost,
+            cost.total_cost,
+        )
     });
+    let native_cost = calculated.is_none() && record.costs.reported().is_some();
+    let costs = calculated.or_else(|| record.costs.reported());
     let (input_cost, output_cost, cache_read_cost, cache_write_cost, total_cost) =
         costs.unwrap_or((
             Decimal::ZERO,
@@ -830,10 +834,11 @@ fn insert_pi_record(conn: &rusqlite::Connection, record: &PiUsageRecord) -> Resu
             input_cost_usd, output_cost_usd, cache_read_cost_usd,
             cache_creation_cost_usd, total_cost_usd,
             latency_ms, first_token_ms, status_code, error_message, session_id,
-            provider_type, is_streaming, cost_multiplier, created_at, data_source
+            provider_type, is_streaming, cost_multiplier, created_at, data_source,
+            native_cost
         ) VALUES (
             ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13,
-            ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26
+            ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27
         )",
         rusqlite::params![
             record.request_id,
@@ -862,6 +867,7 @@ fn insert_pi_record(conn: &rusqlite::Connection, record: &PiUsageRecord) -> Resu
             "1.0",
             record.created_at,
             DATA_SOURCE,
+            i64::from(native_cost),
         ],
     )
     .map(|changed| changed > 0)
@@ -1053,6 +1059,59 @@ mod tests {
             Decimal::from_str(&total).expect("calculated total"),
             Decimal::from_str("0.0000155").expect("expected total")
         );
+        Ok(())
+    }
+
+    #[test]
+    fn local_pricing_takes_precedence_over_the_cost_pi_recorded() -> Result<(), AppError> {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let path = session_path(temp.path(), "recorded-cost");
+        let with_cost = |id: &str, model: &str| {
+            assistant_line(id, "2023-11-14T22:13:21Z", 10)
+                .replace(r#""total":0}"#, r#""total":0.5}"#)
+                .replace("fixture-model", model)
+        };
+        let priced = with_cost("priced", "fixture-model");
+        let unpriced = with_cost("unpriced", "model-without-pricing");
+        write_lines(
+            &path,
+            &[
+                r#"{"type":"session","version":3,"id":"session-recorded","timestamp":"2023-11-14T22:13:20Z","cwd":"/work"}"#,
+                &priced,
+                &unpriced,
+            ],
+        );
+
+        let db = Database::memory()?;
+        {
+            let conn = lock_conn!(db.conn);
+            conn.execute(
+                "INSERT OR REPLACE INTO model_pricing (
+                    model_id, display_name, input_cost_per_million,
+                    output_cost_per_million, cache_read_cost_per_million,
+                    cache_creation_cost_per_million
+                 ) VALUES ('fixture-model', 'Fixture', '1', '2', '0.1', '0.5')",
+                [],
+            )?;
+        }
+        let result = sync_pi_files(&db, std::slice::from_ref(&path));
+        assert_eq!(result.imported, 2);
+
+        let conn = lock_conn!(db.conn);
+        let rows: Vec<(String, String, i64)> = conn
+            .prepare(
+                "SELECT model, total_cost_usd, native_cost FROM proxy_request_logs
+                 WHERE data_source = 'pi_session' ORDER BY model",
+            )?
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?
+            .collect::<Result<_, _>>()?;
+        let cost = |value: &str| Decimal::from_str(value).expect("stored cost");
+        assert_eq!(rows[0].0, "fixture-model");
+        assert_eq!(cost(&rows[0].1), cost("0.0000155"));
+        assert_eq!(rows[0].2, 0);
+        assert_eq!(rows[1].0, "model-without-pricing");
+        assert_eq!(cost(&rows[1].1), cost("0.5"));
+        assert_eq!(rows[1].2, 1);
         Ok(())
     }
 

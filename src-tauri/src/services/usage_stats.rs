@@ -8,13 +8,16 @@ use crate::services::sql_helpers::{
     fresh_input_sql, real_total_tokens_sql, INPUT_TOKEN_SEMANTICS_FRESH,
     INPUT_TOKEN_SEMANTICS_TOTAL,
 };
-use crate::token_usage::calculator::ModelPricing;
+use crate::token_usage::calculator::{
+    BasePrices, CostBreakdown, CostCalculator, LongContextPricing, ModelPricing, ServiceTier,
+};
+use crate::token_usage::parser::TokenUsage;
+use crate::token_usage::price_history::with_price_history;
 use chrono::{Local, NaiveDate, TimeZone, Timelike};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::str::FromStr;
-use std::sync::LazyLock;
 
 /// 使用量汇总
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -229,7 +232,7 @@ pub struct RequestLogDetail {
     pub output_tokens: u32,
     pub cache_read_tokens: u32,
     pub cache_creation_tokens: u32,
-    /// Internal storage semantics; omitted from the UI/API payload.
+    /// 读出时已换成未命中缓存的输入（FRESH），不进 API。
     #[serde(skip)]
     pub input_token_semantics: i64,
     pub input_cost_usd: String,
@@ -263,20 +266,32 @@ pub struct RequestLogDetail {
 ///
 /// 不需要 provider_name 时（如 backfill）SELECT `NULL AS provider_name` 占位即可。
 fn row_to_request_log_detail(row: &rusqlite::Row<'_>) -> rusqlite::Result<RequestLogDetail> {
+    let app_type: String = row.get(3)?;
+    let semantics: i64 = row.get(25)?;
+    let cache_read_tokens: i64 = row.get(9)?;
+    let cache_creation_tokens: i64 = row.get(10)?;
+    // 界面只看未命中缓存的输入；旧行按存储口径换算
+    let input_tokens = fresh_input_tokens(
+        &app_type,
+        semantics,
+        row.get(7)?,
+        cache_read_tokens,
+        cache_creation_tokens,
+    );
     Ok(RequestLogDetail {
         request_id: row.get(0)?,
         provider_id: row.get(1)?,
         provider_name: row.get(2)?,
-        app_type: row.get(3)?,
+        app_type,
         model: row.get(4)?,
         request_model: row.get(5)?,
         cost_multiplier: row
             .get::<_, Option<String>>(6)?
             .unwrap_or_else(|| "1".to_string()),
-        input_tokens: row.get::<_, i64>(7)? as u32,
+        input_tokens,
         output_tokens: row.get::<_, i64>(8)? as u32,
-        cache_read_tokens: row.get::<_, i64>(9)? as u32,
-        cache_creation_tokens: row.get::<_, i64>(10)? as u32,
+        cache_read_tokens: clamp_u32(cache_read_tokens),
+        cache_creation_tokens: clamp_u32(cache_creation_tokens),
         input_cost_usd: row.get(11)?,
         output_cost_usd: row.get(12)?,
         cache_read_cost_usd: row.get(13)?,
@@ -291,7 +306,7 @@ fn row_to_request_log_detail(row: &rusqlite::Row<'_>) -> rusqlite::Result<Reques
         created_at: row.get(22)?,
         data_source: row.get(23)?,
         pricing_model: row.get(24)?,
-        input_token_semantics: row.get::<_, i64>(25)?,
+        input_token_semantics: INPUT_TOKEN_SEMANTICS_FRESH,
     })
 }
 
@@ -313,38 +328,21 @@ fn provider_name_coalesce(log_alias: &str, provider_alias: &str) -> String {
     )
 }
 
-pub(crate) const SESSION_PROXY_DEDUP_WINDOW_SECONDS: i64 = 10 * 60;
-
 /// SQL 片段：把指定别名的 `data_source` 包成 COALESCE，NULL 视作 'proxy'。
 ///
-/// 防御 schema v9 之前可能写入的 NULL data_source 行（见
-/// `tests::create_legacy_nullable_logs_table`）。所有用到 data_source 的查询
-/// 都应通过此 helper 生成片段，避免遗漏。
+/// 防御 schema v9 之前可能写入的 NULL data_source 行。所有用到 data_source 的
+/// 查询都应通过此 helper 生成片段，避免遗漏。
 fn data_source_expr(log_alias: &str) -> String {
     format!("COALESCE({log_alias}.data_source, 'proxy')")
 }
 
-fn dedup_app_type_match_sql(left: &str, right: &str) -> String {
-    format!(
-        "{left} IN ({right}, CASE WHEN {right} = 'claude' THEN 'claude-desktop' ELSE {right} END)"
-    )
-}
-
-/// SQL 标量表达式：把 Claude Desktop 网关的 `claude-desktop` app_type 在“展示口径”
-/// 上折叠进 `claude`，其余 app_type 原样返回。
+/// SQL 标量表达式：把旧版 Claude Desktop 网关留下的 `claude-desktop` app_type
+/// 在展示口径上折叠进 `claude`，其余 app_type 原样返回。
 ///
-/// 背景：Desktop 网关流量在记账层按各自入口写为 `app_type='claude-desktop'`，
-/// 以保留路由接管的账单审计精度（不要回退这一点）。但 Dashboard 把它当作
-/// Claude Code 呈现——它本质就是跑在 Desktop 壳里的内嵌 Claude Code 运行时，
-/// 且 Desktop 聊天用量永远不经过本软件，单列只会让用户误以为是“桌面版全部用量”。
-///
-/// 用法：把任一参与“按应用筛选/分组”的 `app_type` 列包进此表达式即可，
-/// 这样 `= 'claude'` 过滤会同时命中 `claude-desktop`、`GROUP BY` 会把两者合并，
-/// 而不改动任何已存储的行（详情面板仍读原始 `app_type`）。
-///
-/// 注意：包裹后该列上的索引在此比较中失效，但这些都是已带时间过滤的聚合扫描，
-/// app_type 本就不是主访问路径，可接受。仅用于读侧；跨源去重使用更窄的
-/// [`dedup_app_type_match_sql`]。
+/// 网关已经移除，这类行只会出现在旧的按天汇总里。把任一参与“按应用筛选/分组”
+/// 的 `app_type` 列包进此表达式，`= 'claude'` 过滤就会同时命中两者，`GROUP BY`
+/// 也会把两者合并，已存储的行不用改。包裹后该列上的索引在此比较中失效，
+/// 这些查询都带时间过滤，可以接受。
 fn folded_app_type_sql(column: &str) -> String {
     format!("CASE WHEN {column} = 'claude-desktop' THEN 'claude' ELSE {column} END")
 }
@@ -393,130 +391,6 @@ fn push_provider_model_filters(
         conditions.push(format!("{} = ?", effective_model_sql(log_alias)));
         params.push(Box::new(m.to_string()));
     }
-}
-
-pub(crate) fn effective_usage_log_filter(log_alias: &str) -> String {
-    let data_source = data_source_expr(log_alias);
-    let proxy_data_source = data_source_expr("proxy_dedup");
-    let app_type_match =
-        dedup_app_type_match_sql("proxy_dedup.app_type", &format!("{log_alias}.app_type"));
-    format!(
-        "NOT (
-            {data_source} IN ('session_log', 'codex_session', 'gemini_session', 'opencode_session')
-            AND EXISTS (
-                SELECT 1
-                FROM proxy_request_logs proxy_dedup
-                WHERE {proxy_data_source} = 'proxy'
-                  AND {app_type_match}
-                  AND proxy_dedup.status_code >= 200
-                  AND proxy_dedup.status_code < 300
-                  AND proxy_dedup.input_tokens = {log_alias}.input_tokens
-                  AND proxy_dedup.output_tokens = {log_alias}.output_tokens
-                  AND proxy_dedup.cache_read_tokens = {log_alias}.cache_read_tokens
-                  AND (
-                      proxy_dedup.cache_creation_tokens = {log_alias}.cache_creation_tokens
-                      OR (
-                          {log_alias}.cache_creation_tokens = 0
-                          AND {data_source} IN ('codex_session', 'gemini_session', 'opencode_session')
-                      )
-                  )
-                  AND proxy_dedup.created_at BETWEEN
-                      {log_alias}.created_at - {SESSION_PROXY_DEDUP_WINDOW_SECONDS}
-                      AND {log_alias}.created_at + {SESSION_PROXY_DEDUP_WINDOW_SECONDS}
-                  AND (
-                      LOWER(proxy_dedup.model) = LOWER({log_alias}.model)
-                      OR LOWER(proxy_dedup.model) = 'unknown'
-                      OR LOWER({log_alias}.model) = 'unknown'
-                  )
-            )
-        )"
-    )
-}
-
-/// 参与跨源去重的会话日志来源（和 [`effective_usage_log_filter`] 同口径）。
-const DEDUP_SESSION_SOURCES_SQL: &str =
-    "'session_log', 'codex_session', 'gemini_session', 'opencode_session'";
-
-/// Dashboard 读路径用的去重条件：语义和 [`effective_usage_log_filter`] 完全一致，
-/// 只是先看时间窗口里两类日志各有多少，再挑便宜的写法。
-///
-/// - 窗口里没有成功的代理日志、或没有会话日志：不可能有重复，直接不加条件。
-/// - 代理日志更少：先从代理日志出发找出重复的会话行（一次性子查询），
-///   主查询只做 `rowid NOT IN`，不再逐行关联。会话日志占绝大多数时快很多。
-/// - 会话日志更少：保留原来的逐行 `EXISTS`。
-///
-/// 时间边界放宽 [`SESSION_PROXY_DEDUP_WINDOW_SECONDS`]，窗口外的代理行
-/// 不可能匹配窗口内的会话行；边界是整数，直接拼进 SQL。
-pub(crate) fn effective_usage_log_filter_for_range(
-    conn: &Connection,
-    log_alias: &str,
-    start_date: Option<i64>,
-    end_date: Option<i64>,
-) -> Result<String, AppError> {
-    let lo = start_date
-        .map(|v| v.saturating_sub(SESSION_PROXY_DEDUP_WINDOW_SECONDS))
-        .unwrap_or(i64::MIN / 2);
-    let hi = end_date
-        .map(|v| v.saturating_add(SESSION_PROXY_DEDUP_WINDOW_SECONDS))
-        .unwrap_or(i64::MAX / 2);
-    let data_source = data_source_expr("c");
-    let (proxy_count, session_count): (i64, i64) = conn.query_row(
-        &format!(
-            "SELECT
-                COALESCE(SUM(CASE WHEN {data_source} = 'proxy'
-                    AND c.status_code >= 200 AND c.status_code < 300 THEN 1 ELSE 0 END), 0),
-                COALESCE(SUM(CASE WHEN {data_source} IN ({DEDUP_SESSION_SOURCES_SQL})
-                    THEN 1 ELSE 0 END), 0)
-             FROM proxy_request_logs c
-             WHERE c.created_at BETWEEN ?1 AND ?2"
-        ),
-        rusqlite::params![lo, hi],
-        |row| Ok((row.get(0)?, row.get(1)?)),
-    )?;
-
-    if proxy_count == 0 || session_count == 0 {
-        return Ok("1 = 1".to_string());
-    }
-    if proxy_count > session_count {
-        return Ok(effective_usage_log_filter(log_alias));
-    }
-
-    let dp_source = data_source_expr("dedup_p");
-    let ds_source = data_source_expr("dedup_s");
-    Ok(format!(
-        "{log_alias}.rowid NOT IN (
-            SELECT dedup_s.rowid
-            FROM proxy_request_logs dedup_p
-            JOIN proxy_request_logs dedup_s
-              ON dedup_s.app_type IN (
-                     dedup_p.app_type,
-                     CASE WHEN dedup_p.app_type = 'claude-desktop' THEN 'claude' ELSE dedup_p.app_type END
-                 )
-             AND {ds_source} IN ({DEDUP_SESSION_SOURCES_SQL})
-             AND dedup_s.input_tokens = dedup_p.input_tokens
-             AND dedup_s.output_tokens = dedup_p.output_tokens
-             AND dedup_s.cache_read_tokens = dedup_p.cache_read_tokens
-             AND dedup_s.created_at BETWEEN
-                 dedup_p.created_at - {SESSION_PROXY_DEDUP_WINDOW_SECONDS}
-                 AND dedup_p.created_at + {SESSION_PROXY_DEDUP_WINDOW_SECONDS}
-             AND (
-                 dedup_p.cache_creation_tokens = dedup_s.cache_creation_tokens
-                 OR (
-                     dedup_s.cache_creation_tokens = 0
-                     AND {ds_source} IN ('codex_session', 'gemini_session', 'opencode_session')
-                 )
-             )
-             AND (
-                 LOWER(dedup_p.model) = LOWER(dedup_s.model)
-                 OR LOWER(dedup_p.model) = 'unknown'
-                 OR LOWER(dedup_s.model) = 'unknown'
-             )
-            WHERE {dp_source} = 'proxy'
-              AND dedup_p.status_code >= 200
-              AND dedup_p.status_code < 300
-              AND dedup_p.created_at BETWEEN {lo} AND {hi}
-        )"
-    ))
 }
 
 /// 请求日志总数缓存：每次刷新都 `COUNT(*)` 一遍明细，大范围下最耗时。
@@ -578,171 +452,6 @@ fn cached_log_count(
         }
         _ => Ok(None),
     }
-}
-
-/// 跨源去重指纹键。
-///
-/// `cache_creation_tokens`：Codex/Gemini session 日志不暴露该字段，调用方传 0
-/// 表示"未知"，匹配器会放行 proxy 侧任意 cache_creation_tokens 值。
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct DedupKey<'a> {
-    pub app_type: &'a str,
-    pub model: &'a str,
-    pub input_tokens: u32,
-    pub output_tokens: u32,
-    pub cache_read_tokens: u32,
-    pub cache_creation_tokens: u32,
-    pub created_at: i64,
-}
-
-/// session 日志写入前的统一去重判定。
-///
-/// 命中以下任一条件即跳过插入：① `request_id` 已存在；② 时间窗口内存在
-/// 与 `key` 匹配的 proxy 日志（指纹去重）。
-pub(crate) fn should_skip_session_insert(
-    conn: &Connection,
-    request_id: &str,
-    key: &DedupKey,
-) -> Result<bool, AppError> {
-    if proxy_request_id_exists(conn, request_id)? {
-        return Ok(true);
-    }
-    has_matching_proxy_usage_log(conn, key)
-}
-
-fn proxy_request_id_exists(conn: &Connection, request_id: &str) -> Result<bool, AppError> {
-    conn.prepare_cached("SELECT EXISTS(SELECT 1 FROM proxy_request_logs WHERE request_id = ?1)")
-        .and_then(|mut stmt| stmt.query_row(params![request_id], |row| row.get::<_, bool>(0)))
-        .map_err(|e| AppError::Database(format!("查询 request_id 失败: {e}")))
-}
-
-// 会话重导每个 token 事件都要跑一次这条查询；SQL 文本静态化让
-// prepare_cached 稳定命中，也省掉每行的 format! 分配。
-static MATCHING_PROXY_USAGE_LOG_SQL: LazyLock<String> = LazyLock::new(|| {
-    let l_data_source = data_source_expr("l");
-    let app_type_match = dedup_app_type_match_sql("l.app_type", "?1");
-    format!(
-        "SELECT EXISTS (
-            SELECT 1
-            FROM proxy_request_logs l
-            WHERE {l_data_source} = 'proxy'
-              AND {app_type_match}
-              AND l.status_code >= 200
-              AND l.status_code < 300
-              AND l.input_tokens = ?3
-              AND l.output_tokens = ?4
-              AND l.cache_read_tokens = ?5
-              AND (l.cache_creation_tokens = ?6 OR ?9 = 1)
-              AND l.created_at BETWEEN ?7 - ?8 AND ?7 + ?8
-              AND (
-                  LOWER(l.model) = LOWER(?2)
-                  OR LOWER(l.model) = 'unknown'
-                  OR LOWER(?2) = 'unknown'
-              )
-        )"
-    )
-});
-
-pub(crate) fn has_matching_proxy_usage_log(
-    conn: &Connection,
-    key: &DedupKey,
-) -> Result<bool, AppError> {
-    let allow_missing_cache_creation =
-        matches!(key.app_type, "codex" | "gemini" | "opencode") && key.cache_creation_tokens == 0;
-
-    conn.prepare_cached(&MATCHING_PROXY_USAGE_LOG_SQL)
-        .and_then(|mut stmt| {
-            stmt.query_row(
-                params![
-                    key.app_type,
-                    key.model,
-                    key.input_tokens as i64,
-                    key.output_tokens as i64,
-                    key.cache_read_tokens as i64,
-                    key.cache_creation_tokens as i64,
-                    key.created_at,
-                    SESSION_PROXY_DEDUP_WINDOW_SECONDS,
-                    allow_missing_cache_creation as i64,
-                ],
-                |row| row.get::<_, bool>(0),
-            )
-        })
-        .map_err(|e| AppError::Database(format!("查询重复代理用量日志失败: {e}")))
-}
-
-/// grokbuild 会话导入的接管活动守卫：给定时刻 ±窗口内存在任何 grokbuild
-/// 代理直录行，即认为当时处于代理接管态，会话事件应整体跳过——同一请求
-/// 已由代理逐请求记账，会话侧再入账必双算。
-///
-/// 不复用 [`has_matching_proxy_usage_log`] 的指纹匹配：Grok 会话事件是
-/// 逐轮聚合值，与代理逐请求行的 token 值结构性不相等，指纹永不命中。
-/// 这里按"接管态检测"而非"行匹配"设计，故不过滤 status_code——失败的
-/// 代理请求同样证明流量正走代理。
-///
-/// 已知局限（有意取舍，方向保守只漏不双）：窗口不含 session 维度，任一
-/// grokbuild 代理行会给 ±窗口内的全部会话事件投下阴影——接管/官方两态在
-/// 十分钟内交替或并行使用时，官方侧轮次会被跳过（漏记而非双算）。
-pub(crate) fn has_recent_grokbuild_proxy_activity(
-    conn: &Connection,
-    created_at: i64,
-) -> Result<bool, AppError> {
-    let l_data_source = data_source_expr("l");
-    let sql = format!(
-        "SELECT EXISTS (
-            SELECT 1
-            FROM proxy_request_logs l
-            WHERE {l_data_source} = 'proxy'
-              AND l.app_type = 'grokbuild'
-              AND l.created_at BETWEEN ?1 - ?2 AND ?1 + ?2
-        )"
-    );
-    conn.query_row(
-        &sql,
-        params![created_at, SESSION_PROXY_DEDUP_WINDOW_SECONDS],
-        |row| row.get::<_, bool>(0),
-    )
-    .map_err(|e| AppError::Database(format!("查询 Grok 接管活动失败: {e}")))
-}
-
-static SUSPECTED_CODEX_DUPLICATE_SQL: LazyLock<String> = LazyLock::new(|| {
-    let data_source = data_source_expr("l");
-    format!(
-        "SELECT EXISTS (
-            SELECT 1
-            FROM proxy_request_logs l
-            WHERE l.app_type = 'codex'
-              AND {data_source} = 'codex_session'
-              AND l.request_id <> ?1
-              AND LOWER(l.model) = LOWER(?2)
-              AND l.input_tokens = ?3
-              AND l.output_tokens = ?4
-              AND l.cache_read_tokens = ?5
-              AND l.created_at BETWEEN ?6 - ?7 AND ?6 + ?7
-        )"
-    )
-});
-
-pub(crate) fn has_suspected_codex_session_duplicate(
-    conn: &Connection,
-    request_id: &str,
-    key: &DedupKey,
-) -> Result<bool, AppError> {
-    conn.prepare_cached(&SUSPECTED_CODEX_DUPLICATE_SQL)
-        .and_then(|mut stmt| {
-            stmt.query_row(
-                params![
-                    request_id,
-                    key.model,
-                    key.input_tokens as i64,
-                    key.output_tokens as i64,
-                    key.cache_read_tokens as i64,
-                    key.created_at,
-                    SESSION_PROXY_DEDUP_WINDOW_SECONDS,
-                ],
-                |row| row.get::<_, bool>(0),
-            )
-        })
-        .map_err(|error| AppError::Database(format!("查询疑似重复 Codex 会话用量失败: {error}")))
 }
 
 #[derive(Debug, Clone, Default)]
@@ -848,9 +557,7 @@ impl Database {
         let conn = lock_conn!(self.conn);
 
         // Build detail WHERE clause
-        let mut conditions = vec![effective_usage_log_filter_for_range(
-            &conn, "l", start_date, end_date,
-        )?];
+        let mut conditions: Vec<String> = Vec::new();
         let mut params_vec: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
 
         if let Some(start) = start_date {
@@ -1012,9 +719,7 @@ impl Database {
     ) -> Result<Vec<UsageSummaryByApp>, AppError> {
         let conn = lock_conn!(self.conn);
 
-        let mut detail_conditions = vec![effective_usage_log_filter_for_range(
-            &conn, "l", start_date, end_date,
-        )?];
+        let mut detail_conditions: Vec<String> = Vec::new();
         let mut detail_params: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
         if let Some(start) = start_date {
             detail_conditions.push("l.created_at >= ?".to_string());
@@ -1032,7 +737,11 @@ impl Database {
             provider_name,
             model,
         );
-        let detail_where = format!("WHERE {}", detail_conditions.join(" AND "));
+        let detail_where = if detail_conditions.is_empty() {
+            String::new()
+        } else {
+            format!("WHERE {}", detail_conditions.join(" AND "))
+        };
         let detail_join = if provider_name.is_some() {
             providers_join("l", "p")
         } else {
@@ -1222,9 +931,6 @@ impl Database {
             } else {
                 String::new()
             };
-
-            let effective_filter =
-                effective_usage_log_filter_for_range(&conn, "l", Some(start_ts), Some(end_ts))?;
             let fresh_input = fresh_input_sql("l");
             let sql = format!(
                 "SELECT
@@ -1238,7 +944,7 @@ impl Database {
                     COALESCE(SUM(l.cache_read_tokens), 0) as total_cache_read_tokens
                 FROM proxy_request_logs l {detail_join}
                 WHERE l.created_at >= ?1 AND l.created_at <= ?2
-                  AND {effective_filter} {extra_filter}
+                  {extra_filter}
                 GROUP BY bucket_idx
                 ORDER BY bucket_idx ASC"
             );
@@ -1336,9 +1042,6 @@ impl Database {
         } else {
             String::new()
         };
-
-        let effective_filter =
-            effective_usage_log_filter_for_range(&conn, "l", Some(start_ts), Some(end_ts))?;
         let fresh_input = fresh_input_sql("l");
         let detail_sql = format!(
             "SELECT
@@ -1352,7 +1055,7 @@ impl Database {
                 COALESCE(SUM(l.cache_read_tokens), 0) as total_cache_read_tokens
             FROM proxy_request_logs l {detail_join}
             WHERE l.created_at >= ?1 AND l.created_at <= ?2
-              AND {effective_filter} {extra_filter}
+              {extra_filter}
             GROUP BY bucket_date
             ORDER BY bucket_date ASC"
         );
@@ -1520,9 +1223,7 @@ impl Database {
     ) -> Result<Vec<ProviderStats>, AppError> {
         let conn = lock_conn!(self.conn);
 
-        let mut detail_conditions = vec![effective_usage_log_filter_for_range(
-            &conn, "l", start_date, end_date,
-        )?];
+        let mut detail_conditions: Vec<String> = Vec::new();
         let mut detail_params: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
         if let Some(start) = start_date {
             detail_conditions.push("l.created_at >= ?".to_string());
@@ -1684,9 +1385,7 @@ impl Database {
     ) -> Result<Vec<ModelStats>, AppError> {
         let conn = lock_conn!(self.conn);
 
-        let mut detail_conditions = vec![effective_usage_log_filter_for_range(
-            &conn, "l", start_date, end_date,
-        )?];
+        let mut detail_conditions: Vec<String> = Vec::new();
         let mut detail_params: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
         if let Some(start) = start_date {
             detail_conditions.push("l.created_at >= ?".to_string());
@@ -1859,12 +1558,7 @@ impl Database {
     ) -> Result<PaginatedLogs, AppError> {
         let conn = lock_conn!(self.conn);
 
-        let mut conditions = vec![effective_usage_log_filter_for_range(
-            &conn,
-            "l",
-            filters.start_date,
-            filters.end_date,
-        )?];
+        let mut conditions: Vec<String> = Vec::new();
         let mut params: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
 
         if let Some(ref app_type) = filters.app_type {
@@ -1954,14 +1648,7 @@ impl Database {
         let params_refs: Vec<&dyn rusqlite::ToSql> = params.iter().map(|p| p.as_ref()).collect();
         let rows = stmt.query_map(params_refs.as_slice(), row_to_request_log_detail)?;
 
-        let mut logs = Vec::new();
-        let mut pricing_cache = HashMap::new();
-
-        for row in rows {
-            let mut log = row?;
-            Self::maybe_backfill_log_costs(&conn, &mut log, &mut pricing_cache)?;
-            logs.push(log);
-        }
+        let logs = rows.collect::<Result<Vec<_>, _>>()?;
 
         Ok(PaginatedLogs {
             data: logs,
@@ -1994,289 +1681,271 @@ impl Database {
         let result = conn.query_row(&detail_sql, [request_id], row_to_request_log_detail);
 
         match result {
-            Ok(mut detail) => {
-                let mut pricing_cache = HashMap::new();
-                Self::maybe_backfill_log_costs(&conn, &mut detail, &mut pricing_cache)?;
-                Ok(Some(detail))
-            }
+            Ok(detail) => Ok(Some(detail)),
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
             Err(e) => Err(AppError::Database(e.to_string())),
         }
     }
 }
 
-#[derive(Clone)]
-struct PricingInfo {
-    input: rust_decimal::Decimal,
-    output: rust_decimal::Decimal,
-    cache_read: rust_decimal::Decimal,
-    cache_creation: rust_decimal::Decimal,
+/// 重算成本时读出的一行明细。
+struct RepriceRow {
+    request_id: String,
+    model: String,
+    request_model: Option<String>,
+    pricing_model: Option<String>,
+    usage: TokenUsage,
+    service_tier: ServiceTier,
+    /// 一行是多次请求的合计（Grok Build 按轮记录），不按超长上下文档位计
+    sums_requests: bool,
+    created_at: i64,
+    stored: [String; 5],
 }
 
 impl Database {
-    /// Recalculate stored zero-cost usage rows once pricing becomes available.
-    pub(crate) fn backfill_missing_usage_costs(&self) -> Result<u64, AppError> {
+    /// 按当前定价重算全部本地计价的明细成本。
+    pub(crate) fn reprice_usage_costs(&self) -> Result<u64, AppError> {
         let conn = lock_conn!(self.conn);
-        Self::backfill_missing_usage_costs_on_conn(&conn, None)
+        Self::reprice_usage_costs_on_conn(&conn, None)
     }
 
-    /// 仅回填指定 model_id 相关的零成本行；用于单条定价更新后的精准回填。
-    pub(crate) fn backfill_missing_usage_costs_for_model(
-        &self,
-        model_id: &str,
-    ) -> Result<u64, AppError> {
+    /// 只重算和 `model_id` 相关的明细；用于单个模型的定价更新。
+    pub(crate) fn reprice_usage_costs_for_model(&self, model_id: &str) -> Result<u64, AppError> {
         let conn = lock_conn!(self.conn);
-        Self::backfill_missing_usage_costs_on_conn(&conn, Some(model_id))
+        Self::reprice_usage_costs_on_conn(&conn, Some(model_id))
     }
 
-    pub(crate) fn backfill_missing_usage_costs_on_conn(
+    /// 成本是 token 和定价算出来的派生值：定价补上、改了、删了，已入库的明细都按
+    /// 当前定价重算，查不到定价的记 0。
+    ///
+    /// 不动两类行：工具日志自带成本的（`native_cost = 1`，OpenCode、Pi、Grok、mcode
+    /// 用工具记下的费用），和旧版本地路由记录的行（当时按上游计价，倍率也已作废）。
+    pub(crate) fn reprice_usage_costs_on_conn(
         conn: &Connection,
         only_model_id: Option<&str>,
     ) -> Result<u64, AppError> {
-        const BASE_SQL: &str =
-            "SELECT request_id, provider_id, NULL AS provider_name, app_type, model, request_model,
-                        cost_multiplier,
+        let mut rows = {
+            let mut stmt = conn.prepare(
+                "SELECT request_id, app_type, model, request_model, pricing_model,
                         input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens,
+                        cache_creation_1h_tokens, input_token_semantics, service_tier,
                         input_cost_usd, output_cost_usd, cache_read_cost_usd,
-                        cache_creation_cost_usd, total_cost_usd, is_streaming, latency_ms,
-                        first_token_ms, duration_ms, status_code, error_message, created_at,
-                        data_source, pricing_model, input_token_semantics
-             FROM proxy_request_logs
-             WHERE CAST(total_cost_usd AS REAL) <= 0
-               AND (input_tokens > 0 OR output_tokens > 0
-                    OR cache_read_tokens > 0 OR cache_creation_tokens > 0)";
-
-        let mut logs = {
-            let mut stmt = conn.prepare(BASE_SQL)?;
-            let rows = stmt.query_map([], row_to_request_log_detail)?;
-            rows.collect::<Result<Vec<_>, _>>()?
+                        cache_creation_cost_usd, total_cost_usd, created_at
+                 FROM proxy_request_logs
+                 WHERE native_cost = 0
+                   AND COALESCE(data_source, 'proxy') <> 'proxy'
+                   AND (input_tokens > 0 OR output_tokens > 0
+                        OR cache_read_tokens > 0 OR cache_creation_tokens > 0)",
+            )?;
+            let mapped = stmt.query_map([], |row| {
+                let app_type: String = row.get(1)?;
+                let input_tokens: i64 = row.get(5)?;
+                let cache_read_tokens: i64 = row.get(7)?;
+                let cache_creation_tokens: i64 = row.get(8)?;
+                let semantics: i64 = row.get(10)?;
+                Ok(RepriceRow {
+                    request_id: row.get(0)?,
+                    model: row.get(2)?,
+                    request_model: row.get(3)?,
+                    pricing_model: row.get(4)?,
+                    usage: TokenUsage {
+                        input_tokens: fresh_input_tokens(
+                            &app_type,
+                            semantics,
+                            input_tokens,
+                            cache_read_tokens,
+                            cache_creation_tokens,
+                        ),
+                        output_tokens: clamp_u32(row.get(6)?),
+                        cache_read_tokens: clamp_u32(cache_read_tokens),
+                        cache_creation_tokens: clamp_u32(cache_creation_tokens),
+                        cache_creation_1h_tokens: clamp_u32(row.get(9)?),
+                    },
+                    service_tier: ServiceTier::from_db_str(&row.get::<_, String>(11)?),
+                    sums_requests: app_type == "grokbuild",
+                    created_at: row.get(17)?,
+                    stored: [
+                        row.get(12)?,
+                        row.get(13)?,
+                        row.get(14)?,
+                        row.get(15)?,
+                        row.get(16)?,
+                    ],
+                })
+            })?;
+            mapped.collect::<Result<Vec<_>, _>>()?
         };
 
-        // 精准回填的行筛选必须与查价层共用 candidates 归一化：SQL 精确匹配会漏掉
-        // 以原始别名落库的行（如 openrouter/anthropic/claude-sonnet-4.5:free），
-        // 这些行查价时能归一化命中新定价，却在筛选层被挡掉，导致导入定价后
-        // 历史成本要等下次全量回填才更新。误纳无害——查不到价的行会被跳过。
+        // 精准重算的行筛选必须与查价层共用 candidates 归一化：SQL 精确匹配会漏掉
+        // 以原始别名落库的行（如 openrouter/anthropic/claude-sonnet-4.5:free）。
+        // 误纳无害——重算结果不变的行不会写回。
         if let Some(model_id) = only_model_id {
             let target = model_pricing_candidates(model_id);
-            logs.retain(|log| log_pricing_scope_matches(log, &target));
+            rows.retain(|row| {
+                pricing_scope_matches(
+                    [
+                        Some(row.model.as_str()),
+                        row.request_model.as_deref(),
+                        row.pricing_model.as_deref(),
+                    ],
+                    &target,
+                )
+            });
         }
-
-        if logs.is_empty() {
+        if rows.is_empty() {
             return Ok(0);
         }
 
         let tx = conn
             .unchecked_transaction()
-            .map_err(|e| AppError::Database(format!("启动用量成本回填事务失败: {e}")))?;
-
+            .map_err(|e| AppError::Database(format!("启动用量成本重算事务失败: {e}")))?;
+        let mut pricing_cache: HashMap<String, Option<ModelPricing>> = HashMap::new();
         let mut updated = 0u64;
-        let mut pricing_cache = HashMap::new();
-        for log in &mut logs {
-            if Self::maybe_backfill_log_costs(&tx, log, &mut pricing_cache)? {
+        {
+            let mut update = tx.prepare(
+                "UPDATE proxy_request_logs
+                 SET input_cost_usd = ?1, output_cost_usd = ?2, cache_read_cost_usd = ?3,
+                     cache_creation_cost_usd = ?4, total_cost_usd = ?5
+                 WHERE request_id = ?6",
+            )?;
+            for row in &rows {
+                let pricing = row_pricing(&tx, &mut pricing_cache, row)?.map(|p| {
+                    if row.sums_requests {
+                        p.without_long_context()
+                    } else {
+                        p
+                    }
+                });
+                let costs = match pricing {
+                    Some(pricing) => CostCalculator::calculate(
+                        &row.usage,
+                        &pricing,
+                        row.service_tier,
+                        row.created_at,
+                    )
+                    .to_strings(),
+                    None => CostBreakdown::zero_strings(),
+                };
+                if costs_equal(&costs, &row.stored) {
+                    continue;
+                }
+                update
+                    .execute(params![
+                        costs[0],
+                        costs[1],
+                        costs[2],
+                        costs[3],
+                        costs[4],
+                        row.request_id
+                    ])
+                    .map_err(|e| AppError::Database(format!("更新请求成本失败: {e}")))?;
                 updated += 1;
             }
         }
         tx.commit()
-            .map_err(|e| AppError::Database(format!("提交用量成本回填事务失败: {e}")))?;
+            .map_err(|e| AppError::Database(format!("提交用量成本重算事务失败: {e}")))?;
 
         if updated > 0 {
-            log::info!("已回填 {updated} 条缺失的用量成本");
+            log::info!("已按当前定价重算 {updated} 条用量成本");
         }
-
         Ok(updated)
-    }
-
-    /// 尝试为单条 log 回填成本字段。返回是否实际写入（true=已 UPDATE，false=跳过）。
-    fn maybe_backfill_log_costs(
-        conn: &Connection,
-        log: &mut RequestLogDetail,
-        pricing_cache: &mut HashMap<String, PricingInfo>,
-    ) -> Result<bool, AppError> {
-        let existing_cost = rust_decimal::Decimal::from_str(&log.total_cost_usd)
-            .unwrap_or(rust_decimal::Decimal::ZERO);
-        let has_cost = existing_cost > rust_decimal::Decimal::ZERO;
-        let has_usage = log.input_tokens > 0
-            || log.output_tokens > 0
-            || log.cache_read_tokens > 0
-            || log.cache_creation_tokens > 0;
-
-        if has_cost || !has_usage {
-            return Ok(false);
-        }
-
-        let pricing = match Self::get_log_model_pricing_cached(conn, pricing_cache, log)? {
-            Some(info) => info,
-            None => return Ok(false),
-        };
-        let multiplier =
-            rust_decimal::Decimal::from_str(&log.cost_multiplier).unwrap_or_else(|e| {
-                log::warn!(
-                    "历史用量倍率解析失败 request_id={}: {} - {e}",
-                    log.request_id,
-                    log.cost_multiplier
-                );
-                rust_decimal::Decimal::ONE
-            });
-
-        let million = rust_decimal::Decimal::from(1_000_000u64);
-
-        // 与 CostCalculator::calculate_for_app 保持一致的计算逻辑：
-        // 1. 历史 cache-inclusive 行只包含 cache read；新 total 行还包含 cache write。
-        // 2. Claude/Anthropic 的 input_tokens 已经是 fresh input，不能再次扣减
-        // 3. 各项成本是基础成本（不含倍率），倍率只作用于最终总价
-        let cache_inclusive_app =
-            crate::services::sql_helpers::is_cache_inclusive_app(log.app_type.as_str());
-        let billable_input_tokens =
-            if !cache_inclusive_app || log.input_token_semantics == INPUT_TOKEN_SEMANTICS_FRESH {
-                log.input_tokens as u64
-            } else if log.input_token_semantics == INPUT_TOKEN_SEMANTICS_TOTAL {
-                (log.input_tokens as u64)
-                    .saturating_sub(log.cache_read_tokens as u64)
-                    .saturating_sub(log.cache_creation_tokens as u64)
-            } else {
-                // v12 and earlier: input included cache reads but excluded cache writes.
-                (log.input_tokens as u64).saturating_sub(log.cache_read_tokens as u64)
-            };
-        let input_cost =
-            rust_decimal::Decimal::from(billable_input_tokens) * pricing.input / million;
-        let output_cost =
-            rust_decimal::Decimal::from(log.output_tokens as u64) * pricing.output / million;
-        let cache_read_cost = rust_decimal::Decimal::from(log.cache_read_tokens as u64)
-            * pricing.cache_read
-            / million;
-        let cache_creation_cost = rust_decimal::Decimal::from(log.cache_creation_tokens as u64)
-            * pricing.cache_creation
-            / million;
-        // 总成本 = 基础成本之和 × 倍率
-        let base_total = input_cost + output_cost + cache_read_cost + cache_creation_cost;
-        let total_cost = base_total * multiplier;
-
-        log.input_cost_usd = format!("{input_cost:.6}");
-        log.output_cost_usd = format!("{output_cost:.6}");
-        log.cache_read_cost_usd = format!("{cache_read_cost:.6}");
-        log.cache_creation_cost_usd = format!("{cache_creation_cost:.6}");
-        log.total_cost_usd = format!("{total_cost:.6}");
-
-        conn.execute(
-            "UPDATE proxy_request_logs
-             SET input_cost_usd = ?1,
-                 output_cost_usd = ?2,
-                 cache_read_cost_usd = ?3,
-                 cache_creation_cost_usd = ?4,
-                 total_cost_usd = ?5
-             WHERE request_id = ?6",
-            params![
-                log.input_cost_usd,
-                log.output_cost_usd,
-                log.cache_read_cost_usd,
-                log.cache_creation_cost_usd,
-                log.total_cost_usd,
-                log.request_id
-            ],
-        )
-        .map_err(|e| AppError::Database(format!("更新请求成本失败: {e}")))?;
-
-        Ok(true)
-    }
-
-    fn get_model_pricing_cached(
-        conn: &Connection,
-        cache: &mut HashMap<String, PricingInfo>,
-        model: &str,
-    ) -> Result<Option<PricingInfo>, AppError> {
-        if let Some(info) = cache.get(model) {
-            return Ok(Some(info.clone()));
-        }
-
-        let row = find_model_pricing_row(conn, model)?;
-        let Some((input, output, cache_read, cache_creation)) = row else {
-            return Ok(None);
-        };
-
-        let pricing = PricingInfo {
-            input: rust_decimal::Decimal::from_str(&input)
-                .map_err(|e| AppError::Database(format!("解析输入价格失败: {e}")))?,
-            output: rust_decimal::Decimal::from_str(&output)
-                .map_err(|e| AppError::Database(format!("解析输出价格失败: {e}")))?,
-            cache_read: rust_decimal::Decimal::from_str(&cache_read)
-                .map_err(|e| AppError::Database(format!("解析缓存读取价格失败: {e}")))?,
-            cache_creation: rust_decimal::Decimal::from_str(&cache_creation)
-                .map_err(|e| AppError::Database(format!("解析缓存写入价格失败: {e}")))?,
-        };
-
-        cache.insert(model.to_string(), pricing.clone());
-        Ok(Some(pricing))
-    }
-
-    fn get_log_model_pricing_cached(
-        conn: &Connection,
-        cache: &mut HashMap<String, PricingInfo>,
-        log: &RequestLogDetail,
-    ) -> Result<Option<PricingInfo>, AppError> {
-        // 写入时的计价基准已落库（v11+）：回填只按它重算，找不到就保持 0 成本
-        // 等补价。不能换用 model/request_model 猜——路由接管 + request 计价模式下
-        // 三者可能各不相同（model=上游回显、request_model=客户端别名、
-        // pricing_model=实际出站模型），换基准会按错误价格永久固化。
-        // 占位符（"" = 未计价错误行 / "unknown"）视同缺失，走历史行逻辑。
-        if let Some(pricing_model) = log
-            .pricing_model
-            .as_deref()
-            .filter(|pm| !is_placeholder_pricing_model(pm))
-        {
-            return Self::get_model_pricing_cached(conn, cache, pricing_model);
-        }
-
-        if let Some(pricing) = Self::get_model_pricing_cached(conn, cache, &log.model)? {
-            return Ok(Some(pricing));
-        }
-
-        // 仅当 model 列是占位符（解析失败留下的 ""/"unknown" 等）时才回退到
-        // request_model 定价。model 是真实模型名但缺定价时必须保持 0 成本等待
-        // 补价：路由接管下 request_model 是客户端别名（如 claude-sonnet-4-6），
-        // 按别名回填会把真实上游模型的 tokens 按错误价格永久固化（行一旦有成本
-        // 就不再进入回填范围）。
-        if !is_placeholder_pricing_model(&log.model) {
-            return Ok(None);
-        }
-
-        let Some(request_model) = log.request_model.as_deref() else {
-            return Ok(None);
-        };
-        if request_model == log.model {
-            return Ok(None);
-        }
-
-        Self::get_model_pricing_cached(conn, cache, request_model)
     }
 }
 
+/// 明细行的计价基准：写入时记下的 `pricing_model`，否则 `model`；`model` 是解析失败
+/// 留下的占位符（""、"unknown"）时才退回 `request_model`。
+fn row_pricing(
+    conn: &Connection,
+    cache: &mut HashMap<String, Option<ModelPricing>>,
+    row: &RepriceRow,
+) -> Result<Option<ModelPricing>, AppError> {
+    let mut lookup = |model: &str| -> Result<Option<ModelPricing>, AppError> {
+        if let Some(found) = cache.get(model) {
+            return Ok(found.clone());
+        }
+        let found = find_model_pricing_row(conn, model)?;
+        cache.insert(model.to_string(), found.clone());
+        Ok(found)
+    };
+
+    if let Some(pricing_model) = row
+        .pricing_model
+        .as_deref()
+        .filter(|pm| !is_placeholder_pricing_model(pm))
+    {
+        return lookup(pricing_model);
+    }
+    if !is_placeholder_pricing_model(&row.model) {
+        return lookup(&row.model);
+    }
+    match row.request_model.as_deref() {
+        Some(request_model) if !is_placeholder_pricing_model(request_model) => {
+            lookup(request_model)
+        }
+        _ => Ok(None),
+    }
+}
+
+/// 数值相同就算相等（"0" 与 "0.000000"、小数位数不同的旧值）。
+fn costs_equal(new: &[String; 5], stored: &[String; 5]) -> bool {
+    new.iter().zip(stored).all(|(a, b)| {
+        match (
+            rust_decimal::Decimal::from_str(a),
+            rust_decimal::Decimal::from_str(b),
+        ) {
+            (Ok(a), Ok(b)) => a == b,
+            _ => a == b,
+        }
+    })
+}
+
+fn clamp_u32(value: i64) -> u32 {
+    value.clamp(0, i64::from(u32::MAX)) as u32
+}
+
+/// 把明细里存的 input 换成未命中缓存的输入（与 [`fresh_input_sql`] 同一规则）。
+fn fresh_input_tokens(
+    app_type: &str,
+    semantics: i64,
+    input_tokens: i64,
+    cache_read_tokens: i64,
+    cache_creation_tokens: i64,
+) -> u32 {
+    let fresh = if semantics == INPUT_TOKEN_SEMANTICS_FRESH
+        || !crate::services::sql_helpers::is_cache_inclusive_app(app_type)
+    {
+        input_tokens
+    } else if semantics == INPUT_TOKEN_SEMANTICS_TOTAL {
+        input_tokens - cache_read_tokens - cache_creation_tokens
+    } else {
+        // v12 及更早：input 含缓存读，不含缓存写
+        input_tokens - cache_read_tokens
+    };
+    clamp_u32(fresh)
+}
+
 pub(crate) fn find_model_pricing(conn: &Connection, model_id: &str) -> Option<ModelPricing> {
-    find_model_pricing_row(conn, model_id)
-        .ok()
-        .flatten()
-        .and_then(|(input, output, cache_read, cache_creation)| {
-            ModelPricing::from_strings(&input, &output, &cache_read, &cache_creation).ok()
-        })
+    find_model_pricing_row(conn, model_id).ok().flatten()
 }
 
 pub(crate) fn find_model_pricing_row(
     conn: &Connection,
     model_id: &str,
-) -> Result<Option<(String, String, String, String)>, AppError> {
+) -> Result<Option<ModelPricing>, AppError> {
     let candidates = model_pricing_candidates(model_id);
     if candidates.is_empty() {
         return Ok(None);
     }
 
     for candidate in &candidates {
-        if let Some(row) = query_model_pricing_exact(conn, candidate)? {
+        if let Some(row) = query_model_pricing(conn, PricingMatch::Exact, candidate)? {
             return Ok(Some(row));
         }
     }
 
     for candidate in &candidates {
         if should_try_pricing_prefix_match(candidate) {
-            if let Some(row) = query_model_pricing_prefix(conn, candidate)? {
+            if let Some(row) = query_model_pricing(conn, PricingMatch::Prefix, candidate)? {
                 return Ok(Some(row));
             }
         }
@@ -2285,18 +1954,14 @@ pub(crate) fn find_model_pricing_row(
     Ok(None)
 }
 
-/// 精准回填的行筛选：log 的任一模型字段归一化后与目标模型的 candidates 相交，
+/// 精准重算的行筛选：行的任一模型字段归一化后与目标模型的 candidates 相交，
 /// 或可按查价层的前缀规则命中目标，即视为相关。镜像 find_model_pricing_row 的
-/// 匹配语义，宁可误纳（后续查价会兜底）不可漏筛。
-fn log_pricing_scope_matches(log: &RequestLogDetail, target_candidates: &[String]) -> bool {
-    [
-        Some(log.model.as_str()),
-        log.request_model.as_deref(),
-        log.pricing_model.as_deref(),
-    ]
-    .into_iter()
-    .flatten()
-    .any(|field| {
+/// 匹配语义，宁可误纳（重算结果不变的行不会写回）不可漏筛。
+fn pricing_scope_matches<'a>(
+    fields: impl IntoIterator<Item = Option<&'a str>>,
+    target_candidates: &[String],
+) -> bool {
+    fields.into_iter().flatten().any(|field| {
         model_pricing_candidates(field).iter().any(|candidate| {
             target_candidates.iter().any(|target| {
                 target == candidate
@@ -2314,53 +1979,89 @@ pub(crate) fn is_placeholder_pricing_model(model_id: &str) -> bool {
     normalized.is_empty() || matches!(normalized.as_str(), "unknown" | "null" | "none")
 }
 
-fn query_model_pricing_exact(
-    conn: &Connection,
-    model_id: &str,
-) -> Result<Option<(String, String, String, String)>, AppError> {
-    conn.query_row(
-        "SELECT input_cost_per_million, output_cost_per_million,
-                cache_read_cost_per_million, cache_creation_cost_per_million
-         FROM model_pricing
-         WHERE model_id = ?1",
-        [model_id],
-        |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, String>(2)?,
-                row.get::<_, String>(3)?,
-            ))
-        },
-    )
-    .optional()
-    .map_err(|e| AppError::Database(format!("查询模型定价失败: {e}")))
+#[derive(Clone, Copy)]
+enum PricingMatch {
+    Exact,
+    /// `<model>-%` 里最短的一行
+    Prefix,
 }
 
-fn query_model_pricing_prefix(
+fn query_model_pricing(
     conn: &Connection,
+    mode: PricingMatch,
     model_id: &str,
-) -> Result<Option<(String, String, String, String)>, AppError> {
-    let pattern = format!("{model_id}-%");
-    conn.query_row(
-        "SELECT input_cost_per_million, output_cost_per_million,
-                cache_read_cost_per_million, cache_creation_cost_per_million
-         FROM model_pricing
-         WHERE model_id LIKE ?1
-         ORDER BY LENGTH(model_id) ASC
-         LIMIT 1",
-        [pattern],
-        |row| {
+) -> Result<Option<ModelPricing>, AppError> {
+    const COLUMNS: &str = "model_id, input_cost_per_million, output_cost_per_million,
+        cache_read_cost_per_million, cache_creation_cost_per_million,
+        long_context_threshold, long_context_input_multiplier,
+        long_context_output_multiplier, priority_multiplier";
+    let (sql, param) = match mode {
+        PricingMatch::Exact => (
+            format!("SELECT {COLUMNS} FROM model_pricing WHERE model_id = ?1"),
+            model_id.to_string(),
+        ),
+        PricingMatch::Prefix => (
+            format!(
+                "SELECT {COLUMNS} FROM model_pricing WHERE model_id LIKE ?1
+                 ORDER BY LENGTH(model_id) ASC LIMIT 1"
+            ),
+            format!("{model_id}-%"),
+        ),
+    };
+    let row = conn
+        .query_row(&sql, [param], |row| {
             Ok((
                 row.get::<_, String>(0)?,
                 row.get::<_, String>(1)?,
                 row.get::<_, String>(2)?,
                 row.get::<_, String>(3)?,
+                row.get::<_, String>(4)?,
+                row.get::<_, Option<i64>>(5)?,
+                row.get::<_, String>(6)?,
+                row.get::<_, String>(7)?,
+                row.get::<_, String>(8)?,
             ))
+        })
+        .optional()
+        .map_err(|e| AppError::Database(format!("查询模型定价失败: {e}")))?;
+    let Some((
+        matched_id,
+        input,
+        output,
+        cache_read,
+        cache_creation,
+        threshold,
+        lc_in,
+        lc_out,
+        priority,
+    )) = row
+    else {
+        return Ok(None);
+    };
+    let parse = |label: &str, value: &str| {
+        rust_decimal::Decimal::from_str(value)
+            .map_err(|e| AppError::Database(format!("解析模型 {model_id} 的{label}失败: {e}")))
+    };
+    let long_context = match threshold {
+        Some(threshold) if threshold > 0 => Some(LongContextPricing {
+            threshold_tokens: threshold as u64,
+            input_multiplier: parse("超长上下文输入倍率", &lc_in)?,
+            output_multiplier: parse("超长上下文输出倍率", &lc_out)?,
+        }),
+        _ => None,
+    };
+    let pricing = ModelPricing {
+        prices: BasePrices {
+            input: parse("输入价格", &input)?,
+            output: parse("输出价格", &output)?,
+            cache_read: parse("缓存读取价格", &cache_read)?,
+            cache_creation: parse("缓存写入价格", &cache_creation)?,
         },
-    )
-    .optional()
-    .map_err(|e| AppError::Database(format!("查询模型前缀定价失败: {e}")))
+        earlier: Vec::new(),
+        long_context,
+        priority_multiplier: parse("priority 倍率", &priority)?,
+    };
+    Ok(Some(with_price_history(&matched_id, pricing)))
 }
 
 fn model_pricing_candidates(model_id: &str) -> Vec<String> {
@@ -2583,6 +2284,7 @@ fn should_try_pricing_prefix_match(model_id: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::services::sql_helpers::INPUT_TOKEN_SEMANTICS_LEGACY;
 
     fn local_ts(year: i32, month: u32, day: u32, hour: u32, minute: u32, second: u32) -> i64 {
         match Local.with_ymd_and_hms(year, month, day, hour, minute, second) {
@@ -2631,45 +2333,6 @@ mod tests {
                 data_source
             ],
         )?;
-        Ok(())
-    }
-
-    fn create_legacy_nullable_logs_table(conn: &Connection) -> Result<(), AppError> {
-        conn.execute(
-            "CREATE TABLE proxy_request_logs (
-                request_id TEXT PRIMARY KEY,
-                app_type TEXT NOT NULL,
-                model TEXT NOT NULL,
-                input_tokens INTEGER NOT NULL,
-                output_tokens INTEGER NOT NULL,
-                cache_read_tokens INTEGER NOT NULL,
-                cache_creation_tokens INTEGER NOT NULL,
-                status_code INTEGER NOT NULL,
-                created_at INTEGER NOT NULL,
-                data_source TEXT
-            )",
-            [],
-        )?;
-        Ok(())
-    }
-
-    #[test]
-    fn test_effective_filter_keeps_legacy_null_data_source_proxy_rows() -> Result<(), AppError> {
-        let conn = Connection::open_in_memory()?;
-        create_legacy_nullable_logs_table(&conn)?;
-        conn.execute(
-            "INSERT INTO proxy_request_logs (
-                request_id, app_type, model, input_tokens, output_tokens,
-                cache_read_tokens, cache_creation_tokens, status_code, created_at, data_source
-            ) VALUES ('legacy-proxy', 'codex', 'gpt-5.5', 10, 2, 1, 0, 200, 1000, NULL)",
-            [],
-        )?;
-
-        let filter = effective_usage_log_filter("l");
-        let sql = format!("SELECT COUNT(*) FROM proxy_request_logs l WHERE {filter}");
-        let count: i64 = conn.query_row(&sql, [], |row| row.get(0))?;
-        assert_eq!(count, 1);
-
         Ok(())
     }
 
@@ -2726,320 +2389,6 @@ mod tests {
         assert_eq!(db.get_request_logs(&filters, 0, 10)?.total, 2);
         filters.end_date = Some(10_000);
         assert_eq!(db.get_request_logs(&filters, 0, 10)?.total, 3);
-
-        Ok(())
-    }
-
-    /// (request_id, app_type, model, input, output, cache_read, cache_creation,
-    /// status_code, created_at, data_source)
-    type LegacyLogRow = (
-        &'static str,
-        &'static str,
-        &'static str,
-        i64,
-        i64,
-        i64,
-        i64,
-        i64,
-        i64,
-        Option<&'static str>,
-    );
-
-    /// 范围版去重条件不管选哪种写法，结果都必须和逐行 EXISTS 的原写法一致。
-    #[test]
-    fn test_range_filter_matches_original_dedup() -> Result<(), AppError> {
-        let conn = Connection::open_in_memory()?;
-        create_legacy_nullable_logs_table(&conn)?;
-        let rows: &[LegacyLogRow] = &[
-            // 和 proxy-1 重复（应被去掉）
-            (
-                "p1",
-                "claude",
-                "opus",
-                10,
-                2,
-                1,
-                5,
-                200,
-                1000,
-                Some("proxy"),
-            ),
-            (
-                "s1",
-                "claude",
-                "opus",
-                10,
-                2,
-                1,
-                5,
-                200,
-                1100,
-                Some("session_log"),
-            ),
-            // claude-desktop 的代理行也能去掉 claude 会话行
-            (
-                "p2",
-                "claude-desktop",
-                "sonnet",
-                20,
-                3,
-                0,
-                0,
-                200,
-                5000,
-                Some("proxy"),
-            ),
-            (
-                "s2",
-                "claude",
-                "SONNET",
-                20,
-                3,
-                0,
-                0,
-                200,
-                5300,
-                Some("session_log"),
-            ),
-            // codex 会话没有 cache_creation：0 视作未知
-            ("p3", "codex", "gpt", 30, 4, 2, 9, 200, 9000, Some("proxy")),
-            (
-                "s3",
-                "codex",
-                "gpt",
-                30,
-                4,
-                2,
-                0,
-                200,
-                9100,
-                Some("codex_session"),
-            ),
-            // 超出 10 分钟窗口：保留
-            (
-                "s4",
-                "claude",
-                "opus",
-                10,
-                2,
-                1,
-                5,
-                200,
-                1000 + 601,
-                Some("session_log"),
-            ),
-            // 代理行失败：不参与去重，会话行保留
-            (
-                "p5",
-                "claude",
-                "haiku",
-                7,
-                7,
-                7,
-                7,
-                500,
-                20000,
-                Some("proxy"),
-            ),
-            (
-                "s5",
-                "claude",
-                "haiku",
-                7,
-                7,
-                7,
-                7,
-                200,
-                20010,
-                Some("session_log"),
-            ),
-            // 模型名 unknown 也算匹配
-            ("p6", "claude", "unknown", 8, 8, 8, 8, 200, 30000, None),
-            (
-                "s6",
-                "claude",
-                "opus",
-                8,
-                8,
-                8,
-                8,
-                200,
-                30010,
-                Some("session_log"),
-            ),
-            // 不相关的会话行，让会话行多于代理行
-            (
-                "s7",
-                "claude",
-                "opus",
-                1,
-                1,
-                1,
-                1,
-                200,
-                40000,
-                Some("session_log"),
-            ),
-            (
-                "s8",
-                "claude",
-                "opus",
-                2,
-                2,
-                2,
-                2,
-                200,
-                40001,
-                Some("session_log"),
-            ),
-            (
-                "s9",
-                "claude",
-                "opus",
-                3,
-                3,
-                3,
-                3,
-                200,
-                40002,
-                Some("session_log"),
-            ),
-        ];
-        for r in rows {
-            conn.execute(
-                "INSERT INTO proxy_request_logs (
-                    request_id, app_type, model, input_tokens, output_tokens,
-                    cache_read_tokens, cache_creation_tokens, status_code, created_at, data_source
-                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
-                params![r.0, r.1, r.2, r.3, r.4, r.5, r.6, r.7, r.8, r.9],
-            )?;
-        }
-
-        let ids = |filter: &str, start: i64, end: i64| -> Result<Vec<String>, AppError> {
-            let sql = format!(
-                "SELECT request_id FROM proxy_request_logs l
-                 WHERE l.created_at BETWEEN ?1 AND ?2 AND {filter}
-                 ORDER BY request_id"
-            );
-            let mut stmt = conn.prepare(&sql)?;
-            let rows = stmt
-                .query_map(params![start, end], |row| row.get::<_, String>(0))?
-                .collect::<Result<Vec<_>, _>>()?;
-            Ok(rows)
-        };
-
-        let original = effective_usage_log_filter("l");
-        // 全量（代理少于会话 → NOT IN）、只含代理行、只含会话行（直接跳过）
-        for (start, end) in [(0, 50000), (900, 1050), (40000, 40002), (1100, 9100)] {
-            let ranged = effective_usage_log_filter_for_range(&conn, "l", Some(start), Some(end))?;
-            assert_eq!(
-                ids(&ranged, start, end)?,
-                ids(&original, start, end)?,
-                "range {start}..{end}"
-            );
-        }
-        let all = effective_usage_log_filter_for_range(&conn, "l", None, None)?;
-        assert!(all.contains("NOT IN"));
-        assert_eq!(ids(&all, 0, 50000)?, ids(&original, 0, 50000)?);
-        assert_eq!(
-            ids(&all, 0, 50000)?,
-            vec!["p1", "p2", "p3", "p5", "p6", "s4", "s5", "s7", "s8", "s9"]
-        );
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_matching_proxy_log_treats_legacy_null_data_source_as_proxy() -> Result<(), AppError> {
-        let conn = Connection::open_in_memory()?;
-        create_legacy_nullable_logs_table(&conn)?;
-        conn.execute(
-            "INSERT INTO proxy_request_logs (
-                request_id, app_type, model, input_tokens, output_tokens,
-                cache_read_tokens, cache_creation_tokens, status_code, created_at, data_source
-            ) VALUES ('legacy-proxy', 'codex', 'gpt-5.5', 10, 2, 1, 0, 200, 1000, NULL)",
-            [],
-        )?;
-
-        let key = DedupKey {
-            app_type: "codex",
-            model: "gpt-5.5",
-            input_tokens: 10,
-            output_tokens: 2,
-            cache_read_tokens: 1,
-            cache_creation_tokens: 0,
-            created_at: 1000,
-        };
-        assert!(has_matching_proxy_usage_log(&conn, &key)?);
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_matching_proxy_log_matches_claude_desktop_for_claude_session() -> Result<(), AppError> {
-        let conn = Connection::open_in_memory()?;
-        create_legacy_nullable_logs_table(&conn)?;
-        conn.execute(
-            "INSERT INTO proxy_request_logs (
-                request_id, app_type, model, input_tokens, output_tokens,
-                cache_read_tokens, cache_creation_tokens, status_code, created_at, data_source
-            ) VALUES ('desktop-proxy', 'claude-desktop', 'claude-sonnet-4-5', 100, 20, 10, 5, 200, 1000, 'proxy')",
-            [],
-        )?;
-
-        let key = DedupKey {
-            app_type: "claude",
-            model: "claude-sonnet-4-5",
-            input_tokens: 100,
-            output_tokens: 20,
-            cache_read_tokens: 10,
-            cache_creation_tokens: 5,
-            created_at: 1060,
-        };
-        assert!(has_matching_proxy_usage_log(&conn, &key)?);
-
-        let mut outside_window = key;
-        outside_window.created_at = 1_601;
-        assert!(!has_matching_proxy_usage_log(&conn, &outside_window)?);
-
-        let mut different_model = key;
-        different_model.model = "claude-opus-4-5";
-        assert!(!has_matching_proxy_usage_log(&conn, &different_model)?);
-
-        let mut different_input = key;
-        different_input.input_tokens += 1;
-        assert!(!has_matching_proxy_usage_log(&conn, &different_input)?);
-
-        let mut different_cache_creation = key;
-        different_cache_creation.cache_creation_tokens += 1;
-        assert!(!has_matching_proxy_usage_log(
-            &conn,
-            &different_cache_creation
-        )?);
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_effective_filter_dedups_claude_session_against_desktop_proxy() -> Result<(), AppError> {
-        let conn = Connection::open_in_memory()?;
-        create_legacy_nullable_logs_table(&conn)?;
-        conn.execute_batch(
-            "INSERT INTO proxy_request_logs (
-                request_id, app_type, model, input_tokens, output_tokens,
-                cache_read_tokens, cache_creation_tokens, status_code, created_at, data_source
-            ) VALUES
-                ('desktop-proxy', 'claude-desktop', 'claude-sonnet-4-5', 100, 20, 10, 5, 200, 1000, 'proxy'),
-                ('claude-session', 'claude', 'claude-sonnet-4-5', 100, 20, 10, 5, 200, 1060, 'session_log');",
-        )?;
-
-        let filter = effective_usage_log_filter("l");
-        let sql = format!("SELECT request_id FROM proxy_request_logs l WHERE {filter}");
-        let request_ids = conn
-            .prepare(&sql)?
-            .query_map([], |row| row.get::<_, String>(0))?
-            .collect::<Result<Vec<_>, _>>()?;
-        assert_eq!(request_ids, vec!["desktop-proxy"]);
 
         Ok(())
     }
@@ -3120,558 +2469,347 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn test_backfill_missing_usage_costs_uses_new_gpt_5_5_pricing() -> Result<(), AppError> {
-        let db = Database::memory()?;
-
-        {
-            let conn = lock_conn!(db.conn);
-            insert_usage_log(
-                &conn,
-                "codex-gpt-5-5-zero-cost",
-                "codex",
-                "_codex_session",
-                "gpt-5.5",
-                "codex_session",
-                1000,
-                1_000_000,
-                1_000_000,
-                0,
-                0,
-                200,
-                "0",
-            )?;
-        }
-
-        assert_eq!(db.backfill_missing_usage_costs()?, 1);
-
-        let conn = lock_conn!(db.conn);
-        let (input_cost, output_cost, total_cost): (String, String, String) = conn.query_row(
-            "SELECT input_cost_usd, output_cost_usd, total_cost_usd
-             FROM proxy_request_logs WHERE request_id = 'codex-gpt-5-5-zero-cost'",
-            [],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-        )?;
-        assert_eq!(input_cost, "5.000000");
-        assert_eq!(output_cost, "30.000000");
-        assert_eq!(total_cost, "35.000000");
-
-        Ok(())
+    /// 重算测试用的一行明细，未写的字段取会话导入的默认形态。
+    struct RowSpec<'a> {
+        request_id: &'a str,
+        app_type: &'a str,
+        model: &'a str,
+        request_model: Option<&'a str>,
+        pricing_model: Option<&'a str>,
+        data_source: &'a str,
+        semantics: i64,
+        input: i64,
+        output: i64,
+        cache_read: i64,
+        cache_creation: i64,
+        cache_creation_1h: i64,
+        service_tier: &'a str,
+        native_cost: bool,
+        total_cost: &'a str,
+        created_at: i64,
     }
 
-    #[test]
-    fn test_backfill_new_anthropic_openai_pricing_after_upgrade() -> Result<(), AppError> {
-        let db = Database::memory()?;
-        let cases = [
-            (
-                "anthropic/claude-opus-5.5",
-                "claude",
-                1_000_000,
-                ["4.000000", "20.000000", "0.200000", "5.000000", "29.200000"],
-            ),
-            (
-                "OpenAI/GPT-6-SOL@HIGH",
-                "codex",
-                3_000_000,
-                ["2.000000", "10.000000", "0.200000", "2.500000", "14.700000"],
-            ),
-            (
-                "OpenAI/GPT-6.1-SOL@HIGH",
-                "codex",
-                3_000_000,
-                ["2.000000", "10.000000", "0.100000", "2.500000", "14.600000"],
-            ),
-            (
-                "gpt-6-luna",
-                "codex",
-                3_000_000,
-                ["0.100000", "0.500000", "0.010000", "0.125000", "0.735000"],
-            ),
-            (
-                "gpt-5.6-cyber",
-                "codex",
-                3_000_000,
-                [
-                    "12.500000",
-                    "75.000000",
-                    "1.250000",
-                    "15.625000",
-                    "104.375000",
-                ],
-            ),
-            // Pro 系列无缓存折扣，缓存列记 0
-            (
-                "gpt-5.5-pro",
-                "codex",
-                3_000_000,
-                [
-                    "30.000000",
-                    "180.000000",
-                    "0.000000",
-                    "0.000000",
-                    "210.000000",
-                ],
-            ),
-            // 剥日期后缀后精确命中 gpt-4o-mini，不会落到更短的 gpt-4o
-            (
-                "gpt-4o-mini-2024-07-18",
-                "codex",
-                3_000_000,
-                ["0.150000", "0.600000", "0.075000", "0.000000", "0.825000"],
-            ),
-        ];
-        {
-            let conn = lock_conn!(db.conn);
-            // Simulate an existing database with unpriced usage before the update.
-            conn.execute(
-                "DELETE FROM model_pricing WHERE model_id IN
-                 ('claude-opus-5-5', 'gpt-6-sol', 'gpt-6.1-sol', 'gpt-6-luna', 'gpt-5.6-cyber',
-                  'gpt-5.5-pro', 'gpt-4o-mini')",
-                [],
-            )?;
-            for (model, app, input, _) in &cases {
-                insert_usage_log(
-                    &conn, model, app, "p1", model, "proxy", 1000, *input, 1_000_000, 1_000_000,
-                    1_000_000, 200, "0",
-                )?;
+    impl Default for RowSpec<'_> {
+        fn default() -> Self {
+            Self {
+                request_id: "row",
+                app_type: "claude",
+                model: "claude-opus-4-8",
+                request_model: None,
+                pricing_model: None,
+                data_source: "session_log",
+                semantics: INPUT_TOKEN_SEMANTICS_FRESH,
+                input: 0,
+                output: 0,
+                cache_read: 0,
+                cache_creation: 0,
+                cache_creation_1h: 0,
+                service_tier: "",
+                native_cost: false,
+                total_cost: "0",
+                // 2026-09-21，晚于内置的调价记录
+                created_at: 1_790_000_000,
             }
-            conn.execute(
-                "UPDATE proxy_request_logs SET input_token_semantics = ?1",
-                [INPUT_TOKEN_SEMANTICS_TOTAL],
-            )?;
         }
-        assert_eq!(db.backfill_missing_usage_costs()?, 0);
-        db.ensure_model_pricing_seeded()?;
-        assert_eq!(db.backfill_missing_usage_costs()?, cases.len() as u64);
-
-        let conn = lock_conn!(db.conn);
-        for (model, _, _, expected) in cases {
-            let costs: [String; 5] = conn.query_row(
-                "SELECT input_cost_usd, output_cost_usd, cache_read_cost_usd,
-                        cache_creation_cost_usd, total_cost_usd
-                 FROM proxy_request_logs WHERE request_id = ?1",
-                [model],
-                |row| {
-                    Ok([
-                        row.get(0)?,
-                        row.get(1)?,
-                        row.get(2)?,
-                        row.get(3)?,
-                        row.get(4)?,
-                    ])
-                },
-            )?;
-            assert_eq!(costs, expected, "{model}");
-        }
-        Ok(())
     }
 
-    #[test]
-    fn test_backfill_distinguishes_legacy_and_total_cache_semantics() -> Result<(), AppError> {
-        let db = Database::memory()?;
-
-        {
-            let conn = lock_conn!(db.conn);
-            // v12 mirror row: input = fresh + read; creation was reported separately.
-            insert_usage_log(
-                &conn,
-                "legacy-cache-semantics",
-                "codex",
-                "p1",
-                "gpt-5.5",
-                "proxy",
-                1000,
-                800_000,
-                0,
-                600_000,
-                200_000,
-                200,
-                "0",
-            )?;
-            // v13 proxy row: input = fresh + read + creation.
-            insert_usage_log(
-                &conn,
-                "total-cache-semantics",
-                "codex",
-                "p1",
-                "gpt-5.5",
-                "proxy",
-                1001,
-                1_000_000,
-                0,
-                600_000,
-                200_000,
-                200,
-                "0",
-            )?;
-            conn.execute(
-                "UPDATE proxy_request_logs
-                 SET input_token_semantics = ?1
-                 WHERE request_id = 'total-cache-semantics'",
-                [INPUT_TOKEN_SEMANTICS_TOTAL],
-            )?;
-        }
-
-        assert_eq!(db.backfill_missing_usage_costs()?, 2);
-
+    fn insert_row(db: &Database, row: RowSpec<'_>) -> Result<(), AppError> {
         let conn = lock_conn!(db.conn);
-        let mut stmt = conn.prepare(
-            "SELECT request_id, input_cost_usd
-             FROM proxy_request_logs
-             WHERE request_id IN ('legacy-cache-semantics', 'total-cache-semantics')
-             ORDER BY request_id",
+        conn.execute(
+            "INSERT INTO proxy_request_logs (
+                request_id, provider_id, app_type, model, request_model, pricing_model,
+                input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens,
+                cache_creation_1h_tokens, input_token_semantics, service_tier, native_cost,
+                total_cost_usd, latency_ms, status_code, created_at, data_source
+            ) VALUES (?1, 'p', ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14,
+                      0, 200, ?16, ?15)",
+            params![
+                row.request_id,
+                row.app_type,
+                row.model,
+                row.request_model.unwrap_or(row.model),
+                row.pricing_model,
+                row.input,
+                row.output,
+                row.cache_read,
+                row.cache_creation,
+                row.cache_creation_1h,
+                row.semantics,
+                row.service_tier,
+                row.native_cost,
+                row.total_cost,
+                row.data_source,
+                row.created_at,
+            ],
         )?;
-        let rows = stmt
-            .query_map([], |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-            })?
-            .collect::<Result<Vec<_>, _>>()?;
-        assert_eq!(
-            rows,
-            vec![
-                ("legacy-cache-semantics".to_string(), "1.000000".to_string()),
-                ("total-cache-semantics".to_string(), "1.000000".to_string()),
-            ]
-        );
-
         Ok(())
     }
 
-    #[test]
-    fn test_backfill_deducts_cache_read_for_grokbuild_total_rows() -> Result<(), AppError> {
-        // 回归：回填侧的 cache-inclusive 判定曾硬编码 codex|gemini 漏掉
-        // grokbuild，导致 TOTAL 行按全量 input 计价、cache_read 双算。
-        // 判定收敛到 sql_helpers::is_cache_inclusive_app 后按 450 fresh 计价。
-        let db = Database::memory()?;
-        {
-            let conn = lock_conn!(db.conn);
-            insert_usage_log(
-                &conn,
-                "grokbuild-total-backfill",
-                "grokbuild",
-                "_grok_session",
-                "grok-4.5",
-                "grok_session",
-                1000,
-                700,
-                100,
-                250,
-                0,
-                200,
-                "0",
-            )?;
-            conn.execute(
-                "UPDATE proxy_request_logs
-                 SET input_token_semantics = ?1
-                 WHERE request_id = 'grokbuild-total-backfill'",
-                [INPUT_TOKEN_SEMANTICS_TOTAL],
-            )?;
-        }
-
-        assert_eq!(db.backfill_missing_usage_costs()?, 1);
-
+    fn stored_total(db: &Database, request_id: &str) -> Result<rust_decimal::Decimal, AppError> {
         let conn = lock_conn!(db.conn);
-        let (input_cost, cache_read_cost, total_cost): (String, String, String) = conn.query_row(
-            "SELECT input_cost_usd, cache_read_cost_usd, total_cost_usd
-             FROM proxy_request_logs WHERE request_id = 'grokbuild-total-backfill'",
-            [],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-        )?;
-        // grok-4.5 定价 2/6/0.30：input = (700-250)×2/1M，cache_read = 250×0.3/1M
-        assert_eq!(input_cost, "0.000900");
-        assert_eq!(cache_read_cost, "0.000075");
-        assert_eq!(total_cost, "0.001575");
-        Ok(())
-    }
-
-    #[test]
-    fn test_backfill_missing_usage_costs_uses_stored_multiplier() -> Result<(), AppError> {
-        let db = Database::memory()?;
-
-        {
-            let conn = lock_conn!(db.conn);
-            insert_usage_log(
-                &conn,
-                "codex-gpt-5-5-multiplier",
-                "codex",
-                "_codex_session",
-                "gpt-5.5",
-                "codex_session",
-                1000,
-                1_000_000,
-                0,
-                0,
-                0,
-                200,
-                "0",
-            )?;
-            conn.execute(
-                "UPDATE proxy_request_logs
-                 SET cost_multiplier = '1.5'
-                 WHERE request_id = 'codex-gpt-5-5-multiplier'",
-                [],
-            )?;
-        }
-
-        assert_eq!(db.backfill_missing_usage_costs()?, 1);
-
-        let conn = lock_conn!(db.conn);
-        let (input_cost, total_cost): (String, String) = conn.query_row(
-            "SELECT input_cost_usd, total_cost_usd
-             FROM proxy_request_logs WHERE request_id = 'codex-gpt-5-5-multiplier'",
-            [],
-            |row| Ok((row.get(0)?, row.get(1)?)),
-        )?;
-        assert_eq!(input_cost, "5.000000");
-        assert_eq!(total_cost, "7.500000");
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_backfill_missing_usage_costs_falls_back_to_request_model() -> Result<(), AppError> {
-        let db = Database::memory()?;
-
-        {
-            let conn = lock_conn!(db.conn);
-            conn.execute(
-                "INSERT INTO proxy_request_logs (
-                    request_id, provider_id, app_type, model, request_model,
-                    input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens,
-                    input_cost_usd, output_cost_usd, cache_read_cost_usd, cache_creation_cost_usd,
-                    total_cost_usd, latency_ms, status_code, created_at, data_source
-                ) VALUES (
-                    'codex-request-model-fallback', '_codex_session', 'codex', 'unknown', 'gpt-5.5',
-                    1000000, 0, 0, 0,
-                    '0', '0', '0', '0',
-                    '0', 100, 200, 1000, 'codex_session'
-                )",
-                [],
-            )?;
-        }
-
-        assert_eq!(db.backfill_missing_usage_costs()?, 1);
-
-        let conn = lock_conn!(db.conn);
-        let total_cost: String = conn.query_row(
-            "SELECT total_cost_usd
-             FROM proxy_request_logs WHERE request_id = 'codex-request-model-fallback'",
-            [],
+        let total: String = conn.query_row(
+            "SELECT total_cost_usd FROM proxy_request_logs WHERE request_id = ?1",
+            [request_id],
             |row| row.get(0),
         )?;
-        assert_eq!(total_cost, "5.000000");
+        Ok(rust_decimal::Decimal::from_str(&total).expect("decimal cost"))
+    }
 
+    fn dec(value: &str) -> rust_decimal::Decimal {
+        rust_decimal::Decimal::from_str(value).unwrap()
+    }
+
+    fn add_pricing(
+        db: &Database,
+        model_id: &str,
+        input: &str,
+        output: &str,
+    ) -> Result<(), AppError> {
+        let conn = lock_conn!(db.conn);
+        conn.execute(
+            "INSERT INTO model_pricing (model_id, display_name, input_cost_per_million, output_cost_per_million)
+             VALUES (?1, ?1, ?2, ?3)",
+            params![model_id, input, output],
+        )?;
         Ok(())
     }
 
     #[test]
-    fn test_backfill_skips_request_model_fallback_for_real_unpriced_model() -> Result<(), AppError>
-    {
+    fn reprice_fills_missing_and_corrects_stale_costs() -> Result<(), AppError> {
         let db = Database::memory()?;
-
-        {
-            let conn = lock_conn!(db.conn);
-            // 路由接管场景：model 是上游回显的真实模型（缺定价），request_model
-            // 是客户端别名（有定价）。回填不得按别名定价，必须保持 0 成本等待补价。
-            conn.execute(
-                "INSERT INTO proxy_request_logs (
-                    request_id, provider_id, app_type, model, request_model,
-                    input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens,
-                    input_cost_usd, output_cost_usd, cache_read_cost_usd, cache_creation_cost_usd,
-                    total_cost_usd, latency_ms, status_code, created_at, data_source
-                ) VALUES (
-                    'takeover-unpriced-model', 'provider-1', 'claude',
-                    'takeover-real-model-unpriced', 'claude-sonnet-4-6',
-                    1000000, 0, 0, 0,
-                    '0', '0', '0', '0',
-                    '0', 100, 200, 1000, 'proxy'
-                )",
-                [],
-            )?;
-        }
-
-        // request_model（claude-sonnet-4-6）有定价，但 model 是真实模型名：不得回退
-        assert_eq!(db.backfill_missing_usage_costs()?, 0);
-
-        {
-            let conn = lock_conn!(db.conn);
-            let total_cost: String = conn.query_row(
-                "SELECT total_cost_usd
-                 FROM proxy_request_logs WHERE request_id = 'takeover-unpriced-model'",
-                [],
-                |row| row.get(0),
-            )?;
-            assert_eq!(total_cost, "0");
-
-            // 补上真实模型定价后，回填必须按真实模型价格修复（0 成本行未被污染固化）
-            conn.execute(
-                "INSERT INTO model_pricing (model_id, display_name, input_cost_per_million, output_cost_per_million)
-                 VALUES ('takeover-real-model-unpriced', 'Takeover Real Model', '0.6', '2.5')",
-                [],
-            )?;
-        }
-
-        assert_eq!(db.backfill_missing_usage_costs()?, 1);
-
-        let conn = lock_conn!(db.conn);
-        let total_cost: String = conn.query_row(
-            "SELECT total_cost_usd
-             FROM proxy_request_logs WHERE request_id = 'takeover-unpriced-model'",
-            [],
-            |row| row.get(0),
+        // claude-opus-4-8：$5 / $25
+        insert_row(
+            &db,
+            RowSpec {
+                request_id: "zero",
+                input: 1000,
+                output: 1000,
+                ..Default::default()
+            },
         )?;
-        assert_eq!(total_cost, "0.600000");
+        insert_row(
+            &db,
+            RowSpec {
+                request_id: "stale",
+                input: 1000,
+                output: 1000,
+                total_cost: "99",
+                ..Default::default()
+            },
+        )?;
 
+        assert_eq!(db.reprice_usage_costs()?, 2);
+        assert_eq!(stored_total(&db, "zero")?, dec("0.03"));
+        assert_eq!(stored_total(&db, "stale")?, dec("0.03"));
+        // 已经是当前价的行不再写回
+        assert_eq!(db.reprice_usage_costs()?, 0);
         Ok(())
     }
 
     #[test]
-    fn test_backfill_uses_persisted_pricing_model() -> Result<(), AppError> {
+    fn reprice_converts_stored_input_semantics_to_fresh_input() -> Result<(), AppError> {
         let db = Database::memory()?;
+        // gpt-5.5：$5 输入 / $0.5 缓存读；未命中缓存的输入都是 1000
+        let codex = |request_id, semantics, input, cache_creation| RowSpec {
+            request_id,
+            app_type: "codex",
+            model: "gpt-5.5",
+            data_source: "codex_session",
+            semantics,
+            input,
+            cache_read: 2000,
+            cache_creation,
+            ..Default::default()
+        };
+        insert_row(&db, codex("legacy", INPUT_TOKEN_SEMANTICS_LEGACY, 3000, 0))?;
+        insert_row(&db, codex("total", INPUT_TOKEN_SEMANTICS_TOTAL, 3000, 0))?;
+        insert_row(&db, codex("fresh", INPUT_TOKEN_SEMANTICS_FRESH, 1000, 0))?;
 
-        {
-            let conn = lock_conn!(db.conn);
-            // request 计价模式 + 接管：写入时锚定出站模型 kimi-k2-novel（当时缺价），
-            // 但上游回显了别名 → model/request_model 都是 claude-sonnet-4-6（有定价）。
-            // 回填必须按落库的 pricing_model 重算，不得换用 model 列的别名价格。
-            conn.execute(
-                "INSERT INTO proxy_request_logs (
-                    request_id, provider_id, app_type, model, request_model, pricing_model,
-                    input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens,
-                    input_cost_usd, output_cost_usd, cache_read_cost_usd, cache_creation_cost_usd,
-                    total_cost_usd, latency_ms, status_code, created_at, data_source
-                ) VALUES (
-                    'persisted-pricing-model', 'provider-1', 'claude',
-                    'claude-sonnet-4-6', 'claude-sonnet-4-6', 'kimi-k2-novel',
-                    1000000, 0, 0, 0,
-                    '0', '0', '0', '0',
-                    '0', 100, 200, 1000, 'proxy'
-                )",
-                [],
-            )?;
+        assert_eq!(db.reprice_usage_costs()?, 3);
+        for request_id in ["legacy", "total", "fresh"] {
+            // 1000 × $5 + 2000 × $0.5
+            assert_eq!(stored_total(&db, request_id)?, dec("0.006"), "{request_id}");
         }
-
-        // pricing_model（kimi-k2-novel）缺价：不得回退到 model 列的别名价格
-        assert_eq!(db.backfill_missing_usage_costs()?, 0);
-
-        {
-            let conn = lock_conn!(db.conn);
-            conn.execute(
-                "INSERT INTO model_pricing (model_id, display_name, input_cost_per_million, output_cost_per_million)
-                 VALUES ('kimi-k2-novel', 'Kimi K2 Novel', '0.6', '2.5')",
-                [],
-            )?;
-        }
-
-        // 按 pricing_model 也能定位到该行（model/request_model 都不是 kimi-k2-novel）
-        assert_eq!(
-            db.backfill_missing_usage_costs_for_model("kimi-k2-novel")?,
-            1
-        );
-
-        let conn = lock_conn!(db.conn);
-        let total_cost: String = conn.query_row(
-            "SELECT total_cost_usd
-             FROM proxy_request_logs WHERE request_id = 'persisted-pricing-model'",
-            [],
-            |row| row.get(0),
-        )?;
-        assert_eq!(total_cost, "0.600000");
-
         Ok(())
     }
 
     #[test]
-    fn test_scoped_backfill_matches_raw_alias_rows() -> Result<(), AppError> {
+    fn reprice_applies_one_hour_cache_priority_and_long_context() -> Result<(), AppError> {
         let db = Database::memory()?;
-
-        {
-            let conn = lock_conn!(db.conn);
-            // 代理日志按上游原文落库：带路由前缀和 :free 后缀的别名形式。
-            // 精准回填的筛选必须归一化后匹配，否则这类行要等全量回填才更新。
-            insert_usage_log(
-                &conn,
-                "openrouter-alias-zero-cost",
-                "claude",
-                "provider-1",
-                "openrouter/moonshot/kimi-k2-novel:free",
-                "proxy",
-                1000,
-                1_000_000,
-                0,
-                0,
-                0,
-                200,
-                "0",
-            )?;
-        }
-
-        // 定价缺失时不应回填
-        assert_eq!(db.backfill_missing_usage_costs()?, 0);
-
-        {
-            let conn = lock_conn!(db.conn);
-            conn.execute(
-                "INSERT INTO model_pricing (model_id, display_name, input_cost_per_million, output_cost_per_million)
-                 VALUES ('kimi-k2-novel', 'Kimi K2 Novel', '0.6', '2.5')",
-                [],
-            )?;
-        }
-
-        // 按归一化 ID 精准回填，应命中以原始别名落库的行
-        assert_eq!(
-            db.backfill_missing_usage_costs_for_model("kimi-k2-novel")?,
-            1
-        );
-
-        let conn = lock_conn!(db.conn);
-        let total_cost: String = conn.query_row(
-            "SELECT total_cost_usd
-             FROM proxy_request_logs WHERE request_id = 'openrouter-alias-zero-cost'",
-            [],
-            |row| row.get(0),
+        // claude-opus-4-8：5 分钟写入 $6.25，1 小时写入 = 2 × $5
+        insert_row(
+            &db,
+            RowSpec {
+                request_id: "one-hour",
+                cache_creation: 1000,
+                cache_creation_1h: 600,
+                ..Default::default()
+            },
         )?;
-        assert_eq!(total_cost, "0.600000");
+        // gpt-5.6-sol：$4 / $20，priority ×2；提示超过 272K 输入侧 ×2、输出 ×1.5
+        let sol = |request_id, input, service_tier| RowSpec {
+            request_id,
+            app_type: "codex",
+            model: "gpt-5.6-sol",
+            data_source: "codex_session",
+            input,
+            output: 1000,
+            service_tier,
+            ..Default::default()
+        };
+        insert_row(&db, sol("priority", 1000, "priority"))?;
+        insert_row(&db, sol("long", 300_000, ""))?;
+        // 2026-08-21 降价前按 $5 / $30
+        insert_row(
+            &db,
+            RowSpec {
+                created_at: 1_787_000_000,
+                ..sol("before-price-cut", 1000, "")
+            },
+        )?;
 
+        assert_eq!(db.reprice_usage_costs()?, 4);
+        assert_eq!(stored_total(&db, "one-hour")?, dec("0.0085"));
+        assert_eq!(stored_total(&db, "priority")?, dec("0.048"));
+        // 300K × $8 + 1K × $30
+        assert_eq!(stored_total(&db, "long")?, dec("2.43"));
+        assert_eq!(stored_total(&db, "before-price-cut")?, dec("0.035"));
+        Ok(())
+    }
+
+    /// Grok Build 一行是一轮的合计，提示长度加起来超过 200K 也按标准价
+    #[test]
+    fn reprice_ignores_long_context_for_grok_turn_totals() -> Result<(), AppError> {
+        let db = Database::memory()?;
+        insert_row(
+            &db,
+            RowSpec {
+                request_id: "grok-turn",
+                app_type: "grokbuild",
+                model: "grok-4.6",
+                data_source: "grok_session",
+                input: 300_000,
+                output: 1000,
+                ..Default::default()
+            },
+        )?;
+        assert_eq!(db.reprice_usage_costs()?, 1);
+        // 300K × $2 + 1K × $6
+        assert_eq!(stored_total(&db, "grok-turn")?, dec("0.606"));
         Ok(())
     }
 
     #[test]
-    fn test_backfill_missing_usage_costs_keeps_claude_fresh_input() -> Result<(), AppError> {
+    fn reprice_leaves_native_and_routing_rows_alone() -> Result<(), AppError> {
         let db = Database::memory()?;
+        insert_row(
+            &db,
+            RowSpec {
+                request_id: "native",
+                input: 1000,
+                native_cost: true,
+                total_cost: "1.23",
+                ..Default::default()
+            },
+        )?;
+        insert_row(
+            &db,
+            RowSpec {
+                request_id: "routing",
+                input: 1000,
+                data_source: "proxy",
+                total_cost: "4.56",
+                ..Default::default()
+            },
+        )?;
+
+        assert_eq!(db.reprice_usage_costs()?, 0);
+        assert_eq!(stored_total(&db, "native")?, dec("1.23"));
+        assert_eq!(stored_total(&db, "routing")?, dec("4.56"));
+        Ok(())
+    }
+
+    #[test]
+    fn reprice_follows_pricing_model_and_placeholder_fallback() -> Result<(), AppError> {
+        let db = Database::memory()?;
+        // 写入时锚定的 pricing_model 缺价：不能改用 model 列（有价的别名）
+        insert_row(
+            &db,
+            RowSpec {
+                request_id: "anchored",
+                model: "claude-sonnet-4-6",
+                pricing_model: Some("kimi-k2-novel"),
+                input: 1_000_000,
+                ..Default::default()
+            },
+        )?;
+        // model 是解析失败的占位符时才退回 request_model
+        insert_row(
+            &db,
+            RowSpec {
+                request_id: "placeholder",
+                model: "unknown",
+                request_model: Some("claude-opus-4-8"),
+                input: 1000,
+                ..Default::default()
+            },
+        )?;
+
+        assert_eq!(db.reprice_usage_costs()?, 1);
+        assert_eq!(stored_total(&db, "anchored")?, dec("0"));
+        assert_eq!(stored_total(&db, "placeholder")?, dec("0.005"));
+
+        add_pricing(&db, "kimi-k2-novel", "0.6", "2.5")?;
+        assert_eq!(db.reprice_usage_costs_for_model("kimi-k2-novel")?, 1);
+        assert_eq!(stored_total(&db, "anchored")?, dec("0.6"));
+        Ok(())
+    }
+
+    #[test]
+    fn scoped_reprice_matches_raw_alias_rows() -> Result<(), AppError> {
+        let db = Database::memory()?;
+        insert_row(
+            &db,
+            RowSpec {
+                request_id: "alias",
+                model: "openrouter/moonshot/kimi-k2-novel:free",
+                input: 1_000_000,
+                ..Default::default()
+            },
+        )?;
+        assert_eq!(db.reprice_usage_costs()?, 0);
+
+        add_pricing(&db, "kimi-k2-novel", "0.6", "2.5")?;
+        assert_eq!(db.reprice_usage_costs_for_model("kimi-k2-novel")?, 1);
+        assert_eq!(stored_total(&db, "alias")?, dec("0.6"));
+        Ok(())
+    }
+
+    #[test]
+    fn reprice_zeroes_costs_when_pricing_is_removed() -> Result<(), AppError> {
+        let db = Database::memory()?;
+        add_pricing(&db, "kimi-k2-novel", "0.6", "2.5")?;
+        insert_row(
+            &db,
+            RowSpec {
+                request_id: "removed",
+                model: "kimi-k2-novel",
+                input: 1_000_000,
+                ..Default::default()
+            },
+        )?;
+        assert_eq!(db.reprice_usage_costs()?, 1);
+        assert_eq!(stored_total(&db, "removed")?, dec("0.6"));
 
         {
             let conn = lock_conn!(db.conn);
-            insert_usage_log(
-                &conn,
-                "claude-cache-fresh-input",
-                "claude",
-                "_session",
-                "claude-haiku-4-5",
-                "session_log",
-                1000,
-                100,
-                0,
-                200,
-                0,
-                200,
-                "0",
+            conn.execute(
+                "DELETE FROM model_pricing WHERE model_id = 'kimi-k2-novel'",
+                [],
             )?;
         }
-
-        assert_eq!(db.backfill_missing_usage_costs()?, 1);
-
-        let conn = lock_conn!(db.conn);
-        let (input_cost, cache_read_cost, total_cost): (String, String, String) = conn.query_row(
-            "SELECT input_cost_usd, cache_read_cost_usd, total_cost_usd
-             FROM proxy_request_logs WHERE request_id = 'claude-cache-fresh-input'",
-            [],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-        )?;
-        assert_eq!(input_cost, "0.000100");
-        assert_eq!(cache_read_cost, "0.000020");
-        assert_eq!(total_cost, "0.000120");
-
+        assert_eq!(db.reprice_usage_costs()?, 1);
+        assert_eq!(stored_total(&db, "removed")?, dec("0"));
         Ok(())
     }
 
@@ -4131,367 +3269,6 @@ mod tests {
         assert_eq!(summary.total_requests, 30);
         assert_eq!(summary.total_input_tokens, 3000);
         assert_eq!(summary.total_output_tokens, 1500);
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_effective_usage_dedup_prefers_proxy_for_session_sources() -> Result<(), AppError> {
-        let db = Database::memory()?;
-
-        {
-            let conn = lock_conn!(db.conn);
-            insert_usage_log(
-                &conn,
-                "codex-proxy",
-                "codex",
-                "openai",
-                "GPT-5.4",
-                "proxy",
-                10_000,
-                100,
-                20,
-                10,
-                7,
-                200,
-                "0.10",
-            )?;
-            insert_usage_log(
-                &conn,
-                "codex-session-dup",
-                "codex",
-                "_codex_session",
-                "gpt-5.4",
-                "codex_session",
-                10_060,
-                100,
-                20,
-                10,
-                0,
-                200,
-                "0.10",
-            )?;
-            insert_usage_log(
-                &conn,
-                "claude-proxy",
-                "claude",
-                "openai-compatible",
-                "claude-sonnet-4-5",
-                "proxy",
-                25_000,
-                300,
-                60,
-                20,
-                5,
-                200,
-                "0.30",
-            )?;
-            insert_usage_log(
-                &conn,
-                "claude-session-dup",
-                "claude",
-                "_session",
-                "claude-sonnet-4-5",
-                "session_log",
-                25_060,
-                300,
-                60,
-                20,
-                5,
-                200,
-                "0.30",
-            )?;
-            insert_usage_log(
-                &conn,
-                "gemini-proxy",
-                "gemini",
-                "google",
-                "gemini-2.5-pro",
-                "proxy",
-                20_000,
-                200,
-                40,
-                30,
-                0,
-                200,
-                "0.20",
-            )?;
-            insert_usage_log(
-                &conn,
-                "gemini-session-dup",
-                "gemini",
-                "_gemini_session",
-                "gemini-2.5-pro",
-                "gemini_session",
-                20_060,
-                200,
-                40,
-                30,
-                0,
-                200,
-                "0.20",
-            )?;
-            insert_usage_log(
-                &conn,
-                "codex-session-only",
-                "codex",
-                "_codex_session",
-                "gpt-5.4",
-                "codex_session",
-                30_000,
-                50,
-                5,
-                0,
-                0,
-                200,
-                "0.02",
-            )?;
-        }
-
-        let summary = db.get_usage_summary(None, None, None, None, None)?;
-        assert_eq!(summary.total_requests, 4);
-        // codex-proxy contributes 100-10=90; gemini-proxy contributes 200-30=170
-        // (both cache-inclusive providers). claude-proxy=300, codex-session-only=50.
-        // 90 + 170 + 300 + 50 = 610.
-        assert_eq!(summary.total_input_tokens, 610);
-        assert_eq!(summary.total_output_tokens, 125);
-        assert_eq!(summary.total_cache_read_tokens, 60);
-        assert_eq!(summary.total_cache_creation_tokens, 12);
-        // real_total = fresh_input(610) + output(125) + cache_create(12) + cache_read(60) = 807
-        assert_eq!(summary.real_total_tokens, 807);
-        // hit_rate = 60 / (610 + 12 + 60) = 60 / 682
-        let expected_hit_rate = 60.0_f64 / 682.0_f64;
-        assert!((summary.cache_hit_rate - expected_hit_rate).abs() < 1e-9);
-
-        let trends = db.get_daily_trends(Some(0), Some(40_000), None, None, None)?;
-        assert_eq!(trends.iter().map(|stat| stat.request_count).sum::<u64>(), 4);
-
-        let provider_stats = db.get_provider_stats(None, None, None, None, None)?;
-        assert_eq!(
-            provider_stats
-                .iter()
-                .map(|stat| stat.request_count)
-                .sum::<u64>(),
-            4
-        );
-        assert!(provider_stats
-            .iter()
-            .any(|stat| stat.provider_id == "_codex_session" && stat.request_count == 1));
-        assert!(!provider_stats
-            .iter()
-            .any(|stat| stat.provider_id == "_gemini_session"));
-        assert!(!provider_stats
-            .iter()
-            .any(|stat| stat.provider_id == "_session"));
-
-        let model_stats = db.get_model_stats(None, None, None, None, None)?;
-        assert_eq!(
-            model_stats
-                .iter()
-                .map(|stat| stat.request_count)
-                .sum::<u64>(),
-            4
-        );
-
-        let logs = db.get_request_logs(&LogFilters::default(), 0, 10)?;
-        let request_ids: Vec<&str> = logs
-            .data
-            .iter()
-            .map(|log| log.request_id.as_str())
-            .collect();
-        assert_eq!(logs.total, 4);
-        assert!(request_ids.contains(&"codex-proxy"));
-        assert!(request_ids.contains(&"claude-proxy"));
-        assert!(request_ids.contains(&"gemini-proxy"));
-        assert!(request_ids.contains(&"codex-session-only"));
-        assert!(!request_ids.contains(&"codex-session-dup"));
-        assert!(!request_ids.contains(&"claude-session-dup"));
-        assert!(!request_ids.contains(&"gemini-session-dup"));
-
-        let breakdown = crate::services::session_usage::get_data_source_breakdown(&db)?;
-        let proxy_count = breakdown
-            .iter()
-            .find(|item| item.data_source == "proxy")
-            .map(|item| item.request_count);
-        let codex_session_count = breakdown
-            .iter()
-            .find(|item| item.data_source == "codex_session")
-            .map(|item| item.request_count);
-        let gemini_session_count = breakdown
-            .iter()
-            .find(|item| item.data_source == "gemini_session")
-            .map(|item| item.request_count);
-        let session_log_count = breakdown
-            .iter()
-            .find(|item| item.data_source == "session_log")
-            .map(|item| item.request_count);
-        assert_eq!(proxy_count, Some(3));
-        assert_eq!(codex_session_count, Some(1));
-        assert_eq!(gemini_session_count, None);
-        assert_eq!(session_log_count, None);
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_effective_usage_dedup_keeps_non_matching_session_rows() -> Result<(), AppError> {
-        let db = Database::memory()?;
-
-        {
-            let conn = lock_conn!(db.conn);
-            insert_usage_log(
-                &conn,
-                "proxy-base",
-                "codex",
-                "openai",
-                "gpt-5.4",
-                "proxy",
-                10_000,
-                100,
-                20,
-                10,
-                0,
-                200,
-                "0.10",
-            )?;
-            insert_usage_log(
-                &conn,
-                "session-outside-window",
-                "codex",
-                "_codex_session",
-                "gpt-5.4",
-                "codex_session",
-                10_601,
-                100,
-                20,
-                10,
-                0,
-                200,
-                "0.10",
-            )?;
-            insert_usage_log(
-                &conn,
-                "session-token-mismatch",
-                "codex",
-                "_codex_session",
-                "gpt-5.4",
-                "codex_session",
-                10_060,
-                101,
-                20,
-                10,
-                0,
-                200,
-                "0.10",
-            )?;
-            insert_usage_log(
-                &conn,
-                "session-app-mismatch",
-                "gemini",
-                "_gemini_session",
-                "gpt-5.4",
-                "gemini_session",
-                10_060,
-                100,
-                20,
-                10,
-                0,
-                200,
-                "0.10",
-            )?;
-            insert_usage_log(
-                &conn,
-                "session-model-mismatch",
-                "codex",
-                "_codex_session",
-                "different-model",
-                "codex_session",
-                10_060,
-                100,
-                20,
-                10,
-                0,
-                200,
-                "0.10",
-            )?;
-            insert_usage_log(
-                &conn,
-                "proxy-error",
-                "codex",
-                "openai",
-                "gpt-5.4",
-                "proxy",
-                20_000,
-                300,
-                60,
-                0,
-                0,
-                500,
-                "0.00",
-            )?;
-            insert_usage_log(
-                &conn,
-                "session-matches-error-proxy",
-                "codex",
-                "_codex_session",
-                "gpt-5.4",
-                "codex_session",
-                20_060,
-                300,
-                60,
-                0,
-                0,
-                200,
-                "0.30",
-            )?;
-            insert_usage_log(
-                &conn,
-                "claude-proxy-cache-creation",
-                "claude",
-                "anthropic",
-                "claude-sonnet-4-5",
-                "proxy",
-                30_000,
-                100,
-                20,
-                10,
-                5,
-                200,
-                "0.10",
-            )?;
-            insert_usage_log(
-                &conn,
-                "claude-session-cache-creation-mismatch",
-                "claude",
-                "_session",
-                "claude-sonnet-4-5",
-                "session_log",
-                30_060,
-                100,
-                20,
-                10,
-                0,
-                200,
-                "0.10",
-            )?;
-        }
-
-        let summary = db.get_usage_summary(None, None, None, None, None)?;
-        assert_eq!(summary.total_requests, 9);
-
-        let logs = db.get_request_logs(&LogFilters::default(), 0, 10)?;
-        let request_ids: Vec<&str> = logs
-            .data
-            .iter()
-            .map(|log| log.request_id.as_str())
-            .collect();
-        assert_eq!(logs.total, 9);
-        assert!(request_ids.contains(&"session-outside-window"));
-        assert!(request_ids.contains(&"session-token-mismatch"));
-        assert!(request_ids.contains(&"session-app-mismatch"));
-        assert!(request_ids.contains(&"session-model-mismatch"));
-        assert!(request_ids.contains(&"session-matches-error-proxy"));
-        assert!(request_ids.contains(&"claude-session-cache-creation-mismatch"));
 
         Ok(())
     }
@@ -5143,9 +3920,9 @@ mod tests {
             row.is_some(),
             "带日期的火山模型应通过 6 位日期剥离命中裸名定价行"
         );
-        let (input, output, ..) = row.unwrap();
-        assert_eq!(input, "0.84");
-        assert_eq!(output, "4.2");
+        let pricing = row.unwrap();
+        assert_eq!(pricing.prices.input.to_string(), "0.84");
+        assert_eq!(pricing.prices.output.to_string(), "4.2");
 
         Ok(())
     }

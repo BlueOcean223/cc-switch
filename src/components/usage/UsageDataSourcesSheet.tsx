@@ -25,9 +25,9 @@ interface UsageDataSourcesSheetProps {
   syncedLabel?: string;
   syncing: boolean;
   onSyncNow: () => void;
-  rebuildingCodex: boolean;
+  rebuildingUsage: boolean;
   /** 只负责打开确认框；确认框里写清后果 */
-  onRebuildCodex: () => void;
+  onRebuildUsage: () => void;
 }
 
 function SourceCard({
@@ -57,7 +57,7 @@ function SourceCard({
   );
 }
 
-/** 「数据来源」抽屉（v7 S6）：会话日志扫描、Codex 用量维护。 */
+/** 「数据来源」抽屉（v7 S6）：会话日志扫描、用量重建。 */
 export function UsageDataSourcesSheet({
   open,
   onOpenChange,
@@ -66,8 +66,8 @@ export function UsageDataSourcesSheet({
   syncedLabel,
   syncing,
   onSyncNow,
-  rebuildingCodex,
-  onRebuildCodex,
+  rebuildingUsage,
+  onRebuildUsage,
 }: UsageDataSourcesSheetProps) {
   const { t, i18n } = useTranslation();
   const coveredApps = joinNames(
@@ -128,27 +128,27 @@ export function UsageDataSourcesSheet({
           </SourceCard>
 
           <SourceCard
-            title={t("usage.rebuildCodex.title")}
+            title={t("usage.rebuildUsage.title")}
             help={{
               title: t("usage.sources.codexHelpTitle"),
-              body: t("usage.rebuildCodex.description"),
+              body: t("usage.rebuildUsage.description"),
             }}
           >
             <p className="m-0 text-caption text-fg-2">
-              {t("usage.rebuildCodex.warning")}
+              {t("usage.rebuildUsage.warning")}
             </p>
             <div className="flex justify-end">
               <Button
                 type="button"
                 variant="neutral"
                 size="compact"
-                disabled={rebuildingCodex}
-                onClick={onRebuildCodex}
+                disabled={rebuildingUsage}
+                onClick={onRebuildUsage}
               >
-                {rebuildingCodex && (
+                {rebuildingUsage && (
                   <Loader2 className="h-3.5 w-3.5 animate-spin" />
                 )}
-                {t("usage.rebuildCodex.actionEllipsis")}
+                {t("usage.rebuildUsage.actionEllipsis")}
               </Button>
             </div>
           </SourceCard>

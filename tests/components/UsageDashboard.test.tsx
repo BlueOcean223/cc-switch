@@ -18,7 +18,7 @@ const usageApiMock = vi.hoisted(() => ({
   getUsageSummary: vi.fn(),
   syncSessionUsage: vi.fn(),
   getSessionUsageLastSync: vi.fn(),
-  rebuildCodexUsage: vi.fn(),
+  rebuildSessionUsage: vi.fn(),
 }));
 
 vi.mock("react-i18next", () => ({
@@ -177,7 +177,6 @@ describe("UsageDashboard", () => {
       imported: 2,
       skipped: 0,
       filesScanned: 3,
-      suspectedDuplicates: 0,
       deferredFiles: 0,
       errors: [],
     });

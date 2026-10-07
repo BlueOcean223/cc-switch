@@ -33,7 +33,6 @@ export interface SessionSyncResult {
   imported: number;
   skipped: number;
   filesScanned: number;
-  suspectedDuplicates: number;
   deferredFiles: number;
   errors: string[];
 }
@@ -209,27 +208,18 @@ export const KNOWN_APP_TYPES: ReadonlyArray<AppType> = [
 ];
 
 /**
- * App types whose API uses an OpenAI-style protocol. Two consequences:
- *
- * 1. `inputTokens` already includes the cached portion (must subtract
- *    `cacheReadTokens` to get fresh-input semantics — see
- *    [getFreshInputTokens]).
- * 2. The protocol does not report cache _creation_ separately, only cache
- *    _reads_. So `cacheCreationTokens` is always 0 for these app types and
- *    the UI should label it as N/A rather than 0.
- *
- * Mirror of the Rust `CACHE_INCLUSIVE_APP_TYPES` whitelist.
+ * App types whose session logs never report cache writes: the cache-write
+ * column shows N/A for them instead of 0.
  */
-export const CACHE_INCLUSIVE_APP_TYPES: ReadonlySet<string> = new Set([
-  "codex",
+const NO_CACHE_WRITE_APP_TYPES: ReadonlySet<string> = new Set([
   "gemini",
   "grokbuild",
 ]);
 
-// Pi sessions can mix Anthropic and OpenAI APIs, but the dashboard aggregates
-// only by app type. Treat cache-write coverage as partial without changing
-// Pi's fresh-input token semantics.
+// Some sessions report cache writes and some do not: Pi and mcode mix
+// Anthropic and OpenAI APIs, and Codex only reports them for GPT-5.6 and later.
 const PARTIAL_CACHE_WRITE_APP_TYPES: ReadonlySet<string> = new Set([
+  "codex",
   "pi",
   "mcode",
 ]);
@@ -241,35 +231,13 @@ export function getCacheWriteAvailability(
 ): CacheWriteAvailability {
   if (appTypes.length === 0) return "ok";
   const unavailable = appTypes.filter((appType) =>
-    CACHE_INCLUSIVE_APP_TYPES.has(appType),
+    NO_CACHE_WRITE_APP_TYPES.has(appType),
   ).length;
   if (unavailable === appTypes.length) return "na";
   const partial = appTypes.some((appType) =>
     PARTIAL_CACHE_WRITE_APP_TYPES.has(appType),
   );
   return unavailable === 0 && !partial ? "ok" : "partial";
-}
-
-/** Subset of request-log fields needed to derive cache-normalized input. */
-export interface CacheNormalizableLog {
-  appType: string;
-  inputTokens: number;
-  cacheReadTokens: number;
-}
-
-/**
- * For a single request log, return the input token count with cache reads
- * removed. Anthropic-style providers already report `inputTokens` without
- * cache, so they pass through unchanged.
- */
-export function getFreshInputTokens(log: CacheNormalizableLog): number {
-  if (
-    CACHE_INCLUSIVE_APP_TYPES.has(log.appType) &&
-    log.inputTokens >= log.cacheReadTokens
-  ) {
-    return log.inputTokens - log.cacheReadTokens;
-  }
-  return log.inputTokens;
 }
 
 export const NON_NEGATIVE_DECIMAL_REGEX = /^\d+(?:\.\d+)?$/;

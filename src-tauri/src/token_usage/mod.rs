@@ -2,3 +2,4 @@
 
 pub mod calculator;
 pub mod parser;
+pub mod price_history;

@@ -11,11 +11,7 @@ import {
   SheetTitle,
 } from "@/components/ui/sheet";
 import { useRequestDetail } from "@/lib/query/usage";
-import {
-  getFreshInputTokens,
-  isUnpricedUsage,
-  type RequestLog,
-} from "@/types/usage";
+import { isUnpricedUsage, type RequestLog } from "@/types/usage";
 import { cn } from "@/lib/utils";
 import { extractErrorMessage } from "@/utils/errorUtils";
 import {
@@ -90,8 +86,7 @@ const usd = (value: string) => {
 function useDetailSections(request: RequestLog) {
   const { t, i18n } = useTranslation();
   const locale = getLocaleFromLanguage(getResolvedLang(i18n));
-  const freshInput = getFreshInputTokens(request);
-  const isCacheInclusive = request.inputTokens !== freshInput;
+  const freshInput = request.inputTokens;
   const unpriced = isUnpricedUsage(request);
   const multiplier = parseFiniteNumber(request.costMultiplier);
   const isProxy = !request.dataSource || request.dataSource === "proxy";
@@ -161,9 +156,7 @@ function useDetailSections(request: RequestLog) {
     {
       key: "fresh",
       label: t("usage.freshInput"),
-      value: isCacheInclusive
-        ? `${fmtInt(freshInput, locale)} (${t("usage.rawInputLabel")}: ${fmtInt(request.inputTokens, locale)})`
-        : fmtInt(freshInput, locale),
+      value: fmtInt(freshInput, locale),
     },
     {
       key: "output",

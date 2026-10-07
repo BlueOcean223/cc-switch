@@ -1223,7 +1223,7 @@ pub fn run() {
 
                     async fn run_session_sync(db: std::sync::Arc<crate::database::Database>, backfill: bool) {
                         // 手动扫描模式下跳过定时扫描；backfill 轮（启动首轮）仍进入，
-                        // 费用回填只修补数据库既有行，不读会话文件
+                        // 按当前定价重算既有行的成本，不读会话文件
                         if !backfill && !crate::settings::get_settings().session_auto_sync_enabled {
                             return;
                         }
@@ -1231,12 +1231,28 @@ pub fn run() {
                             .lock()
                             .await;
                         let task = tauri::async_runtime::spawn_blocking(move || {
+                            let auto_sync = crate::settings::get_settings().session_auto_sync_enabled;
                             if backfill {
-                                if let Err(error) = db.backfill_missing_usage_costs() {
-                                    log::warn!("Usage cost startup backfill failed: {error}");
+                                // 导入或计价规则变了：启动首轮改为按会话日志整体重建
+                                match crate::services::usage_rebuild::is_rebuild_pending(&db) {
+                                    Ok(true) if auto_sync => {
+                                        return crate::services::usage_rebuild::rebuild_session_usage(&db)
+                                            .unwrap_or_else(|error| {
+                                                log::warn!("Usage rebuild failed: {error}");
+                                                crate::services::session_usage::SessionSyncResult {
+                                                    errors: vec![error.to_string()],
+                                                    ..Default::default()
+                                                }
+                                            });
+                                    }
+                                    Ok(_) => {}
+                                    Err(error) => log::warn!("Reading usage rebuild flag failed: {error}"),
+                                }
+                                if let Err(error) = db.reprice_usage_costs() {
+                                    log::warn!("Usage cost startup reprice failed: {error}");
                                 }
                             }
-                            if !crate::settings::get_settings().session_auto_sync_enabled {
+                            if !auto_sync {
                                 return crate::services::session_usage::SessionSyncResult::default();
                             }
                             crate::services::session_usage::sync_all_unlocked(&db)
@@ -1528,7 +1544,7 @@ pub fn run() {
             commands::record_models_dev_sync_result,
             // Session usage sync
             commands::sync_session_usage,
-            commands::rebuild_codex_usage,
+            commands::rebuild_session_usage,
             commands::get_session_usage_last_sync,
             commands::get_usage_data_sources,
             // Stream health check

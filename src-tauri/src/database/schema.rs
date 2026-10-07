@@ -140,7 +140,10 @@ impl Database {
             duration_ms INTEGER, status_code INTEGER NOT NULL, error_message TEXT, session_id TEXT,
             provider_type TEXT, is_streaming INTEGER NOT NULL DEFAULT 0,
             cost_multiplier TEXT NOT NULL DEFAULT '1.0', created_at INTEGER NOT NULL,
-            data_source TEXT NOT NULL DEFAULT 'proxy'
+            data_source TEXT NOT NULL DEFAULT 'proxy',
+            cache_creation_1h_tokens INTEGER NOT NULL DEFAULT 0,
+            service_tier TEXT NOT NULL DEFAULT '',
+            native_cost INTEGER NOT NULL DEFAULT 0
         )", []).map_err(|e| AppError::Database(e.to_string()))?;
 
         conn.execute("CREATE INDEX IF NOT EXISTS idx_request_logs_provider ON proxy_request_logs(provider_id, app_type)", [])
@@ -170,7 +173,11 @@ impl Database {
             model_id TEXT PRIMARY KEY, display_name TEXT NOT NULL,
             input_cost_per_million TEXT NOT NULL, output_cost_per_million TEXT NOT NULL,
             cache_read_cost_per_million TEXT NOT NULL DEFAULT '0',
-            cache_creation_cost_per_million TEXT NOT NULL DEFAULT '0'
+            cache_creation_cost_per_million TEXT NOT NULL DEFAULT '0',
+            long_context_threshold INTEGER,
+            long_context_input_multiplier TEXT NOT NULL DEFAULT '1',
+            long_context_output_multiplier TEXT NOT NULL DEFAULT '1',
+            priority_multiplier TEXT NOT NULL DEFAULT '1'
         )",
             [],
         )
@@ -1094,6 +1101,44 @@ impl Database {
                     })?;
             }
         }
+        Self::add_usage_pricing_columns(conn)?;
+        // 导入逻辑和计价都改了（Claude 1 小时缓存与最终输出、Codex 缓存写入与
+        // priority 档、超长上下文档位），已有用量要按会话日志重建一次
+        if Self::table_exists(conn, "settings")? {
+            conn.execute(
+                "INSERT OR REPLACE INTO settings (key, value) VALUES (?1, 'true')",
+                [crate::services::usage_rebuild::USAGE_REBUILD_PENDING_KEY],
+            )
+            .map_err(|e| AppError::Database(format!("标记用量重建失败: {e}")))?;
+        }
+        Ok(())
+    }
+
+    /// 用量明细的 1 小时缓存写入 / 服务档位 / 自带成本列，和定价表的超长上下文、
+    /// priority 档列。
+    fn add_usage_pricing_columns(conn: &Connection) -> Result<(), AppError> {
+        if Self::table_exists(conn, "proxy_request_logs")? {
+            for (column, definition) in [
+                ("cache_creation_1h_tokens", "INTEGER NOT NULL DEFAULT 0"),
+                ("service_tier", "TEXT NOT NULL DEFAULT ''"),
+                ("native_cost", "INTEGER NOT NULL DEFAULT 0"),
+            ] {
+                Self::add_column_if_missing(conn, "proxy_request_logs", column, definition)?;
+            }
+        }
+        if Self::table_exists(conn, "model_pricing")? {
+            for (column, definition) in [
+                ("long_context_threshold", "INTEGER"),
+                ("long_context_input_multiplier", "TEXT NOT NULL DEFAULT '1'"),
+                (
+                    "long_context_output_multiplier",
+                    "TEXT NOT NULL DEFAULT '1'",
+                ),
+                ("priority_multiplier", "TEXT NOT NULL DEFAULT '1'"),
+            ] {
+                Self::add_column_if_missing(conn, "model_pricing", column, definition)?;
+            }
+        }
         Ok(())
     }
 
@@ -1118,12 +1163,10 @@ impl Database {
         Ok(())
     }
 
-    /// v15 -> v16: remove Codex session rows and cursors so startup sync can
-    /// rebuild them with fork-history alignment. Must stay connection-level:
-    /// schema migration already owns the Database connection mutex.
-    fn migrate_v15_to_v16(conn: &Connection) -> Result<(), AppError> {
-        let codex_dir = crate::codex_config::get_codex_config_dir();
-        crate::services::session_usage_codex::reset_codex_usage_on_conn(conn, &codex_dir)
+    /// v15 -> v16 曾清掉 Codex 会话用量让启动同步重导；v20 -> v21 标记的整体
+    /// 重建已经覆盖它，这里不再做事。
+    fn migrate_v15_to_v16(_conn: &Connection) -> Result<(), AppError> {
+        Ok(())
     }
 
     /// v16 -> v17: preserve session request identities after detail rollup.
@@ -1217,6 +1260,15 @@ impl Database {
                 "25",
                 "0.50",
                 "6.25",
+            ),
+            // Claude Sonnet 5.5（与 Sonnet 5 同价）
+            (
+                "claude-sonnet-5-5",
+                "Claude Sonnet 5.5",
+                "2",
+                "10",
+                "0.20",
+                "2.50",
             ),
             // Claude Sonnet 5（官方定价页 2026-09 确认：$2/$10 介绍价转为正式价，
             // 原定 09-01 涨至 $3/$15 取消）
@@ -1484,10 +1536,10 @@ impl Database {
             ("gpt-5.1-codex", "GPT-5.1 Codex", "1.25", "10", "0.125", "0"),
             (
                 "gpt-5.1-codex-mini",
-                "GPT-5.1 Codex",
-                "1.25",
-                "10",
-                "0.125",
+                "GPT-5.1 Codex Mini",
+                "0.25",
+                "2",
+                "0.025",
                 "0",
             ),
             (
@@ -2339,12 +2391,20 @@ impl Database {
             ),
         ];
 
+        // 内置价格以代码为准，每次启动都覆盖：价格修正不用再写「仍等于旧值才改」的
+        // 迁移。用户改过或删掉的模型记在 model-pricing.json，启动时在这之后重新应用。
         let mut stmt = conn
             .prepare(
-                "INSERT OR IGNORE INTO model_pricing (
+                "INSERT INTO model_pricing (
                     model_id, display_name, input_cost_per_million, output_cost_per_million,
                     cache_read_cost_per_million, cache_creation_cost_per_million
-                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+                ON CONFLICT(model_id) DO UPDATE SET
+                    display_name = excluded.display_name,
+                    input_cost_per_million = excluded.input_cost_per_million,
+                    output_cost_per_million = excluded.output_cost_per_million,
+                    cache_read_cost_per_million = excluded.cache_read_cost_per_million,
+                    cache_creation_cost_per_million = excluded.cache_creation_cost_per_million",
             )
             .map_err(|e| AppError::Database(format!("准备模型定价语句失败: {e}")))?;
         for (model_id, display_name, input, output, cache_read, cache_creation) in pricing_data {
@@ -2359,742 +2419,104 @@ impl Database {
             .map_err(|e| AppError::Database(format!("插入模型定价失败: {e}")))?;
         }
 
-        log::info!("已插入 {} 条默认模型定价数据", pricing_data.len());
-        Ok(())
+        log::info!("已写入 {} 条内置模型定价", pricing_data.len());
+        Self::apply_model_pricing_tiers(conn)
     }
 
-    fn repair_current_model_pricing(conn: &Connection) -> Result<(), AppError> {
-        let pricing_fixes = [
-            // 2026-09-02 官方定价页确认 Sonnet 5 $2/$10 介绍价转为正式价、原定 09-01 涨至
-            // $3/$15 取消：早先按 list 价 seed 的行改回正式价（用户手改过的行不匹配旧值，不动）
-            (
-                "claude-sonnet-5",
-                "Claude Sonnet 5",
-                "2",
-                "10",
-                "0.20",
-                "2.50",
-                "3",
-                "15",
-                "0.30",
-                "3.75",
-            ),
-            // 2026-08-13 models.dev 审计核价：grok-4.5 的 cached input 官方挂牌为 0.30
-            // （docs.x.ai 现行价表），与 grok-4.5-build 的实测计费一致；早先按 0.50
-            // 录入的行在此校正。注意 0.50 是 grok-4.6 的 cached 价，勿两者互串
-            (
-                "grok-4.5", "Grok 4.5", "2", "6", "0.30", "0", "2", "6", "0.50", "0",
-            ),
-            // 2026-07-30 OpenAI GPT-5.6 降价：luna -80%、terra -20%（sol 不变）。
-            // 每档两条守卫：主守卫匹配 ≥v3.19（已跑过 07-12 cache_write 修正），
-            // 0 态守卫匹配 <v3.19 直升用户（cache_write 仍为旧 seed 的 0）
-            (
-                "gpt-5.6-luna",
-                "GPT-5.6 Luna",
-                "0.20",
-                "1.20",
-                "0.02",
-                "0.25",
-                "1",
-                "6",
-                "0.10",
-                "1.25",
-            ),
-            (
-                "gpt-5.6-luna",
-                "GPT-5.6 Luna",
-                "0.20",
-                "1.20",
-                "0.02",
-                "0.25",
-                "1",
-                "6",
-                "0.10",
-                "0",
-            ),
-            (
-                "gpt-5.6-terra",
-                "GPT-5.6 Terra",
-                "2",
-                "12",
-                "0.20",
-                "2.50",
-                "2.50",
-                "15",
-                "0.25",
-                "3.125",
-            ),
-            (
-                "gpt-5.6-terra",
-                "GPT-5.6 Terra",
-                "2",
-                "12",
-                "0.20",
-                "2.50",
-                "2.50",
-                "15",
-                "0.25",
-                "0",
-            ),
-            // 2026-07-31 models.dev 审计核价：DeepSeek V4 发布后 chat/reasoner 降为 V4 Flash
-            // 别名价；MiniMax M3 官方 standard 档 0.3/1.2（旧值疑似录了加速档）
-            (
-                "deepseek-chat",
-                "DeepSeek Chat",
-                "0.14",
-                "0.28",
-                "0.0028",
-                "0",
-                "0.27",
-                "1.10",
-                "0.07",
-                "0",
-            ),
-            (
-                "deepseek-reasoner",
-                "DeepSeek Reasoner",
-                "0.14",
-                "0.28",
-                "0.0028",
-                "0",
-                "0.55",
-                "2.19",
-                "0.14",
-                "0",
-            ),
-            (
-                "minimax-m3",
-                "MiniMax M3",
-                "0.30",
-                "1.20",
-                "0.06",
-                "0",
-                "0.60",
-                "2.40",
-                "0.12",
-                "0",
-            ),
-            // 2026-07-12 GPT-5.6 家族 cache write=1.25× 输入价（OpenAI 5.6 起的新规），
-            // 修正早期 seed 的 0 值；只匹配未被用户改过的行
-            (
-                "gpt-5.6-sol",
-                "GPT-5.6 Sol",
-                "5",
-                "30",
-                "0.50",
-                "6.25",
-                "5",
-                "30",
-                "0.50",
-                "0",
-            ),
-            (
-                "gpt-5.6-terra",
-                "GPT-5.6 Terra",
-                "2.50",
-                "15",
-                "0.25",
-                "3.125",
-                "2.50",
-                "15",
-                "0.25",
-                "0",
-            ),
-            (
-                "gpt-5.6-luna",
-                "GPT-5.6 Luna",
-                "1",
-                "6",
-                "0.10",
-                "1.25",
-                "1",
-                "6",
-                "0.10",
-                "0",
-            ),
-            // 2026-06-10 全量核价（厂商官方 list 价；CNY 按 ~7.14 折算）
-            // GLM 4.6/4.7：旧值是中转/OpenRouter 折扣价，统一到 Z.ai 官方（与 glm-5/5.1 一致）
-            (
-                "glm-4.7", "GLM-4.7", "0.6", "2.2", "0.11", "0", "0.39", "1.75", "0.04", "0",
-            ),
-            (
-                "glm-4.6", "GLM-4.6", "0.6", "2.2", "0.11", "0", "0.28", "1.11", "0.03", "0",
-            ),
-            // Grok 4.20：xAI 已降价 2/6 → 1.25/2.50
-            (
-                "grok-4.20-0309-reasoning",
-                "Grok 4.20 Reasoning",
-                "1.25",
-                "2.50",
-                "0.20",
-                "0",
-                "2",
-                "6",
-                "0.20",
-                "0",
-            ),
-            (
-                "grok-4.20-0309-non-reasoning",
-                "Grok 4.20",
-                "1.25",
-                "2.50",
-                "0.20",
-                "0",
-                "2",
-                "6",
-                "0.20",
-                "0",
-            ),
-            // Kimi K2.5 官方 output 3.00
-            (
-                "kimi-k2.5",
-                "Kimi K2.5",
-                "0.60",
-                "3.00",
-                "0.10",
-                "0",
-                "0.60",
-                "2.50",
-                "0.10",
-                "0",
-            ),
-            // MiniMax M2.5 input 0.15
-            (
-                "minimax-m2.5",
-                "MiniMax M2.5",
-                "0.15",
-                "0.95",
-                "0.03",
-                "0",
-                "0.12",
-                "0.95",
-                "0.03",
-                "0",
-            ),
-            // Mistral Devstral 2 output 0.90 → 2（与同表 devstral-medium 一致）
-            (
-                "devstral-2-2512",
-                "Devstral 2",
-                "0.40",
-                "2",
-                "0.04",
-                "0",
-                "0.40",
-                "0.90",
-                "0.04",
-                "0",
-            ),
-            // Doubao Seed 2.0：lite 旧价贵 3-4 倍 + 全系补 cache 命中价
-            (
-                "doubao-seed-2-0-lite",
-                "Doubao Seed 2.0 Lite",
-                "0.08",
-                "0.50",
-                "0.017",
-                "0",
-                "0.25",
-                "2",
-                "0",
-                "0",
-            ),
-            (
-                "doubao-seed-2-0-pro",
-                "Doubao Seed 2.0 Pro",
-                "0.47",
-                "2.37",
-                "0.09",
-                "0",
-                "0.47",
-                "2.37",
-                "0",
-                "0",
-            ),
-            (
-                "doubao-seed-2-0-code",
-                "Doubao Seed 2.0 Code",
-                "0.47",
-                "2.37",
-                "0.09",
-                "0",
-                "0.47",
-                "2.37",
-                "0",
-                "0",
-            ),
-            (
-                "doubao-seed-2-0-code-preview-latest",
-                "Doubao Seed 2.0 Code Preview",
-                "0.47",
-                "2.37",
-                "0.09",
-                "0",
-                "0.47",
-                "2.37",
-                "0",
-                "0",
-            ),
-            (
-                "doubao-seed-2-0-mini",
-                "Doubao Seed 2.0 Mini",
-                "0.03",
-                "0.31",
-                "0.0056",
-                "0",
-                "0.03",
-                "0.31",
-                "0",
-                "0",
-            ),
-            // MiMo：5/27 永久降价，旧值是旧价
-            (
-                "mimo-v2-pro",
-                "MiMo V2 Pro",
-                "0.435",
-                "0.87",
-                "0.0036",
-                "0",
-                "1",
-                "3",
-                "0",
-                "0",
-            ),
-            (
-                "mimo-v2.5",
-                "MiMo V2.5",
-                "0.14",
-                "0.29",
-                "0.0028",
-                "0",
-                "0.09",
-                "0.29",
-                "0.009",
-                "0",
-            ),
-            (
-                "mimo-v2.5-pro",
-                "MiMo V2.5 Pro",
-                "0.435",
-                "0.87",
-                "0.0036",
-                "0",
-                "1",
-                "3",
-                "0",
-                "0",
-            ),
-            // Qwen：官方"隐式缓存 = 输入 20%"补 cache 命中价
-            (
-                "qwen3.6-plus",
-                "Qwen3.6 Plus",
-                "0.325",
-                "1.95",
-                "0.065",
-                "0",
-                "0.325",
-                "1.95",
-                "0",
-                "0",
-            ),
-            (
-                "qwen3.5-plus",
-                "Qwen3.5 Plus",
-                "0.26",
-                "1.56",
-                "0.052",
-                "0",
-                "0.26",
-                "1.56",
-                "0",
-                "0",
-            ),
-            (
-                "qwen3-coder-plus",
-                "Qwen3 Coder Plus",
-                "0.65",
-                "3.25",
-                "0.13",
-                "0",
-                "0.65",
-                "3.25",
-                "0",
-                "0",
-            ),
-            (
-                "qwen3-coder-flash",
-                "Qwen3 Coder Flash",
-                "0.195",
-                "0.975",
-                "0.039",
-                "0",
-                "0.195",
-                "0.975",
-                "0",
-                "0",
-            ),
-            (
-                "deepseek-v4-flash",
-                "DeepSeek V4 Flash",
-                "0.14",
-                "0.28",
-                "0.0028",
-                "0",
-                "0.14",
-                "0.28",
-                "0.028",
-                "0",
-            ),
-            (
-                "deepseek-v4-pro",
-                "DeepSeek V4 Pro",
-                "0.435",
-                "0.87",
-                "0.003625",
-                "0",
-                "1.68",
-                "3.36",
-                "0.14",
-                "0",
-            ),
-            (
-                "glm-5", "GLM-5", "1", "3.2", "0.2", "0", "0.72", "2.30", "0", "0",
-            ),
-            (
-                "glm-5.1", "GLM-5.1", "1.4", "4.4", "0.26", "0", "0.95", "3.15", "0", "0",
-            ),
-            (
-                "grok-code-fast-1",
-                "Grok Build 0.1 (Code Fast Alias)",
-                "1",
-                "2",
-                "0.20",
-                "0",
-                "0.20",
-                "1.50",
-                "0.02",
-                "0",
-            ),
-            // 2026-08-16 16:00 UTC DeepSeek V4 全系改峰谷双档计价（本表统一录高峰档，
-            // 理由见 seed_model_pricing 里 DeepSeek V4 段的注释）。涨幅很大：
-            // flash 0.14/0.28/0.0028 → 0.44/1.32/0.014；pro 0.435/0.87/0.003625 → 1.32/3.96/0.044。
-            //
-            // 🔴 这五条必须留在数组末尾：上面 2026-07-31 的 chat/reasoner 条目与
-            // 2026-07 的 v4-flash(cache_read 0.028→0.0028) / v4-pro(1.68/3.36→0.435/0.87)
-            // 条目会先把各种历史形态收敛到同一个旧值，这里才能单守卫命中。
-            // 若把本组挪到它们之前，老库会停在中间价位不再前进。
-            (
-                "deepseek-chat",
-                "DeepSeek Chat",
-                "0.44",
-                "1.32",
-                "0.014",
-                "0",
-                "0.14",
-                "0.28",
-                "0.0028",
-                "0",
-            ),
-            (
-                "deepseek-reasoner",
-                "DeepSeek Reasoner",
-                "0.44",
-                "1.32",
-                "0.014",
-                "0",
-                "0.14",
-                "0.28",
-                "0.0028",
-                "0",
-            ),
-            (
-                "deepseek-v4-flash",
-                "DeepSeek V4 Flash",
-                "0.44",
-                "1.32",
-                "0.014",
-                "0",
-                "0.14",
-                "0.28",
-                "0.0028",
-                "0",
-            ),
-            (
-                "deepseek-v4-flash-0731",
-                "DeepSeek V4 Flash",
-                "0.44",
-                "1.32",
-                "0.014",
-                "0",
-                "0.14",
-                "0.28",
-                "0.0028",
-                "0",
-            ),
-            (
-                "deepseek-v4-pro",
-                "DeepSeek V4 Pro",
-                "1.32",
-                "3.96",
-                "0.044",
-                "0",
-                "0.435",
-                "0.87",
-                "0.003625",
-                "0",
-            ),
-            // 2026-09-06 审计。以下条目须排在上方所有旧条目之后（链式守卫，顺序由
-            // tests.rs::model_pricing_seed_repairs_known_outdated_builtin_prices 锁住）：
-            // - gpt-5.6-sol：<v3.19 老库先经 07-12 条目把 cache_write 0 补成 6.25，再由本条降到促销价
-            // - minimax-m2.5：先经 0.12→0.15 条目，再由本条到 0.30
-            // Google 3.6 Flash 改介绍价 0.75/3.75/0.075（至 2026-12-31，挂牌 1.50/7.50/0.15）
-            (
-                "gemini-3.6-flash",
-                "Gemini 3.6 Flash",
-                "0.75",
-                "3.75",
-                "0.075",
-                "0",
-                "1.50",
-                "7.50",
-                "0.15",
-                "0",
-            ),
-            // OpenAI GPT-5.6 Sol 促销价 4/20/0.40/5（至少到 2026-11-21）；裸名与 effort 后缀行同步
-            (
-                "gpt-5.6-sol",
-                "GPT-5.6 Sol",
-                "4",
-                "20",
-                "0.40",
-                "5",
-                "5",
-                "30",
-                "0.50",
-                "6.25",
-            ),
-            (
-                "gpt-5.6",
-                "GPT-5.6 Sol",
-                "4",
-                "20",
-                "0.40",
-                "5",
-                "5",
-                "30",
-                "0.50",
-                "6.25",
-            ),
-            (
-                "gpt-5.6-low",
-                "GPT-5.6 Sol",
-                "4",
-                "20",
-                "0.40",
-                "5",
-                "5",
-                "30",
-                "0.50",
-                "6.25",
-            ),
-            (
-                "gpt-5.6-medium",
-                "GPT-5.6 Sol",
-                "4",
-                "20",
-                "0.40",
-                "5",
-                "5",
-                "30",
-                "0.50",
-                "6.25",
-            ),
-            (
-                "gpt-5.6-high",
-                "GPT-5.6 Sol",
-                "4",
-                "20",
-                "0.40",
-                "5",
-                "5",
-                "30",
-                "0.50",
-                "6.25",
-            ),
-            (
-                "gpt-5.6-xhigh",
-                "GPT-5.6 Sol",
-                "4",
-                "20",
-                "0.40",
-                "5",
-                "5",
-                "30",
-                "0.50",
-                "6.25",
-            ),
-            (
-                "gpt-5.6-minimal",
-                "GPT-5.6 Sol",
-                "4",
-                "20",
-                "0.40",
-                "5",
-                "5",
-                "30",
-                "0.50",
-                "6.25",
-            ),
-            // MiniMax 官方按量价：M2 / M2.1 / M2.5 = 0.3/1.2/0.03/0.375
-            (
-                "minimax-m2",
-                "MiniMax M2",
-                "0.30",
-                "1.20",
-                "0.03",
-                "0.375",
-                "0.27",
-                "0.95",
-                "0.03",
-                "0",
-            ),
-            (
-                "minimax-m2.1",
-                "MiniMax M2.1",
-                "0.30",
-                "1.20",
-                "0.03",
-                "0.375",
-                "0.27",
-                "0.95",
-                "0.03",
-                "0",
-            ),
-            (
-                "minimax-m2.5",
-                "MiniMax M2.5",
-                "0.30",
-                "1.20",
-                "0.03",
-                "0.375",
-                "0.15",
-                "0.95",
-                "0.03",
-                "0",
-            ),
-            // 2026-09-11 审计：DeepSeek V4 Flash 退役，打到 deepseek-v4-flash / -0731 的
-            // 请求已由 V4.1-Flash 承接并按 Flash 价计费（官方定价页 quick_start/pricing），
-            // 高峰档 0.44/1.32/0.014 → 0.3/1.2/0.006。
-            //
-            // 🔴 必须排在上方 2026-08-16 峰谷调价五条之后：老库要先被那一组推到
-            // 0.44/1.32/0.014，本组的守卫才能命中；挪到其前老库会停在 0.44 不再前进。
-            // deepseek-chat / deepseek-reasoner 刻意不在本组 —— 官方已全面下架、无权威源
-            // 可证其跟随降价，见 seed_model_pricing 的 DeepSeek V4 段注释。
-            (
-                "deepseek-v4-flash",
-                "DeepSeek V4 Flash",
-                "0.3",
-                "1.2",
-                "0.006",
-                "0",
-                "0.44",
-                "1.32",
-                "0.014",
-                "0",
-            ),
-            (
-                "deepseek-v4-flash-0731",
-                "DeepSeek V4 Flash",
-                "0.3",
-                "1.2",
-                "0.006",
-                "0",
-                "0.44",
-                "1.32",
-                "0.014",
-                "0",
-            ),
-            // 2026-09-15：撤销 09-11 提前执行的 V4 Pro → Flash 档回调（官方 09-12 撤回迁移公告，
-            // V4 Pro 继续按原价计费）。v3.20.3 已把老库推到 0.3/1.2/0.006，本条修回高峰档。
-            // 🔴 原 1.32→0.3 条目必须删除而非保留：两条并存会让每次启动都来回改写。
-            (
-                "deepseek-v4-pro",
-                "DeepSeek V4 Pro",
-                "1.32",
-                "3.96",
-                "0.044",
-                "0",
-                "0.3",
-                "1.2",
-                "0.006",
-                "0",
-            ),
-            // 2026-09-23 核对标准价格，仅修正仍匹配旧内置值的记录。
-            (
-                "mimo-v2.5",
-                "MiMo V2.5",
-                "0.14",
-                "0.28",
-                "0.0028",
-                "0",
-                "0.14",
-                "0.29",
-                "0.0028",
-                "0",
-            ),
-            (
-                "o3-mini",
-                "OpenAI o3-mini",
-                "1.10",
-                "4.40",
-                "0.55",
-                "0",
-                "0.55",
-                "2.20",
-                "0.55",
-                "0",
-            ),
-        ];
-
-        for (
-            model_id,
-            display_name,
-            input,
-            output,
-            cache_read,
-            cache_creation,
-            old_input,
-            old_output,
-            old_cache_read,
-            old_cache_creation,
-        ) in pricing_fixes
-        {
-            conn.execute(
-                "UPDATE model_pricing SET
-                    display_name = ?2,
-                    input_cost_per_million = ?3,
-                    output_cost_per_million = ?4,
-                    cache_read_cost_per_million = ?5,
-                    cache_creation_cost_per_million = ?6
-                 WHERE model_id = ?1
-                   AND input_cost_per_million = ?7
-                   AND output_cost_per_million = ?8
-                   AND cache_read_cost_per_million = ?9
-                   AND cache_creation_cost_per_million = ?10",
-                rusqlite::params![
-                    model_id,
-                    display_name,
-                    input,
-                    output,
-                    cache_read,
-                    cache_creation,
-                    old_input,
-                    old_output,
-                    old_cache_read,
-                    old_cache_creation
-                ],
-            )
-            .map_err(|e| AppError::Database(format!("修复模型 {model_id} 定价失败: {e}")))?;
+    /// 内置模型的超长上下文档位和 priority / fast 档倍率，数据来自厂商定价页
+    /// （与 LiteLLM 的 `*_above_272k_tokens` / `*_priority` / `fast` 字段核对过）。
+    ///
+    /// 每项：(模型, 超长上下文阈值, 输入侧倍率, 输出倍率, priority 倍率)。
+    /// 同一模型带推理强度后缀的行（`-low` / `-high` …）一并设置。
+    fn apply_model_pricing_tiers(conn: &Connection) -> Result<(), AppError> {
+        // 早期迁移（v8 -> v9）也会 seed 定价，那时还没有档位列；启动时会再 seed 一次
+        if !Self::has_column(conn, "model_pricing", "long_context_threshold")? {
+            return Ok(());
         }
-
+        /// (阈值, 输入侧倍率, 输出倍率)
+        type LongContext = Option<(i64, &'static str, &'static str)>;
+        const OPENAI_LONG: LongContext = Some((272_000, "2", "1.5"));
+        const TWO_HUNDRED_K: LongContext = Some((200_000, "2", "1.5"));
+        const XAI_LONG: LongContext = Some((200_000, "2", "2"));
+        let tiers: &[(&str, LongContext, &str)] = &[
+            // OpenAI：GPT-5.4 起提示超过 272K 整次请求输入侧 ×2、输出 ×1.5；priority ×2
+            ("gpt-6.1-sol", OPENAI_LONG, "2"),
+            ("gpt-6-astra", OPENAI_LONG, "2"),
+            ("gpt-6-sol", OPENAI_LONG, "2"),
+            ("gpt-6-luna", OPENAI_LONG, "2"),
+            ("gpt-5.6", OPENAI_LONG, "2"),
+            ("gpt-5.6-sol", OPENAI_LONG, "2"),
+            ("gpt-5.6-terra", OPENAI_LONG, "2"),
+            ("gpt-5.6-luna", OPENAI_LONG, "2"),
+            ("gpt-5.6-cyber", OPENAI_LONG, "1"),
+            ("gpt-5.5", OPENAI_LONG, "2.5"),
+            ("gpt-5.5-pro", OPENAI_LONG, "1"),
+            ("gpt-5.4", OPENAI_LONG, "2"),
+            ("gpt-5.4-pro", OPENAI_LONG, "1"),
+            ("gpt-5.4-mini", None, "2"),
+            ("gpt-5.3-codex", None, "2"),
+            ("gpt-5.2", None, "2"),
+            ("gpt-5.1", None, "2"),
+            ("gpt-5", None, "2"),
+            ("gpt-5-mini", None, "1.8"),
+            ("o3", None, "1.75"),
+            ("o4-mini", None, "1.818"),
+            ("gpt-4.1", None, "1.75"),
+            ("gpt-4.1-mini", None, "1.75"),
+            ("gpt-4.1-nano", None, "2"),
+            ("gpt-4o", None, "1.7"),
+            ("gpt-4o-mini", None, "1.667"),
+            // Claude fast 模式（日志 `usage.speed = "fast"`）
+            ("claude-opus-5-5", None, "2"),
+            ("claude-opus-5", None, "2"),
+            ("claude-opus-4-8", None, "2"),
+            ("claude-opus-4-7", None, "6"),
+            ("claude-opus-4-6", None, "6"),
+            ("claude-opus-4-6-20260206", None, "6"),
+            // 开了 1M 上下文的 Sonnet 4 / 4.5：提示超过 200K 输入侧 ×2、输出 ×1.5
+            ("claude-sonnet-4-5-20250929", TWO_HUNDRED_K, "1"),
+            ("claude-sonnet-4-20250514", TWO_HUNDRED_K, "1"),
+            // Gemini Pro：提示超过 200K 输入侧 ×2、输出 ×1.5
+            ("gemini-3.1-pro-preview", TWO_HUNDRED_K, "1"),
+            ("gemini-3-pro-preview", TWO_HUNDRED_K, "1"),
+            ("gemini-2.5-pro", TWO_HUNDRED_K, "1"),
+            // xAI：提示超过 200K 输入侧和输出都 ×2
+            ("grok-4.7", XAI_LONG, "1"),
+            ("grok-4.6", XAI_LONG, "1"),
+            ("grok-4.5", XAI_LONG, "1"),
+            ("grok-4.5-build", XAI_LONG, "1"),
+            ("grok-4.3", XAI_LONG, "1"),
+            ("grok-4.20-0309-reasoning", XAI_LONG, "1"),
+            ("grok-4.20-0309-non-reasoning", XAI_LONG, "1"),
+            ("grok-code-fast-1", XAI_LONG, "1"),
+            ("grok-build-0.1", XAI_LONG, "1"),
+        ];
+        let mut stmt = conn
+            .prepare(
+                "UPDATE model_pricing SET
+                    long_context_threshold = ?2,
+                    long_context_input_multiplier = ?3,
+                    long_context_output_multiplier = ?4,
+                    priority_multiplier = ?5
+                 WHERE model_id = ?1
+                    OR model_id IN (?1 || '-minimal', ?1 || '-low', ?1 || '-medium',
+                                    ?1 || '-high', ?1 || '-xhigh')",
+            )
+            .map_err(|e| AppError::Database(format!("准备模型定价档位语句失败: {e}")))?;
+        for (model_id, long_context, priority) in tiers {
+            let (threshold, input_multiplier, output_multiplier) = match long_context {
+                Some((threshold, input, output)) => (Some(*threshold), *input, *output),
+                None => (None, "1", "1"),
+            };
+            stmt.execute(rusqlite::params![
+                model_id,
+                threshold,
+                input_multiplier,
+                output_multiplier,
+                priority
+            ])
+            .map_err(|e| AppError::Database(format!("写入模型 {model_id} 定价档位失败: {e}")))?;
+        }
         Ok(())
     }
 
@@ -3105,9 +2527,7 @@ impl Database {
     }
 
     pub(crate) fn ensure_model_pricing_seeded_on_conn(conn: &Connection) -> Result<(), AppError> {
-        // 每次启动都执行 INSERT OR IGNORE，增量追加新模型；仅修复仍等于旧内置值的定价。
-        Self::seed_model_pricing(conn)?;
-        Self::repair_current_model_pricing(conn)
+        Self::seed_model_pricing(conn)
     }
 
     // --- 辅助方法 ---
@@ -3143,35 +2563,12 @@ impl Database {
             .map_err(|e| AppError::Database(format!("创建使用量应用时间索引失败: {e}")))?;
         }
 
-        let required_columns = [
-            "app_type",
-            "data_source",
-            "input_tokens",
-            "output_tokens",
-            "cache_read_tokens",
-            "created_at",
-            "cache_creation_tokens",
-        ];
-        for column in required_columns {
-            if !Self::has_column(conn, "proxy_request_logs", column)? {
-                return Ok(());
-            }
-        }
-
-        conn.execute("DROP INDEX IF EXISTS idx_request_logs_dedup_lookup", [])
-            .map_err(|e| AppError::Database(format!("删除旧使用量去重索引失败: {e}")))?;
-
-        // 查询层为了兼容历史 NULL data_source 行，会使用
-        // COALESCE(data_source, 'proxy')。普通 data_source 索引无法匹配该表达式，
-        // 会让跨源去重子查询退化成大量扫描；表达式索引让 SQLite 能按同一表达式查找。
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_request_logs_dedup_lookup_expr
-             ON proxy_request_logs(app_type, COALESCE(data_source, 'proxy'), input_tokens,
-                                   output_tokens, cache_read_tokens, created_at,
-                                   cache_creation_tokens)",
-            [],
+        // 旧版会话与代理日志跨源去重用的索引；去重已经去掉
+        conn.execute_batch(
+            "DROP INDEX IF EXISTS idx_request_logs_dedup_lookup;
+             DROP INDEX IF EXISTS idx_request_logs_dedup_lookup_expr;",
         )
-        .map_err(|e| AppError::Database(format!("创建使用量去重表达式索引失败: {e}")))?;
+        .map_err(|e| AppError::Database(format!("删除使用量去重索引失败: {e}")))?;
         Ok(())
     }
 
@@ -3442,47 +2839,6 @@ mod tests {
         assert_eq!(mcp_values, (1, 0));
         assert_eq!(skill_values, (1, 0));
 
-        Ok(())
-    }
-
-    #[test]
-    fn migrate_v15_to_v16_resets_only_codex_session_usage() -> Result<(), AppError> {
-        let conn = Connection::open_in_memory()?;
-        Database::create_tables_on_conn(&conn)?;
-        conn.execute_batch(
-            "INSERT INTO proxy_request_logs (
-                request_id, provider_id, app_type, model, input_tokens,
-                output_tokens, cache_read_tokens, latency_ms, status_code,
-                created_at, data_source
-             ) VALUES
-                ('codex-row', '_codex_session', 'codex', 'gpt', 1, 1, 0, 0, 200, 1, 'codex_session'),
-                ('gemini-row', '_gemini_session', 'gemini', 'gemini', 1, 1, 0, 0, 200, 1, 'gemini_session');
-             INSERT INTO usage_daily_rollups (date, app_type, provider_id, model)
-             VALUES
-                ('2026-07-10', 'codex', '_codex_session', 'gpt'),
-                ('2026-07-10', 'gemini', '_gemini_session', 'gemini');
-             INSERT INTO session_log_sync
-                (file_path, last_modified, last_line_offset, last_synced_at)
-             VALUES
-                ('/old/sessions/rollout-old-00000000-0000-4000-8000-000000000001.jsonl', 1, 1, 1),
-                ('/gemini/tmp/session-123.json', 1, 1, 1);",
-        )?;
-        Database::set_user_version(&conn, 15)?;
-
-        Database::apply_schema_migrations_on_conn(&conn)?;
-
-        assert_eq!(Database::get_user_version(&conn)?, SCHEMA_VERSION);
-        assert!(Database::table_exists(&conn, "session_usage_dedup")?);
-        let counts: (i64, i64, i64, i64) = conn.query_row(
-            "SELECT
-                (SELECT COUNT(*) FROM proxy_request_logs WHERE data_source = 'codex_session'),
-                (SELECT COUNT(*) FROM proxy_request_logs WHERE data_source = 'gemini_session'),
-                (SELECT COUNT(*) FROM usage_daily_rollups WHERE provider_id = '_codex_session'),
-                (SELECT COUNT(*) FROM session_log_sync)",
-            [],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
-        )?;
-        assert_eq!(counts, (0, 1, 0, 1));
         Ok(())
     }
 

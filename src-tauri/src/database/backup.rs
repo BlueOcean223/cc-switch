@@ -440,7 +440,8 @@ impl Database {
 
         // Periodic maintenance is always enabled, regardless of auto-backup settings.
         let mut reclaimed_rows = 0u64;
-        match self.rollup_and_prune(30) {
+        match self.rollup_and_prune(crate::database::dao::usage_rollup::USAGE_DETAIL_RETENTION_DAYS)
+        {
             Ok(deleted) => {
                 reclaimed_rows += deleted;
             }

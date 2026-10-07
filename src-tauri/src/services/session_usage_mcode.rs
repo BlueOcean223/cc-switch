@@ -4,9 +4,11 @@ use crate::error::AppError;
 use crate::services::sql_helpers::INPUT_TOKEN_SEMANTICS_FRESH;
 use crate::services::{session_usage::SessionSyncResult, usage_stats::find_model_pricing};
 use crate::session_manager::providers::mcode;
-use crate::token_usage::{calculator::CostCalculator, parser::TokenUsage};
+use crate::token_usage::{
+    calculator::{CostCalculator, ServiceTier},
+    parser::TokenUsage,
+};
 use rusqlite::params;
-use rust_decimal::Decimal;
 
 pub fn sync_mcode_usage(db: &Database) -> Result<SessionSyncResult, AppError> {
     if !mcode::database_path().exists() {
@@ -44,18 +46,23 @@ fn sync_from_database(
         let model = native_model
             .split_once('/')
             .map_or(native_model.as_str(), |(_, model)| model);
+        let created_at = row.get::<_, i64>(3)? / 1000;
         let usage = TokenUsage {
             input_tokens: row.get(4)?,
             output_tokens: row.get::<_, u32>(5)?.saturating_add(row.get(6)?),
             cache_read_tokens: row.get(7)?,
             cache_creation_tokens: row.get(8)?,
+            cache_creation_1h_tokens: 0,
         };
-        let native_cost: Option<f64> = row.get(9)?;
+        // mcode 记下的费用（含 0：免费模型）优先，标记 native_cost 让重算不覆盖
+        let native_cost = row
+            .get::<_, Option<f64>>(9)?
+            .filter(|cost| cost.is_finite() && *cost >= 0.0);
         let cost = match native_cost {
-            Some(cost) if cost.is_finite() && cost >= 0.0 => cost.to_string(),
-            _ => find_model_pricing(&tx, model)
+            Some(cost) => cost.to_string(),
+            None => find_model_pricing(&tx, model)
                 .map(|pricing| {
-                    CostCalculator::calculate_for_app("mcode", &usage, &pricing, Decimal::ONE)
+                    CostCalculator::calculate(&usage, &pricing, ServiceTier::Standard, created_at)
                         .total_cost
                         .to_string()
                 })
@@ -68,12 +75,14 @@ fn sync_from_database(
                 input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens,
                 input_cost_usd, output_cost_usd, cache_read_cost_usd, cache_creation_cost_usd,
                 total_cost_usd, latency_ms, status_code, session_id, provider_type,
-                is_streaming, cost_multiplier, created_at, data_source, input_token_semantics
+                is_streaming, cost_multiplier, created_at, data_source, input_token_semantics,
+                native_cost
              ) VALUES (?1, '_mcode_session', 'mcode', ?2, ?2, ?3, ?4, ?5, ?6,
-                       '0', '0', '0', '0', ?7, 0, 200, ?8, 'mcode_session', 1, '1', ?9, 'mcode_session', ?10)",
+                       '0', '0', '0', '0', ?7, 0, 200, ?8, 'mcode_session', 1, '1', ?9, 'mcode_session', ?10, ?11)",
             params![request_id, model, usage.input_tokens, usage.output_tokens,
                 usage.cache_read_tokens, usage.cache_creation_tokens, cost, session_id,
-                row.get::<_, i64>(3)? / 1000, INPUT_TOKEN_SEMANTICS_FRESH],
+                created_at, INPUT_TOKEN_SEMANTICS_FRESH,
+                i64::from(native_cost.is_some())],
         )?;
         result.imported += changed as u32;
         result.skipped += u32::from(changed == 0);

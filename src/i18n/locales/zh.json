@@ -1488,6 +1488,7 @@
     "totalCost": "总成本",
     "cost": "成本",
     "unpriced": "未定价",
+    "unpricedModelHint": "定价表里没有这个模型，成本按 0 计。在「模型定价」里补上价格后会自动重算。",
     "realTotal": "真实消耗 Tokens",
     "freshInput": "新增输入",
     "cacheHitRate": "缓存命中率",
@@ -1511,22 +1512,21 @@
       "all": "全部",
       "label": "按应用筛选"
     },
-    "rawInputLabel": "原始",
     "sessionSync": {
       "syncNow": "立即同步",
       "syncCompleted": "同步完成：新增 {{imported}} 条，扫描 {{files}} 个文件，错误 {{errors}}",
       "syncFailed": "会话用量同步失败：{{error}}"
     },
-    "rebuildCodex": {
-      "title": "Codex 用量维护",
-      "description": "从本地 rollout 日志重新构建 Codex 会话用量",
-      "warning": "重建前会自动备份数据库。若源 JSONL 已删除，对应历史将无法重新导入。",
-      "confirmTitle": "确认重建 Codex 用量",
-      "confirmMessage": "此操作会清除现有 Codex 会话明细与汇总，再从本地 Codex 日志重新导入。\n\n已删除日志对应的历史将丢失；缺少父 rollout 的 fork 会暂缓导入。",
+    "rebuildUsage": {
+      "title": "用量维护",
+      "description": "从本地会话日志重新构建全部用量",
+      "warning": "重建前会自动备份数据库。日志已删除的日期保留原来的按天汇总。",
+      "confirmTitle": "确认重建用量",
+      "confirmMessage": "此操作会清除从会话日志导入的用量明细，再从各工具的本地会话日志重新导入，并重新汇总 30 天前的数据。\n\n日志已删除的日期保留原来的汇总；缺少父 rollout 的 Codex fork 会暂缓导入。",
       "confirmAction": "备份并重建",
-      "completed": "重建完成：导入 {{imported}} 条，错误 {{errors}}，疑似重复 {{suspected}}，暂缓文件 {{deferred}}",
-      "failed": "Codex 用量重建失败：{{error}}",
-      "actionEllipsis": "重建 Codex 用量"
+      "completed": "重建完成：导入 {{imported}} 条，错误 {{errors}}，暂缓文件 {{deferred}}",
+      "failed": "用量重建失败：{{error}}",
+      "actionEllipsis": "重建用量"
     },
     "totalRecords": "共 {{total}} 条记录",
     "pageInputPlaceholder": "页码",

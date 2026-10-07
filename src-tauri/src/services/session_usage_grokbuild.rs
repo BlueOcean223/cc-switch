@@ -5,7 +5,7 @@
 //!
 //! ## 数据流
 //! ```text
-//! updates.jsonl（逐轮 turn_completed） → 接管守卫 → 费用计算 → proxy_request_logs
+//! updates.jsonl（逐轮 turn_completed） → 费用计算 → proxy_request_logs
 //! ```
 //!
 //! ## 事件口径（2026-07-23 单进程双 prompt 实测 + CLI 二进制逆向双重确证）
@@ -25,21 +25,19 @@
 //!   修复路径，所以定价漂移窗口不能押在本地价上）；本地定价负责分项成本与
 //!   漂移告警。`costIsPartial` 标记自报为下界：有本地价回退本地全额复算并
 //!   抑制漂移告警，无价才用下界入账（分项记 0）。
-//! - 旧版本地路由记过的轮次不重复入账：插入前按事件时刻查询附近是否存在代理
-//!   直录行（见 `has_recent_grokbuild_proxy_activity`）。轮事件是聚合值（多 loop
-//!   求和），与代理逐请求行结构性不相等，所以不用指纹去重。
 
 use crate::database::{lock_conn, Database};
 use crate::error::AppError;
 use crate::services::session_usage::{
     metadata_modified_nanos, update_sync_state, SessionSyncResult,
 };
-use crate::services::sql_helpers::INPUT_TOKEN_SEMANTICS_TOTAL;
-use crate::services::usage_stats::{find_model_pricing, has_recent_grokbuild_proxy_activity};
-use crate::token_usage::calculator::CostCalculator;
+use crate::services::sql_helpers::INPUT_TOKEN_SEMANTICS_FRESH;
+use crate::services::usage_stats::find_model_pricing;
+use crate::token_usage::calculator::{CostCalculator, ModelPricing, ServiceTier};
 use crate::token_usage::parser::TokenUsage;
 use rust_decimal::Decimal;
 use std::fs;
+use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 
 /// 单个模型的本轮用量（从 `modelUsage` 或顶层 usage 提取，均为逐轮口径）
@@ -121,9 +119,6 @@ fn collect_grok_updates_files() -> Vec<PathBuf> {
     files
 }
 
-/// 单个 updates.jsonl 文件读取上限（50 MiB）。JSONL 单行事件通常几 KiB，
-/// 正常活跃会话数月也到不了这个量级；超过则视为异常/恶意文件，跳过。
-const MAX_GROK_FILE_BYTES: u64 = 50 * 1024 * 1024;
 /// 递归收集 session 日志时的最大目录深度，防止 symlink 循环导致栈溢出。
 const MAX_COLLECT_DEPTH: usize = 16;
 
@@ -173,28 +168,17 @@ fn sync_single_grok_file(
         .map_err(|e| AppError::Config(format!("无法读取文件元数据: {e}")))?;
     let file_modified = metadata_modified_nanos(&metadata);
 
-    // 异常大文件直接跳过，避免一次性读取耗尽内存。
-    if metadata.len() > MAX_GROK_FILE_BYTES {
-        log::warn!(
-            "Grok session log too large ({} bytes), skipping: {}",
-            metadata.len(),
-            file_path.display()
-        );
-        return Ok(SessionSyncResult::default());
-    }
-
     let last_modified = cursors.get(&file_path_str).map_or(0, |c| c.last_modified);
     if file_modified <= last_modified {
         return Ok(SessionSyncResult::default());
     }
 
-    // 文件变更时全量重读：UPSERT 幂等使重读无害，且沉降窗延后的事件本就
-    // 依赖下一轮重读补入。事件已是逐轮独立值，改 offset 增量读在正确性上
-    // 可行（无差分基线依赖），但需另行处理延后事件的 offset 回退，收益
-    // （活跃会话每周期省一次 O(N) 解析）暂不值得该复杂度。
-    let content = fs::read_to_string(file_path)
+    // 文件变更时全量重读，UPSERT 幂等使重读无害。逐行读：长会话的
+    // updates.jsonl 可以有上百 MB（大部分是流式消息块）。
+    let file =
+        fs::File::open(file_path).map_err(|e| AppError::Config(format!("无法打开文件: {e}")))?;
+    let events = parse_grok_usage_events(BufReader::new(file))
         .map_err(|e| AppError::Config(format!("无法读取文件: {e}")))?;
-    let events = parse_grok_usage_events(&content);
 
     // 会话 ID = 会话目录名（与 summary.json 的 info.id 一致）。request_id
     // 唯一性押在该 UUIDv7 全局唯一上：同 ID 的归档/活跃副本经 UPSERT 幂等
@@ -209,26 +193,10 @@ fn sync_single_grok_file(
     let mut result = SessionSyncResult::default();
 
     for (idx, event) in events.iter().enumerate() {
-        // 接管守卫按事件时刻判定一次，整条事件的所有模型行同进退；
-        // 被守卫跳过的 token 已由代理行记账，跳过即终态（同步状态照常
-        // 推进）。已知局限：守卫无 session 维度，见 usage_stats.rs 注释。
-        let takeover_active = {
-            let conn = lock_conn!(db.conn);
-            has_recent_grokbuild_proxy_activity(&conn, event.created_at)?
-        };
-
         for (model, turn) in &event.per_model {
             if turn.is_zero() {
                 continue;
             }
-            if takeover_active {
-                // 计入 skipped（对齐 gemini 指纹去重跳过的语义：未入账，代理
-                // 行权威）。勿改用 suspected_duplicates——codex 对它的语义相反
-                // （已入账待查），而 merge() 会把两义直接求和。
-                result.skipped += 1;
-                continue;
-            }
-
             // 幂等键锚定上游稳定 ID（prompt_id 是每轮唯一的 UUID），不含文件
             // 内序号：updates.jsonl 前缀被改写（如 rewind 截断）导致事件序号
             // 前移时，幸存轮次仍命中原行不会双算；被移除轮次的行保留——
@@ -266,16 +234,23 @@ fn sync_single_grok_file(
     Ok(result)
 }
 
-/// 从 updates.jsonl 内容解析出全部逐轮用量事件（保持文件顺序）
-fn parse_grok_usage_events(content: &str) -> Vec<GrokUsageEvent> {
+/// 用量事件所在行的 `method`，按字节先筛一遍行
+const USAGE_METHOD_MARKER: &[u8] = b"_x.ai/session/update";
+
+/// 从 updates.jsonl 解析出全部逐轮用量事件（保持文件顺序）。解析不了的行跳过。
+fn parse_grok_usage_events(reader: impl BufRead) -> std::io::Result<Vec<GrokUsageEvent>> {
     let mut events = Vec::new();
 
-    for line in content.lines() {
-        let line = line.trim();
-        if line.is_empty() {
+    for line in reader.split(b'\n') {
+        let line = line?;
+        // 先按行头过滤：绝大多数行是流式消息块，不用整行解析
+        if !line
+            .windows(USAGE_METHOD_MARKER.len())
+            .any(|window| window == USAGE_METHOD_MARKER)
+        {
             continue;
         }
-        let Ok(record) = serde_json::from_str::<serde_json::Value>(line) else {
+        let Ok(record) = serde_json::from_slice::<serde_json::Value>(&line) else {
             continue;
         };
         if record.get("method").and_then(|v| v.as_str()) != Some("_x.ai/session/update") {
@@ -298,7 +273,7 @@ fn parse_grok_usage_events(content: &str) -> Vec<GrokUsageEvent> {
         else {
             continue;
         };
-        // 沉降窗与接管守卫都依赖事件时刻，没有时间戳的事件无法安全导入。
+        // 没有时间戳的事件不知道该记到哪一天，跳过。
         let Some(created_at) = parse_event_timestamp(record.get("timestamp")) else {
             continue;
         };
@@ -337,7 +312,7 @@ fn parse_grok_usage_events(content: &str) -> Vec<GrokUsageEvent> {
         });
     }
 
-    events
+    Ok(events)
 }
 
 fn parse_grok_counters(value: &serde_json::Value) -> GrokCounters {
@@ -380,25 +355,32 @@ fn insert_grok_session_entry(
     session_id: &str,
     created_at: i64,
 ) -> Result<bool, AppError> {
+    // 保留期以前的日期已经汇总；整份文件重读时再写回会在下次汇总时重复计入
+    if crate::services::usage_rebuild::is_below_import_floor(created_at) {
+        return Ok(false);
+    }
+
     let conn = lock_conn!(db.conn);
 
+    // xAI 的 inputTokens 含缓存读；入库换成未命中缓存的输入
     let clamp = |v: u64| v.min(u32::MAX as u64) as u32;
     let usage = TokenUsage {
-        input_tokens: clamp(turn.input),
+        input_tokens: clamp(turn.input.saturating_sub(turn.cached)),
         output_tokens: clamp(turn.output),
         cache_read_tokens: clamp(turn.cached),
         cache_creation_tokens: 0,
+        cache_creation_1h_tokens: 0,
     };
 
-    let pricing = find_model_pricing(&conn, model);
-    let multiplier = Decimal::from(1);
+    // 一行是一轮的合计，超长上下文档位无从判断
+    let pricing = find_model_pricing(&conn, model).map(ModelPricing::without_long_context);
     let reported = turn.reported_cost_usd();
+    // 合计取 CLI 自报的费用时标记 native_cost，按定价重算时不覆盖它
+    let native_cost = reported.is_some() && (pricing.is_none() || !cost_is_partial);
     // 插入成功（changed）后才发，避免重扫时重复刷日志
     let mut deferred_warn: Option<String> = None;
 
-    // total_cost 取值优先级（🔴 回填机制只补 total<=0 的行、从不修正已有正值，
-    // 见 backfill_missing_usage_costs；本导入器 UPSERT 也不因 cost 单独变化而
-    // 更新——所以入账时就必须写对，事后没有修复路径）：
+    // total_cost 取值优先级：
     // 1. 有自报且完整 → 以自报为准（上游 ground truth，定价漂移窗口内也准确；
     //    本地定价负责分项与漂移告警，漂移时分项与 total 允许暂不自洽）；
     // 2. 自报不完整（costIsPartial）→ 有本地价用本地全额复算（token 数完整），
@@ -407,7 +389,7 @@ fn insert_grok_session_entry(
     let (input_cost, output_cost, cache_read_cost, cache_creation_cost, total_cost) = match pricing
     {
         Some(p) => {
-            let cost = CostCalculator::calculate_for_app("grokbuild", &usage, &p, multiplier);
+            let cost = CostCalculator::calculate(&usage, &p, ServiceTier::Standard, created_at);
             let total = match reported {
                 Some(reported) if !cost_is_partial => {
                     // 偏差超 1%（微额下限 1e-6）即本地定价漂移——xAI 调价时
@@ -469,11 +451,9 @@ fn insert_grok_session_entry(
     };
 
     // UPSERT：重扫幂等；解析口径修正后重扫时更新既有行（token/成本/
-    // latency；created_at 保持首插值不动，避免行在沉降窗与 rollup 边界间漂移）。
+    // latency；created_at 保持首插值不动，避免行在 rollup 边界间漂移）。
     // WHERE 的 data_source 守卫是纵深防御：request_id 前缀命名空间已隔离，
     // 万一撞上非本导入器的行也绝不改写它。
-    // input_token_semantics 显式写 TOTAL——xAI 口径 inputTokens 含 cache read，
-    // 与代理路径的 grokbuild 行（logger）保持同一语义，勿依赖列默认值。
     conn.execute(
         "INSERT INTO proxy_request_logs (
             request_id, provider_id, app_type, model, request_model,
@@ -481,8 +461,8 @@ fn insert_grok_session_entry(
             input_cost_usd, output_cost_usd, cache_read_cost_usd, cache_creation_cost_usd, total_cost_usd,
             latency_ms, first_token_ms, status_code, error_message, session_id,
             provider_type, is_streaming, cost_multiplier, created_at, data_source,
-            input_token_semantics
-        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25)
+            input_token_semantics, native_cost
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26)
         ON CONFLICT(request_id) DO UPDATE SET
             model = excluded.model,
             input_tokens = excluded.input_tokens,
@@ -493,13 +473,17 @@ fn insert_grok_session_entry(
             cache_read_cost_usd = excluded.cache_read_cost_usd,
             cache_creation_cost_usd = excluded.cache_creation_cost_usd,
             total_cost_usd = excluded.total_cost_usd,
-            latency_ms = excluded.latency_ms
+            latency_ms = excluded.latency_ms,
+            input_token_semantics = excluded.input_token_semantics,
+            native_cost = excluded.native_cost
         WHERE data_source = 'grok_session'
           AND (input_tokens != excluded.input_tokens
            OR output_tokens != excluded.output_tokens
            OR cache_read_tokens != excluded.cache_read_tokens
            OR latency_ms != excluded.latency_ms
-           OR model != excluded.model)",
+           OR model != excluded.model
+           OR total_cost_usd != excluded.total_cost_usd
+           OR input_token_semantics != excluded.input_token_semantics)",
         rusqlite::params![
             request_id,
             "_grok_session",     // provider_id
@@ -525,7 +509,8 @@ fn insert_grok_session_entry(
             "1.0",               // cost_multiplier
             created_at,
             "grok_session",      // data_source
-            INPUT_TOKEN_SEMANTICS_TOTAL,
+            INPUT_TOKEN_SEMANTICS_FRESH,
+            i64::from(native_cost),
         ],
     )
     .map_err(|e| AppError::Database(format!("插入 Grok Build 会话日志失败: {e}")))?;
@@ -544,7 +529,6 @@ fn insert_grok_session_entry(
 mod tests {
     use super::*;
     use crate::services::session_usage::get_sync_state;
-    use crate::services::usage_stats::SESSION_PROXY_DEDUP_WINDOW_SECONDS;
     use std::io::Write;
     use std::time::SystemTime;
     use tempfile::tempdir;
@@ -652,7 +636,7 @@ mod tests {
             "{\"timestamp\":\"2026-07-20T13:26:20Z\",\"method\":\"_x.ai/session/update\",\"params\":{\"update\":{\"sessionUpdate\":\"usage_snapshot\",\"prompt_id\":\"px\",\"usage\":{\"inputTokens\":9999,\"outputTokens\":9,\"cachedReadTokens\":0}}}}\n",
             "{\"timestamp\":\"2026-07-20T13:26:24Z\",\"method\":\"_x.ai/session/update\",\"params\":{\"update\":{\"sessionUpdate\":\"turn_completed\",\"prompt_id\":\"p1\",\"usage\":{\"inputTokens\":16632,\"outputTokens\":104,\"cachedReadTokens\":0,\"modelUsage\":{\"grok-4.5-build\":{\"inputTokens\":16632,\"outputTokens\":104,\"cachedReadTokens\":0,\"apiDurationMs\":5342,\"costUsdTicks\":338880000}}}}}}\n",
         );
-        let events = parse_grok_usage_events(content);
+        let events = parse_grok_usage_events(content.as_bytes()).unwrap();
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].prompt_id, "p1");
         assert_eq!(events[0].per_model.len(), 1);
@@ -678,7 +662,7 @@ mod tests {
             r#"{{"timestamp":"{}","method":"_x.ai/session/update","params":{{"update":{{"prompt_id":"p1","usage":{{"inputTokens":100,"outputTokens":10,"cachedReadTokens":5}}}}}}}}"#,
             epoch_to_rfc3339(OLD_EPOCH)
         );
-        let events = parse_grok_usage_events(&line);
+        let events = parse_grok_usage_events(line.as_bytes()).unwrap();
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].per_model[0].0, "unknown");
         assert_eq!(events[0].per_model[0].1.input, 100);
@@ -718,10 +702,10 @@ mod tests {
 
         let rows = query_rows(&db)?;
         assert_eq!(rows.len(), 2);
-        assert_eq!((rows[0].1, rows[0].2, rows[0].3), (17294, 28, 11136));
-        assert_eq!((rows[1].1, rows[1].2, rows[1].3), (17347, 56, 17280));
-        // 语义列显式为 TOTAL，与代理路径一致
-        assert!(rows.iter().all(|r| r.4 == INPUT_TOKEN_SEMANTICS_TOTAL));
+        // input_tokens 入库的是未命中缓存的输入（inputTokens − cachedReadTokens）
+        assert_eq!((rows[0].1, rows[0].2, rows[0].3), (6158, 28, 11136));
+        assert_eq!((rows[1].1, rows[1].2, rows[1].3), (67, 56, 17280));
+        assert!(rows.iter().all(|r| r.4 == INPUT_TOKEN_SEMANTICS_FRESH));
 
         // 本地定价复算须与 CLI 自报 ticks 分毫不差（漂移告警在此阈值内静默）
         let costs = query_costs(&db)?;
@@ -762,8 +746,8 @@ mod tests {
 
         let rows = query_rows(&db)?;
         assert_eq!(rows.len(), 2);
-        assert_eq!((rows[0].1, rows[0].2, rows[0].3), (27386, 74, 15360));
-        assert_eq!((rows[1].1, rows[1].2, rows[1].3), (13793, 21, 13696));
+        assert_eq!((rows[0].1, rows[0].2, rows[0].3), (12026, 74, 15360));
+        assert_eq!((rows[1].1, rows[1].2, rows[1].3), (97, 21, 13696));
         Ok(())
     }
 
@@ -846,66 +830,6 @@ mod tests {
 
         let (last_modified, _) = get_sync_state(&db, &path.to_string_lossy())?;
         assert_ne!(last_modified, 0, "导入后记录同步状态");
-        Ok(())
-    }
-
-    #[test]
-    fn takeover_guard_skips_events_near_proxy_activity() -> Result<(), AppError> {
-        let db = Database::memory()?;
-        {
-            let conn = lock_conn!(db.conn);
-            conn.execute(
-                "INSERT INTO proxy_request_logs (
-                    request_id, provider_id, app_type, model, request_model,
-                    input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens,
-                    total_cost_usd, latency_ms, status_code, created_at, data_source
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                rusqlite::params![
-                    "grok-proxy-req",
-                    "some-provider",
-                    "grokbuild",
-                    "grok-4.5",
-                    "grok-4.5",
-                    999,
-                    88,
-                    0,
-                    0,
-                    "0.01",
-                    100,
-                    200,
-                    OLD_EPOCH + 30,
-                    "proxy"
-                ],
-            )?;
-        }
-        let temp = tempdir().expect("tempdir");
-        let lines = vec![
-            // 事件时刻落在代理行 ±窗口内 → 接管态，跳过（代理行权威）
-            usage_event_line(
-                OLD_EPOCH,
-                "p1",
-                &model_counters("grok-4.5-build", 100, 10, 0, 1),
-            ),
-            // 远离接管窗口的后续事件按面值正常导入
-            usage_event_line(
-                OLD_EPOCH + SESSION_PROXY_DEDUP_WINDOW_SECONDS + 3600,
-                "p2",
-                &model_counters("grok-4.5-build", 250, 30, 0, 1),
-            ),
-        ];
-        let path = write_session_file(temp.path(), "sess-guard", &lines);
-
-        let result = sync_single_grok_file(
-            &db,
-            &path,
-            &crate::services::session_usage::load_sync_cursors(&db).unwrap(),
-        )?;
-        assert_eq!(result.skipped, 1, "守卫跳过计入 skipped（未入账）");
-        assert_eq!(result.imported, 1);
-
-        let rows = query_rows(&db)?;
-        assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].1, 250, "守卫外事件按本轮面值入账");
         Ok(())
     }
 
@@ -1218,32 +1142,6 @@ mod tests {
         let expected = Decimal::from(56_540_000u64) / Decimal::from(10_000_000_000u64);
         assert_eq!(Decimal::from_str(&total).expect("decimal"), expected);
         Ok(())
-    }
-
-    #[test]
-    fn oversized_updates_jsonl_is_skipped_without_reading_into_memory() {
-        let db = Database::memory().expect("memory db");
-        let temp = tempdir().expect("tempdir");
-        let path = write_session_file(temp.path(), "sess-huge", &[]);
-
-        // 制造一个超过 50 MiB 的文件，但内容为空（不会被解析）。
-        let huge = std::fs::OpenOptions::new()
-            .write(true)
-            .truncate(true)
-            .open(&path)
-            .expect("open");
-        huge.set_len(MAX_GROK_FILE_BYTES + 1).expect("set_len");
-        drop(huge);
-
-        let result = sync_single_grok_file(
-            &db,
-            &path,
-            &crate::services::session_usage::load_sync_cursors(&db).unwrap(),
-        )
-        .expect("sync should not fail");
-        assert_eq!(result.imported, 0, "oversized file must not be imported");
-        assert_eq!(result.skipped, 0);
-        assert_eq!(result.deferred_files, 0);
     }
 
     #[test]

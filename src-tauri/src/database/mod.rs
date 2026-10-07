@@ -24,7 +24,7 @@
 //! ```
 
 pub(crate) mod backup;
-mod dao;
+pub(crate) mod dao;
 mod migration;
 mod schema;
 
@@ -146,7 +146,9 @@ impl Database {
         }
 
         // Startup cleanup: prune old logs and reclaim space
-        if let Err(e) = db.rollup_and_prune(30) {
+        if let Err(e) =
+            db.rollup_and_prune(crate::database::dao::usage_rollup::USAGE_DETAIL_RETENTION_DAYS)
+        {
             log::warn!("Startup rollup_and_prune failed: {e}");
         }
         // Reclaim disk space after cleanup

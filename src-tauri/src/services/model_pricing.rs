@@ -230,8 +230,8 @@ fn load_or_create_file_unlocked() -> Result<ModelPricingFile, AppError> {
     }
 
     // The local file stores user/models.dev overrides only. Exporting the
-    // complete seeded table here would turn built-in prices into overrides and
-    // roll back future repair_current_model_pricing corrections on startup.
+    // complete seeded table here would turn built-in prices into overrides that
+    // hide later corrections to the built-in table.
     let file = ModelPricingFile::default();
     write_file_unlocked(&file)?;
     Ok(file)
@@ -307,7 +307,7 @@ pub fn sync_local_model_pricing(db: &Database) -> Result<usize, AppError> {
     // particular, seeded rows covered by tombstones may be reinserted and
     // deleted on every startup; they must not trigger a full-table backfill.
     if upserted > 0 {
-        if let Err(error) = db.backfill_missing_usage_costs() {
+        if let Err(error) = db.reprice_usage_costs() {
             log::warn!("本地模型定价同步后回填历史用量成本失败: {error}");
         }
     }
@@ -414,12 +414,12 @@ fn update_model_pricing_batch_inner(
 
     if changed > 0 {
         if backfill_all {
-            if let Err(error) = db.backfill_missing_usage_costs() {
+            if let Err(error) = db.reprice_usage_costs() {
                 log::warn!("批量更新模型定价后回填历史用量成本失败: {error}");
             }
         } else {
             for model_id in model_ids {
-                if let Err(error) = db.backfill_missing_usage_costs_for_model(&model_id) {
+                if let Err(error) = db.reprice_usage_costs_for_model(&model_id) {
                     log::warn!("模型定价更新后回填历史用量成本失败 (model_id={model_id}): {error}");
                 }
             }

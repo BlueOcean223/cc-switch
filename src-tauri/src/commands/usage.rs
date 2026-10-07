@@ -303,19 +303,10 @@ pub fn get_session_usage_last_sync() -> Option<i64> {
     crate::services::session_usage::last_sync_completed_at()
 }
 
-/// Codex reset 成功后，无论重导是否导入新行或返回错误，都必须通知前端刷新。
-/// 调用方应只在 reset 成功后调用，避免把未发生的数据变更误报为重建完成。
-fn finish_codex_rebuild(
-    result: Result<crate::services::session_usage::SessionSyncResult, AppError>,
-) -> Result<crate::services::session_usage::SessionSyncResult, AppError> {
-    crate::usage_events::notify_log_recorded();
-    result
-}
-
-/// 备份数据库后，仅重建 Codex session 用量。锁覆盖 backup → reset → import
-/// 整个序列，避免后台同步在清理和重导之间插入数据。
+/// 备份数据库后，按会话日志重建全部用量（见 [`crate::services::usage_rebuild`]）。
+/// 锁覆盖清理 → 重导 → 汇总整个序列，避免后台同步插在中间。
 #[tauri::command]
-pub async fn rebuild_codex_usage(
+pub async fn rebuild_session_usage(
     state: State<'_, AppState>,
 ) -> Result<crate::services::session_usage::SessionSyncResult, AppError> {
     let db = state.db.clone();
@@ -323,13 +314,10 @@ pub async fn rebuild_codex_usage(
         .lock()
         .await;
     tauri::async_runtime::spawn_blocking(move || {
-        db.backup_database_file()?;
-        db.reset_codex_usage()?;
-        let result = crate::services::session_usage_codex::sync_codex_usage(&db);
-        finish_codex_rebuild(result)
+        crate::services::usage_rebuild::rebuild_session_usage(&db)
     })
     .await
-    .map_err(|error| AppError::Message(format!("Codex 用量重建任务失败: {error}")))?
+    .map_err(|error| AppError::Message(format!("用量重建任务失败: {error}")))?
 }
 
 /// 获取数据来源分布
@@ -338,34 +326,4 @@ pub fn get_usage_data_sources(
     state: State<'_, AppState>,
 ) -> Result<Vec<crate::services::session_usage::DataSourceSummary>, AppError> {
     crate::services::session_usage::get_data_source_breakdown(&state.db)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn codex_rebuild_notifies_when_reimport_is_empty() {
-        crate::usage_events::take_test_notify_count();
-
-        let result = finish_codex_rebuild(Ok(
-            crate::services::session_usage::SessionSyncResult::default(),
-        ))
-        .expect("空重导应成功");
-
-        assert_eq!(result.imported, 0);
-        assert_eq!(crate::usage_events::take_test_notify_count(), 1);
-    }
-
-    #[test]
-    fn codex_rebuild_notifies_when_reimport_fails_after_reset() {
-        crate::usage_events::take_test_notify_count();
-
-        let result = finish_codex_rebuild(Err(AppError::Message(
-            "synthetic reimport failure".to_string(),
-        )));
-
-        assert!(result.is_err());
-        assert_eq!(crate::usage_events::take_test_notify_count(), 1);
-    }
 }

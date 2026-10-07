@@ -1488,6 +1488,7 @@
     "totalCost": "Total Cost",
     "cost": "Cost",
     "unpriced": "Unpriced",
+    "unpricedModelHint": "This model has no price in the pricing table, so its cost counts as 0. Add a price under Model Pricing and costs are recalculated automatically.",
     "realTotal": "Tokens Processed",
     "freshInput": "Fresh Input",
     "cacheHitRate": "Cache Hit Rate",
@@ -1511,22 +1512,21 @@
       "all": "All",
       "label": "Filter by app"
     },
-    "rawInputLabel": "Raw",
     "sessionSync": {
       "syncNow": "Sync Now",
       "syncCompleted": "Sync completed: {{imported}} imported, {{files}} files scanned, {{errors}} errors",
       "syncFailed": "Session usage sync failed: {{error}}"
     },
-    "rebuildCodex": {
-      "title": "Codex Usage Maintenance",
-      "description": "Rebuild Codex session usage from local rollout logs",
-      "warning": "The database is backed up first. History whose source JSONL has been deleted cannot be re-imported.",
-      "confirmTitle": "Rebuild Codex usage?",
-      "confirmMessage": "This clears existing Codex session details and rollups, then imports them again from local Codex logs.\n\nHistory with deleted logs will be lost. Forks whose parent rollout is missing will be deferred.",
+    "rebuildUsage": {
+      "title": "Usage Maintenance",
+      "description": "Rebuild all usage from local session logs",
+      "warning": "The database is backed up first. Days whose logs have been deleted keep their existing daily totals.",
+      "confirmTitle": "Rebuild usage?",
+      "confirmMessage": "This clears usage imported from session logs, imports it again from each tool's local logs, and rebuilds the daily totals older than 30 days.\n\nDays whose logs have been deleted keep their existing totals. Codex forks whose parent rollout is missing will be deferred.",
       "confirmAction": "Back Up and Rebuild",
-      "completed": "Rebuild complete: {{imported}} imported, {{errors}} errors, {{suspected}} suspected duplicates, {{deferred}} deferred files",
-      "failed": "Codex usage rebuild failed: {{error}}",
-      "actionEllipsis": "Rebuild Codex Usage"
+      "completed": "Rebuild complete: {{imported}} imported, {{errors}} errors, {{deferred}} deferred files",
+      "failed": "Usage rebuild failed: {{error}}",
+      "actionEllipsis": "Rebuild Usage"
     },
     "totalRecords": "{{total}} records total",
     "pageInputPlaceholder": "Page",

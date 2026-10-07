@@ -6,7 +6,6 @@ import { HelpTip } from "@/components/ui/help-tip";
 import { AppGlyph, APP_DISPLAY_NAME } from "@/components/shell/AppGlyph";
 import type { AppId } from "@/lib/api";
 import {
-  getFreshInputTokens,
   isUnpricedUsage,
   type LogFilters,
   type RequestLog,
@@ -159,8 +158,7 @@ export function RequestLogTable({
 
   const renderRow = (log: RequestLog) => {
     const unpriced = isUnpricedUsage(log);
-    const freshInput = getFreshInputTokens(log);
-    const isCacheInclusive = log.inputTokens !== freshInput;
+    const freshInput = log.inputTokens;
     const time = formatLogTime(log.createdAt, now);
     const fullTime = formatLogFullTime(log.createdAt);
     const providerLabel = getUsageProviderLabel(log.providerName, t);
@@ -251,14 +249,7 @@ export function RequestLogTable({
             {log.model}
           </span>
         </td>
-        <td
-          className={usageTable.tdEnd}
-          title={
-            isCacheInclusive
-              ? `${fmtInt(freshInput, locale)} (${t("usage.rawInputLabel")}: ${fmtInt(log.inputTokens, locale)})`
-              : fmtInt(freshInput, locale)
-          }
-        >
+        <td className={usageTable.tdEnd} title={fmtInt(freshInput, locale)}>
           {formatTokensCompact(freshInput, locale)}
         </td>
         <td

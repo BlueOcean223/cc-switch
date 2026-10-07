@@ -20,10 +20,10 @@ use crate::opencode_config::get_opencode_db_path;
 use crate::services::session_usage::{
     metadata_modified_nanos, update_sync_state, SessionSyncResult,
 };
-use crate::services::usage_stats::{find_model_pricing, should_skip_session_insert, DedupKey};
-use crate::token_usage::calculator::CostCalculator;
+use crate::services::sql_helpers::INPUT_TOKEN_SEMANTICS_FRESH;
+use crate::services::usage_stats::find_model_pricing;
+use crate::token_usage::calculator::{CostBreakdown, CostCalculator, ServiceTier};
 use crate::token_usage::parser::TokenUsage;
-use rust_decimal::Decimal;
 use std::fs;
 use std::time::SystemTime;
 
@@ -83,7 +83,6 @@ pub fn sync_opencode_usage(db: &Database) -> Result<SessionSyncResult, AppError>
             imported: 0,
             skipped: 0,
             files_scanned: 0,
-            suspected_duplicates: 0,
             deferred_files: 0,
             errors: vec![],
         });
@@ -113,7 +112,6 @@ pub fn sync_opencode_usage(db: &Database) -> Result<SessionSyncResult, AppError>
             imported: 0,
             skipped: 0,
             files_scanned: 1,
-            suspected_duplicates: 0,
             deferred_files: 0,
             errors: vec![],
         });
@@ -128,7 +126,6 @@ pub fn sync_opencode_usage(db: &Database) -> Result<SessionSyncResult, AppError>
         imported: 0,
         skipped: 0,
         files_scanned: 1,
-        suspected_duplicates: 0,
         deferred_files: 0,
         errors: vec![],
     };
@@ -418,70 +415,48 @@ fn insert_opencode_message(
             .map(|d| d.as_secs() as i64)
             .unwrap_or(0)
     };
+    // 保留期以前的日期已经汇总，再导入会在下次汇总时重复计入
+    if crate::services::usage_rebuild::is_below_import_floor(created_at) {
+        return Ok(false);
+    }
 
     // OpenCode 使用 Anthropic 风格：input 是新鲜输入，cache 单独计
     // output 包含 reasoning tokens（按输出计费）
     let output_with_reasoning = msg.output_tokens + msg.reasoning_tokens;
 
-    let dedup_key = DedupKey {
-        app_type: "opencode",
-        model: &msg.model_id,
+    let already_imported: bool = conn
+        .prepare_cached("SELECT EXISTS(SELECT 1 FROM proxy_request_logs WHERE request_id = ?1)")
+        .and_then(|mut stmt| stmt.query_row([request_id], |row| row.get(0)))
+        .map_err(|e| AppError::Database(format!("查询 request_id 失败: {e}")))?;
+    if already_imported {
+        return Ok(false);
+    }
+
+    // 有定价就按 cc-switch 的定价算，和其他应用用同一套价格：OpenCode 记的费用来自
+    // 它自己的价格表，官方调价后不一定跟上。没有定价才用 OpenCode 记的费用（合计值，
+    // 分项记 0，标记 native_cost 让重算不覆盖）。
+    let usage = TokenUsage {
         input_tokens: msg.input_tokens,
         output_tokens: output_with_reasoning,
         cache_read_tokens: msg.cache_read_tokens,
         cache_creation_tokens: msg.cache_write_tokens,
-        created_at,
+        cache_creation_1h_tokens: 0,
     };
-    if should_skip_session_insert(&conn, request_id, &dedup_key)? {
-        return Ok(false);
-    }
-
-    // 如果 opencode 已经提供了费用，直接使用；否则从模型定价计算
-    let (input_cost, output_cost, cache_read_cost, cache_creation_cost, total_cost) =
-        if msg.cost > 0.0 {
-            // opencode 已计算费用，直接使用
-            // 简化处理：全部放入 total_cost（opencode 的 cost 是聚合值，无法精确拆分）
-            (
-                "0".to_string(),
-                "0".to_string(),
-                "0".to_string(),
-                "0".to_string(),
-                msg.cost.to_string(),
-            )
-        } else {
-            // opencode 费用为 0（如免费模型），尝试用 cc-switch 自带的模型定价计算
-            let usage = TokenUsage {
-                input_tokens: msg.input_tokens,
-                output_tokens: output_with_reasoning,
-                cache_read_tokens: msg.cache_read_tokens,
-                cache_creation_tokens: msg.cache_write_tokens,
-            };
-
-            match find_model_pricing(&conn, &msg.model_id) {
-                Some(pricing) => {
-                    let cost = CostCalculator::calculate_for_app(
-                        "opencode",
-                        &usage,
-                        &pricing,
-                        Decimal::from(1),
-                    );
-                    (
-                        cost.input_cost.to_string(),
-                        cost.output_cost.to_string(),
-                        cost.cache_read_cost.to_string(),
-                        cost.cache_creation_cost.to_string(),
-                        cost.total_cost.to_string(),
-                    )
-                }
-                None => (
-                    "0".to_string(),
-                    "0".to_string(),
-                    "0".to_string(),
-                    "0".to_string(),
-                    "0".to_string(),
-                ),
-            }
-        };
+    let pricing = find_model_pricing(&conn, &msg.model_id);
+    let native_cost = pricing.is_none() && msg.cost > 0.0;
+    let [input_cost, output_cost, cache_read_cost, cache_creation_cost, total_cost] = match pricing
+    {
+        Some(pricing) => {
+            CostCalculator::calculate(&usage, &pricing, ServiceTier::Standard, created_at)
+                .to_strings()
+        }
+        None if native_cost => {
+            let mut costs = CostBreakdown::zero_strings();
+            costs[4] = msg.cost.to_string();
+            costs
+        }
+        None => CostBreakdown::zero_strings(),
+    };
 
     let inserted_rows = conn.execute(
         "INSERT OR IGNORE INTO proxy_request_logs (
@@ -489,8 +464,9 @@ fn insert_opencode_message(
             input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens,
             input_cost_usd, output_cost_usd, cache_read_cost_usd, cache_creation_cost_usd, total_cost_usd,
             latency_ms, first_token_ms, status_code, error_message, session_id,
-            provider_type, is_streaming, cost_multiplier, created_at, data_source
-        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24)",
+            provider_type, is_streaming, cost_multiplier, created_at, data_source,
+            input_token_semantics, native_cost
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26)",
         rusqlite::params![
             request_id,
             "_opencode_session",   // provider_id
@@ -516,6 +492,8 @@ fn insert_opencode_message(
             "1.0",                 // cost_multiplier
             created_at,
             "opencode_session",    // data_source
+            INPUT_TOKEN_SEMANTICS_FRESH,
+            i64::from(native_cost),
         ],
     )
     .map_err(|e| AppError::Database(format!("插入 OpenCode 会话日志失败: {e}")))?;

@@ -1488,6 +1488,7 @@
     "totalCost": "總成本",
     "cost": "成本",
     "unpriced": "未定價",
+    "unpricedModelHint": "定價表裡沒有這個模型，成本以 0 計。在「模型定價」裡補上價格後會自動重算。",
     "realTotal": "真實消耗 Tokens",
     "freshInput": "新增輸入",
     "cacheHitRate": "快取命中率",
@@ -1511,22 +1512,21 @@
       "all": "全部",
       "label": "依應用程式篩選"
     },
-    "rawInputLabel": "原始",
     "sessionSync": {
       "syncNow": "立即同步",
       "syncCompleted": "同步完成：新增 {{imported}} 筆，掃描 {{files}} 個檔案，錯誤 {{errors}}",
       "syncFailed": "工作階段用量同步失敗：{{error}}"
     },
-    "rebuildCodex": {
-      "title": "Codex 用量維護",
-      "description": "從本機 rollout 日誌重新建構 Codex 工作階段用量",
-      "warning": "重建前會自動備份資料庫。若來源 JSONL 已刪除，對應歷史將無法重新匯入。",
-      "confirmTitle": "確認重建 Codex 用量",
-      "confirmMessage": "此操作會清除現有 Codex 工作階段明細與彙總，再從本機 Codex 日誌重新匯入。\n\n已刪除日誌對應的歷史將遺失；缺少父 rollout 的 fork 會暫緩匯入。",
+    "rebuildUsage": {
+      "title": "用量維護",
+      "description": "從本機工作階段日誌重新建構全部用量",
+      "warning": "重建前會自動備份資料庫。日誌已刪除的日期保留原有的每日彙總。",
+      "confirmTitle": "確認重建用量",
+      "confirmMessage": "此操作會清除從工作階段日誌匯入的用量明細，再從各工具的本機工作階段日誌重新匯入，並重新彙總 30 天前的資料。\n\n日誌已刪除的日期保留原有的彙總；缺少父 rollout 的 Codex fork 會暫緩匯入。",
       "confirmAction": "備份並重建",
-      "completed": "重建完成：匯入 {{imported}} 筆，錯誤 {{errors}}，疑似重複 {{suspected}}，暫緩檔案 {{deferred}}",
-      "failed": "Codex 用量重建失敗：{{error}}",
-      "actionEllipsis": "重建 Codex 用量"
+      "completed": "重建完成：匯入 {{imported}} 筆，錯誤 {{errors}}，暫緩檔案 {{deferred}}",
+      "failed": "用量重建失敗：{{error}}",
+      "actionEllipsis": "重建用量"
     },
     "totalRecords": "共 {{total}} 筆紀錄",
     "pageInputPlaceholder": "頁碼",

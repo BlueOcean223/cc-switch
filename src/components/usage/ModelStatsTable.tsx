@@ -76,34 +76,49 @@ export function ModelStatsTable({
                 </td>
               </tr>
             ) : (
-              pagination.pageRows.map((stat) => (
-                <tr key={stat.model} className={usageTable.row}>
-                  <td className={cn(usageTable.td, usageTable.mono)}>
-                    <span
-                      className="block max-w-[320px] truncate"
-                      title={stat.model}
+              pagination.pageRows.map((stat) => {
+                // 有 token 但成本为 0：定价表里没有这个模型，不是真的免费
+                const unpriced =
+                  stat.totalTokens > 0 &&
+                  Number.parseFloat(stat.totalCost) === 0;
+                return (
+                  <tr key={stat.model} className={usageTable.row}>
+                    <td className={cn(usageTable.td, usageTable.mono)}>
+                      <span
+                        className="block max-w-[320px] truncate"
+                        title={stat.model}
+                      >
+                        {stat.model}
+                      </span>
+                    </td>
+                    <td className={usageTable.tdEnd}>
+                      {fmtInt(stat.requestCount, locale)}
+                    </td>
+                    <td
+                      className={usageTable.tdEnd}
+                      title={fmtInt(stat.totalTokens, locale)}
                     >
-                      {stat.model}
-                    </span>
-                  </td>
-                  <td className={usageTable.tdEnd}>
-                    {fmtInt(stat.requestCount, locale)}
-                  </td>
-                  <td
-                    className={usageTable.tdEnd}
-                    title={fmtInt(stat.totalTokens, locale)}
-                  >
-                    {formatTokensCompact(stat.totalTokens, locale)}
-                  </td>
-                  <td
-                    className={cn(usageTable.tdEnd, "font-medium")}
-                    title={`${fmtUsd(stat.totalCost, 6)} · ${t("usage.avgCost")} ${fmtUsd(stat.avgCostPerRequest, 4)}`}
-                  >
-                    {fmtUsd(stat.totalCost, 2)}
-                  </td>
-                  <SuccessSpeedCells stat={stat} />
-                </tr>
-              ))
+                      {formatTokensCompact(stat.totalTokens, locale)}
+                    </td>
+                    <td
+                      className={cn(
+                        usageTable.tdEnd,
+                        unpriced ? "text-fg-3" : "font-medium",
+                      )}
+                      title={
+                        unpriced
+                          ? t("usage.unpricedModelHint")
+                          : `${fmtUsd(stat.totalCost, 6)} · ${t("usage.avgCost")} ${fmtUsd(stat.avgCostPerRequest, 4)}`
+                      }
+                    >
+                      {unpriced
+                        ? t("usage.unpriced")
+                        : fmtUsd(stat.totalCost, 2)}
+                    </td>
+                    <SuccessSpeedCells stat={stat} />
+                  </tr>
+                );
+              })
             )}
           </tbody>
         </table>

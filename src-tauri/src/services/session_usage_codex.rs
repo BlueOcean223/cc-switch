@@ -20,13 +20,11 @@ use crate::services::session_usage::{
     estimated_latency_ms, metadata_modified_nanos, parse_timestamp_millis, update_sync_state,
     update_sync_state_on_conn, SessionSyncResult,
 };
-use crate::services::usage_stats::{
-    find_model_pricing, has_suspected_codex_session_duplicate, should_skip_session_insert, DedupKey,
-};
-use crate::token_usage::calculator::{CostCalculator, ModelPricing};
+use crate::services::sql_helpers::INPUT_TOKEN_SEMANTICS_FRESH;
+use crate::services::usage_stats::find_model_pricing;
+use crate::token_usage::calculator::{CostBreakdown, CostCalculator, ModelPricing, ServiceTier};
 use crate::token_usage::parser::TokenUsage;
 use chrono::{DateTime, Utc};
-use rust_decimal::Decimal;
 use std::collections::HashMap;
 use std::fs;
 use std::io::{BufRead, BufReader};
@@ -49,20 +47,38 @@ const CODEX_THREAD_REQUEST_ID_PREFIX: &str = "codex_session:thread-v1";
 struct CumulativeTokens {
     input: u64,
     cached_input: u64,
+    /// `cache_write_input_tokens`：写入缓存的输入，和 `cached_input` 一样含在 `input` 里
+    cache_write: u64,
     output: u64,
 }
 
 /// 单次 API 调用的 token 增量
 #[derive(Debug)]
 struct DeltaTokens {
+    /// 含缓存读和缓存写的全部输入（Codex 日志的口径）
     input: u32,
     cached_input: u32,
+    cache_write: u32,
     output: u32,
 }
 
 impl DeltaTokens {
     fn is_zero(&self) -> bool {
-        self.input == 0 && self.cached_input == 0 && self.output == 0
+        self.input == 0 && self.cached_input == 0 && self.cache_write == 0 && self.output == 0
+    }
+
+    /// 换成互不重叠的几桶：未命中缓存的输入 = 全部输入 − 缓存读 − 缓存写。
+    fn token_usage(&self) -> TokenUsage {
+        TokenUsage {
+            input_tokens: self
+                .input
+                .saturating_sub(self.cached_input)
+                .saturating_sub(self.cache_write),
+            output_tokens: self.output,
+            cache_read_tokens: self.cached_input,
+            cache_creation_tokens: self.cache_write,
+            cache_creation_1h_tokens: 0,
+        }
     }
 }
 
@@ -140,11 +156,18 @@ fn windows_file_identity(file: &fs::File) -> Option<(u64, [u8; 16])> {
     ))
 }
 
+/// 父 rollout 还没写到子会话的派生时刻时，只在父文件最近这段时间内还有写入时
+/// 等它：会话还在进行，父文件稍后会补上。超过这个时间父文件不会再写，按已有的
+/// 内容对齐，对不上的部分交给写入节奏判断（见 [`replay_prefix_len`]）。
+const PARENT_CATCH_UP_WINDOW: std::time::Duration = std::time::Duration::from_secs(10 * 60);
+
 #[derive(Debug)]
 struct ParentTokenTimeline {
     events: Vec<TimestampedTokenSignature>,
     max_timestamp: Option<DateTime<Utc>>,
     has_token_without_timestamp: bool,
+    /// 父文件的修改时间（纳秒），取不到为 None
+    modified_nanos: Option<i64>,
 }
 
 impl ParentTokenTimeline {
@@ -162,6 +185,7 @@ impl ParentTokenTimeline {
         if self
             .max_timestamp
             .is_none_or(|timestamp| timestamp < cutoff)
+            && self.may_still_be_written()
         {
             return Err(format!(
                 "父 rollout {} 尚未写到 child fork 时刻",
@@ -174,6 +198,19 @@ impl ParentTokenTimeline {
             .filter(|event| event.timestamp <= cutoff)
             .map(|event| event.signature.clone())
             .collect())
+    }
+
+    fn may_still_be_written(&self) -> bool {
+        let Some(modified_nanos) = self.modified_nanos else {
+            return true;
+        };
+        let now_nanos = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .map_or(i64::MAX, |elapsed| {
+                i64::try_from(elapsed.as_nanos()).unwrap_or(i64::MAX)
+            });
+        let window = i64::try_from(PARENT_CATCH_UP_WINDOW.as_nanos()).unwrap_or(i64::MAX);
+        now_nanos.saturating_sub(modified_nanos) < window
     }
 }
 
@@ -197,6 +234,8 @@ struct ParsedTokenEvent {
     delta: DeltaTokens,
     event_index: Option<u32>,
     model: String,
+    /// 线程设置里的 `service_tier`（priority / fast 按 priority 档计价）
+    service_tier: ServiceTier,
     timestamp: Option<String>,
     /// 按事件时间戳估出来的请求耗时（含首字等待）；估不出来为 None。
     latency_ms: Option<i64>,
@@ -455,138 +494,6 @@ pub(crate) fn clear_codex_replay_caches() {
     replay_caches().clear_poison();
 }
 
-fn is_rollout_filename(file_name: &str) -> bool {
-    if !file_name.starts_with("rollout-") || !file_name.ends_with(".jsonl") {
-        return false;
-    }
-    let stem = file_name.trim_end_matches(".jsonl");
-    stem.get(stem.len().saturating_sub(36)..)
-        .is_some_and(|candidate| uuid::Uuid::parse_str(candidate).is_ok())
-}
-
-fn is_codex_cursor_path(file_path: &str, codex_dir: &Path) -> bool {
-    let path = Path::new(file_path);
-    let file_name = file_path.rsplit(['/', '\\']).next().unwrap_or_default();
-    if !is_rollout_filename(file_name) {
-        return false;
-    }
-
-    if path.starts_with(codex_dir.join("sessions"))
-        || path.starts_with(codex_dir.join("archived_sessions"))
-    {
-        return true;
-    }
-
-    // 兼容用户改过 CODEX_HOME 后遗留、且源文件已不存在的 cursor。只接受
-    // 明确目录段 + Codex rollout UUID 文件名，避免宽 codex_dir 误删其他 importer。
-    file_path
-        .replace('\\', "/")
-        .split('/')
-        .any(|segment| matches!(segment, "sessions" | "archived_sessions"))
-}
-
-fn sqlite_table_exists(conn: &rusqlite::Connection, table: &str) -> Result<bool, AppError> {
-    conn.query_row(
-        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1)",
-        [table],
-        |row| row.get(0),
-    )
-    .map_err(|error| AppError::Database(format!("查询表 {table} 失败: {error}")))
-}
-
-fn sqlite_column_exists(
-    conn: &rusqlite::Connection,
-    table: &str,
-    column: &str,
-) -> Result<bool, AppError> {
-    conn.query_row(
-        "SELECT EXISTS(SELECT 1 FROM pragma_table_info(?1) WHERE name = ?2)",
-        rusqlite::params![table, column],
-        |row| row.get(0),
-    )
-    .map_err(|error| AppError::Database(format!("查询列 {table}.{column} 失败: {error}")))
-}
-
-pub(crate) fn reset_codex_usage_on_conn(
-    conn: &rusqlite::Connection,
-    codex_dir: &Path,
-) -> Result<(), AppError> {
-    if sqlite_table_exists(conn, "proxy_request_logs")?
-        && sqlite_column_exists(conn, "proxy_request_logs", "data_source")?
-    {
-        conn.execute(
-            "DELETE FROM proxy_request_logs WHERE data_source = 'codex_session'",
-            [],
-        )
-        .map_err(|error| AppError::Database(format!("清理 Codex 会话明细失败: {error}")))?;
-    }
-    if sqlite_table_exists(conn, "usage_daily_rollups")?
-        && sqlite_column_exists(conn, "usage_daily_rollups", "provider_id")?
-    {
-        conn.execute(
-            "DELETE FROM usage_daily_rollups WHERE provider_id = '_codex_session'",
-            [],
-        )
-        .map_err(|error| AppError::Database(format!("清理 Codex 用量汇总失败: {error}")))?;
-    }
-    if sqlite_table_exists(conn, "session_log_sync")?
-        && sqlite_column_exists(conn, "session_log_sync", "file_path")?
-    {
-        let paths = {
-            let mut statement = conn
-                .prepare("SELECT file_path FROM session_log_sync")
-                .map_err(|error| {
-                    AppError::Database(format!("读取会话同步 cursor 失败: {error}"))
-                })?;
-            let paths = statement
-                .query_map([], |row| row.get::<_, String>(0))
-                .map_err(|error| AppError::Database(format!("查询会话同步 cursor 失败: {error}")))?
-                .collect::<Result<Vec<_>, _>>()
-                .map_err(|error| {
-                    AppError::Database(format!("解析会话同步 cursor 失败: {error}"))
-                })?;
-            paths
-        };
-        for file_path in paths
-            .into_iter()
-            .filter(|path| is_codex_cursor_path(path, codex_dir))
-        {
-            conn.execute(
-                "DELETE FROM session_log_sync WHERE file_path = ?1",
-                [file_path],
-            )
-            .map_err(|error| AppError::Database(format!("清理 Codex 同步 cursor 失败: {error}")))?;
-        }
-    }
-    Ok(())
-}
-
-impl Database {
-    pub(crate) fn reset_codex_usage(&self) -> Result<(), AppError> {
-        let codex_dir = get_codex_config_dir();
-        let conn = lock_conn!(self.conn);
-        conn.execute("SAVEPOINT reset_codex_usage", [])
-            .map_err(|error| AppError::Database(format!("开启 Codex 重建事务失败: {error}")))?;
-        let result = reset_codex_usage_on_conn(&conn, &codex_dir);
-        match result {
-            Ok(()) => {
-                conn.execute("RELEASE reset_codex_usage", [])
-                    .map_err(|error| {
-                        AppError::Database(format!("提交 Codex 重建事务失败: {error}"))
-                    })?;
-                drop(conn);
-                clear_codex_replay_caches();
-                Ok(())
-            }
-            Err(error) => {
-                conn.execute("ROLLBACK TO reset_codex_usage", []).ok();
-                conn.execute("RELEASE reset_codex_usage", []).ok();
-                Err(error)
-            }
-        }
-    }
-}
-
 fn non_empty_string(value: Option<&serde_json::Value>) -> Option<String> {
     value
         .and_then(serde_json::Value::as_str)
@@ -822,11 +729,13 @@ fn compute_delta(prev: &Option<CumulativeTokens>, current: &CumulativeTokens) ->
         None => DeltaTokens {
             input: current.input as u32,
             cached_input: current.cached_input as u32,
+            cache_write: current.cache_write as u32,
             output: current.output as u32,
         },
         Some(p) => DeltaTokens {
             input: current.input.saturating_sub(p.input) as u32,
             cached_input: current.cached_input.saturating_sub(p.cached_input) as u32,
+            cache_write: current.cache_write.saturating_sub(p.cache_write) as u32,
             output: current.output.saturating_sub(p.output) as u32,
         },
     }
@@ -835,6 +744,7 @@ fn compute_delta(prev: &Option<CumulativeTokens>, current: &CumulativeTokens) ->
 fn update_high_water(high_water: &mut CumulativeTokens, current: &CumulativeTokens) {
     high_water.input = high_water.input.max(current.input);
     high_water.cached_input = high_water.cached_input.max(current.cached_input);
+    high_water.cache_write = high_water.cache_write.max(current.cache_write);
     high_water.output = high_water.output.max(current.output);
 }
 
@@ -845,6 +755,7 @@ fn parse_cumulative_tokens(total_usage: &serde_json::Value) -> Option<Cumulative
         "input_tokens",
         "cached_input_tokens",
         "cache_read_input_tokens",
+        "cache_write_input_tokens",
         "output_tokens",
         "reasoning_output_tokens",
         "total_tokens",
@@ -864,6 +775,10 @@ fn parse_cumulative_tokens(total_usage: &serde_json::Value) -> Option<Cumulative
             .or_else(|| total_usage.get("cache_read_input_tokens"))
             .and_then(|v| v.as_u64())
             .unwrap_or(0),
+        cache_write: total_usage
+            .get("cache_write_input_tokens")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0),
         output: total_usage
             .get("output_tokens")
             .and_then(|v| v.as_u64())
@@ -877,7 +792,6 @@ type RolloutIndex = HashMap<String, Vec<PathBuf>>;
 struct CodexFileSyncResult {
     imported: u32,
     skipped: u32,
-    suspected_duplicates: u32,
     deferred: bool,
 }
 
@@ -892,7 +806,6 @@ pub fn sync_codex_usage(db: &Database) -> Result<SessionSyncResult, AppError> {
         imported: 0,
         skipped: 0,
         files_scanned: files.len() as u32,
-        suspected_duplicates: 0,
         deferred_files: 0,
         errors: vec![],
     };
@@ -902,9 +815,6 @@ pub fn sync_codex_usage(db: &Database) -> Result<SessionSyncResult, AppError> {
             Ok(file_result) => {
                 result.imported = result.imported.saturating_add(file_result.imported);
                 result.skipped = result.skipped.saturating_add(file_result.skipped);
-                result.suspected_duplicates = result
-                    .suspected_duplicates
-                    .saturating_add(file_result.suspected_duplicates);
                 if file_result.deferred {
                     result.deferred_files = result.deferred_files.saturating_add(1);
                 }
@@ -999,6 +909,7 @@ fn parse_codex_file(
     let mut meta_thread_id = None;
     let mut parent = ParentResolution::None;
     let mut current_model = "unknown".to_string();
+    let mut current_tier = ServiceTier::Standard;
     // `total_token_usage` is session-cumulative, including across model and
     // rate-limit bucket changes. Divergent snapshots are handled by preferring
     // exact `last_token_usage`, not by splitting the cumulative baseline.
@@ -1051,7 +962,10 @@ fn parse_codex_file(
         if !is_event_msg && !is_turn_context && !is_session_meta {
             continue;
         }
-        if is_event_msg && !line.contains("\"token_count\"") {
+        if is_event_msg
+            && !line.contains("\"token_count\"")
+            && !line.contains("\"thread_settings_applied\"")
+        {
             continue;
         }
 
@@ -1126,8 +1040,15 @@ fn parse_codex_file(
                 let Some(payload) = value.get("payload") else {
                     continue;
                 };
-                if payload.get("type").and_then(serde_json::Value::as_str) != Some("token_count") {
-                    continue;
+                match payload.get("type").and_then(serde_json::Value::as_str) {
+                    Some("token_count") => {}
+                    Some("thread_settings_applied") => {
+                        if let Some(settings) = payload.get("thread_settings") {
+                            current_tier = codex_service_tier(settings);
+                        }
+                        continue;
+                    }
+                    _ => continue,
                 }
                 let Some(info) = payload.get("info").filter(|info| !info.is_null()) else {
                     continue;
@@ -1169,6 +1090,7 @@ fn parse_codex_file(
                     DeltaTokens {
                         input: 0,
                         cached_input: 0,
+                        cache_write: 0,
                         output: 0,
                     }
                 } else if let Some(last) = last {
@@ -1178,6 +1100,7 @@ fn parse_codex_file(
                     DeltaTokens {
                         input: last.input as u32,
                         cached_input: last.cached_input as u32,
+                        cache_write: last.cache_write as u32,
                         output: last.output as u32,
                     }
                 } else if let Some(total) = total.as_ref() {
@@ -1192,8 +1115,10 @@ fn parse_codex_file(
                         total_high_water = Some(total);
                     }
                 }
+                let cached_input = delta.cached_input.min(delta.input);
                 let delta = DeltaTokens {
-                    cached_input: delta.cached_input.min(delta.input),
+                    cached_input,
+                    cache_write: delta.cache_write.min(delta.input - cached_input),
                     ..delta
                 };
                 let nonzero_index = if delta.is_zero() {
@@ -1222,6 +1147,7 @@ fn parse_codex_file(
                     delta,
                     event_index: nonzero_index,
                     model: current_model.clone(),
+                    service_tier: current_tier,
                     timestamp,
                     latency_ms,
                 });
@@ -1313,6 +1239,7 @@ fn parent_signatures_before(
         events,
         max_timestamp,
         has_token_without_timestamp,
+        modified_nanos: stamp.map(|stamp| stamp.modified_nanos),
     });
     let result = timeline.signatures_before(parent_path, cutoff);
     if let (Some(stamp), Ok(mut caches)) = (stamp, replay_caches().lock()) {
@@ -1365,6 +1292,45 @@ fn matching_replay_prefix(child: &[ParsedTokenEvent], parent: &[TokenUsageSignat
         matched += 1;
     }
     matched
+}
+
+/// 重放段内相邻两条 token_count 的最大间隔。
+///
+/// Codex 派生会话时把继承的历史一次写完，时间戳都改写成派生时刻，相邻事件
+/// 间隔在几十毫秒以内；子会话自己的第一轮要等模型回复，间隔是秒级。
+/// 取值与 ccusage 相同。
+const REWRITTEN_BURST_PAUSE_MS: i64 = 1_000;
+
+/// 派生会话开头重放了多少条父会话的 token_count。
+///
+/// 两种判断取较长的一段：
+/// - 按父 rollout 的签名对齐。
+/// - 按写入节奏：开头前两条相隔不超过 [`REWRITTEN_BURST_PAUSE_MS`]，开头这段
+///   连续密集写入的事件都算作重放。Codex 重放时会改写一部分复制来的累计值，
+///   父文件里找不到同样的签名，签名对齐只能对上前面一段甚至一条都对不上，
+///   但这些事件都写在派生时刻。
+fn replay_prefix_len(child: &[ParsedTokenEvent], parent: &[TokenUsageSignature]) -> usize {
+    matching_replay_prefix(child, parent).max(rewritten_burst_len(child))
+}
+
+fn rewritten_burst_len(child: &[ParsedTokenEvent]) -> usize {
+    let mut previous: Option<i64> = None;
+    let mut burst = 0usize;
+    for event in child {
+        let Some(at) = event.timestamp.as_deref().and_then(parse_timestamp_millis) else {
+            break;
+        };
+        if previous.is_some_and(|prev| !(0..=REWRITTEN_BURST_PAUSE_MS).contains(&(at - prev))) {
+            break;
+        }
+        previous = Some(at);
+        burst += 1;
+    }
+    if burst >= 2 {
+        burst
+    } else {
+        0
+    }
 }
 
 fn mark_deferred(
@@ -1558,7 +1524,7 @@ fn sync_single_codex_file(
                                 ));
                             }
                         };
-                    let prefix = matching_replay_prefix(&parsed.token_events, &parent_signatures);
+                    let prefix = replay_prefix_len(&parsed.token_events, &parent_signatures);
                     if let Ok(mut caches) = replay_caches().lock() {
                         caches.replay_prefixes.insert(
                             file_path.to_path_buf(),
@@ -1575,7 +1541,7 @@ fn sync_single_codex_file(
                     let parent_signatures =
                         resolve_parent_signatures(parent_id, cutoff, rollout_index)
                             .map_err(AppError::Config)?;
-                    matching_replay_prefix(&parsed.token_events, &parent_signatures)
+                    replay_prefix_len(&parsed.token_events, &parent_signatures)
                 }
             }
         }
@@ -1623,7 +1589,6 @@ fn sync_single_codex_file(
 
         let mut batch_imported = 0u32;
         let mut batch_skipped = 0u32;
-        let mut batch_suspected = 0u32;
         for (event, event_index) in batch {
             let request_id =
                 format!("{CODEX_THREAD_REQUEST_ID_PREFIX}:{root_thread_id}:{event_index}");
@@ -1632,10 +1597,10 @@ fn sync_single_codex_file(
                 &request_id,
                 &event.delta,
                 &event.model,
+                event.service_tier,
                 Some(session_thread_id),
                 event.timestamp.as_deref(),
                 event.latency_ms,
-                &mut batch_suspected,
                 &mut pass.pricing,
             ) {
                 Ok(true) => batch_imported += 1,
@@ -1656,7 +1621,6 @@ fn sync_single_codex_file(
 
         result.imported = result.imported.saturating_add(batch_imported);
         result.skipped = result.skipped.saturating_add(batch_skipped);
-        result.suspected_duplicates = result.suspected_duplicates.saturating_add(batch_suspected);
     }
 
     if to_insert.is_empty() {
@@ -1675,7 +1639,6 @@ fn insert_codex_session_entry(
     model: &str,
     session_id: Option<&str>,
     timestamp: Option<&str>,
-    suspected_duplicates: &mut u32,
 ) -> Result<bool, AppError> {
     let conn = lock_conn!(db.conn);
     insert_codex_session_entry_on_conn(
@@ -1683,10 +1646,10 @@ fn insert_codex_session_entry(
         request_id,
         delta,
         model,
+        ServiceTier::Standard,
         session_id,
         timestamp,
         None,
-        suspected_duplicates,
         &mut HashMap::new(),
     )
 }
@@ -1703,10 +1666,10 @@ fn insert_codex_session_entry_on_conn(
     request_id: &str,
     delta: &DeltaTokens,
     model: &str,
+    service_tier: ServiceTier,
     session_id: Option<&str>,
     timestamp: Option<&str>,
     latency_ms: Option<i64>,
-    suspected_duplicates: &mut u32,
     pricing_cache: &mut HashMap<String, Option<ModelPricing>>,
 ) -> Result<bool, AppError> {
     let created_at = timestamp
@@ -1722,59 +1685,21 @@ fn insert_codex_session_entry_on_conn(
                 .unwrap_or(0)
         });
 
-    let dedup_key = DedupKey {
-        app_type: "codex",
-        model,
-        input_tokens: delta.input,
-        output_tokens: delta.output,
-        cache_read_tokens: delta.cached_input,
-        cache_creation_tokens: 0,
-        created_at,
-    };
-    if should_skip_session_insert(conn, request_id, &dedup_key)? {
+    // 保留期以前的日期已经汇总，再导入会在下次汇总时重复计入
+    if crate::services::usage_rebuild::is_below_import_floor(created_at) {
         return Ok(false);
     }
-    if has_suspected_codex_session_duplicate(conn, request_id, &dedup_key)? {
-        *suspected_duplicates = suspected_duplicates.saturating_add(1);
-        log::warn!(
-            "[CODEX-SYNC] 疑似重复会话用量: request_id={request_id}, model={model}, input={}, output={}, cache_read={}",
-            delta.input,
-            delta.output,
-            delta.cached_input
-        );
-    }
 
-    // 计算费用
-    let usage = TokenUsage {
-        input_tokens: delta.input,
-        output_tokens: delta.output,
-        cache_read_tokens: delta.cached_input,
-        cache_creation_tokens: 0,
-    };
+    // 入库用互不重叠的几桶
+    let usage = delta.token_usage();
 
     let pricing = pricing_cache
         .entry(model.to_string())
         .or_insert_with(|| find_codex_pricing(conn, model));
-    let multiplier = Decimal::from(1);
-    let (input_cost, output_cost, cache_read_cost, cache_creation_cost, total_cost) = match pricing
+    let [input_cost, output_cost, cache_read_cost, cache_creation_cost, total_cost] = match pricing
     {
-        Some(p) => {
-            let cost = CostCalculator::calculate_for_app("codex", &usage, p, multiplier);
-            (
-                cost.input_cost.to_string(),
-                cost.output_cost.to_string(),
-                cost.cache_read_cost.to_string(),
-                cost.cache_creation_cost.to_string(),
-                cost.total_cost.to_string(),
-            )
-        }
-        None => (
-            "0".to_string(),
-            "0".to_string(),
-            "0".to_string(),
-            "0".to_string(),
-            "0".to_string(),
-        ),
+        Some(p) => CostCalculator::calculate(&usage, p, service_tier, created_at).to_strings(),
+        None => CostBreakdown::zero_strings(),
     };
 
     let inserted_rows = conn
@@ -1784,8 +1709,9 @@ fn insert_codex_session_entry_on_conn(
             input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens,
             input_cost_usd, output_cost_usd, cache_read_cost_usd, cache_creation_cost_usd, total_cost_usd,
             latency_ms, first_token_ms, status_code, error_message, session_id,
-            provider_type, is_streaming, cost_multiplier, created_at, data_source
-        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24)",
+            provider_type, is_streaming, cost_multiplier, created_at, data_source,
+            service_tier, input_token_semantics
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26)",
         )
         .and_then(|mut stmt| stmt.execute(rusqlite::params![
                 request_id,
@@ -1793,10 +1719,10 @@ fn insert_codex_session_entry_on_conn(
                 "codex",             // app_type
                 model,
                 model,               // request_model = model
-                delta.input,
-                delta.output,
-                delta.cached_input,
-                0i64,                // cache_creation_tokens: Codex 日志无此数据
+                usage.input_tokens,
+                usage.output_tokens,
+                usage.cache_read_tokens,
+                usage.cache_creation_tokens,
                 input_cost,
                 output_cost,
                 cache_read_cost,
@@ -1812,10 +1738,24 @@ fn insert_codex_session_entry_on_conn(
                 "1.0",               // cost_multiplier
                 created_at,
                 "codex_session",     // data_source
+                service_tier.as_db_str(),
+                INPUT_TOKEN_SEMANTICS_FRESH,
             ]))
         .map_err(|e| AppError::Database(format!("插入 Codex 会话日志失败: {e}")))?;
 
     Ok(inserted_rows > 0)
+}
+
+/// `thread_settings_applied.thread_settings.service_tier`：priority 和 fast（Codex
+/// 的 /fast 模式走 priority 处理）按 priority 档计价；default、flex 等按标准价。
+fn codex_service_tier(settings: &serde_json::Value) -> ServiceTier {
+    match settings
+        .get("service_tier")
+        .and_then(serde_json::Value::as_str)
+    {
+        Some("priority" | "fast") => ServiceTier::Priority,
+        _ => ServiceTier::Standard,
+    }
 }
 
 /// 查找 Codex 模型定价（带归一化）
@@ -2055,7 +1995,8 @@ mod tests {
             [],
             |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
         )?;
-        assert_eq!(totals, (2, 250, 30));
+        // input_tokens 入库的是未命中缓存的输入
+        assert_eq!(totals, (2, 150, 30));
         Ok(())
     }
 
@@ -2111,7 +2052,8 @@ mod tests {
             [],
             |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
         )?;
-        assert_eq!(totals, (2, 250, 30));
+        // input_tokens 入库的是未命中缓存的输入
+        assert_eq!(totals, (2, 150, 30));
         Ok(())
     }
 
@@ -2247,6 +2189,7 @@ mod tests {
         let current = CumulativeTokens {
             input: 17934,
             cached_input: 9600,
+            cache_write: 0,
             output: 454,
         };
         let delta = compute_delta(&prev, &current);
@@ -2261,11 +2204,13 @@ mod tests {
         let prev = Some(CumulativeTokens {
             input: 17934,
             cached_input: 9600,
+            cache_write: 0,
             output: 454,
         });
         let current = CumulativeTokens {
             input: 36722,
             cached_input: 27904,
+            cache_write: 0,
             output: 804,
         };
         let delta = compute_delta(&prev, &current);
@@ -2279,12 +2224,14 @@ mod tests {
         let prev = Some(CumulativeTokens {
             input: 58346,
             cached_input: 46976,
+            cache_write: 0,
             output: 1045,
         });
         // task 边界：相同的累计值
         let current = CumulativeTokens {
             input: 58346,
             cached_input: 46976,
+            cache_write: 0,
             output: 1045,
         };
         let delta = compute_delta(&prev, &current);
@@ -2297,11 +2244,13 @@ mod tests {
         let prev = Some(CumulativeTokens {
             input: 100,
             cached_input: 50,
+            cache_write: 0,
             output: 30,
         });
         let current = CumulativeTokens {
             input: 80,
             cached_input: 40,
+            cache_write: 0,
             output: 20,
         };
         let delta = compute_delta(&prev, &current);
@@ -2807,7 +2756,8 @@ mod tests {
                 session_meta_at(CHILD_A_ID, None, Some(PARENT_ID), "2026-07-10T03:00:05Z"),
                 turn_context(),
                 token_count_at(1_000, 900, 100, "2026-07-10T03:00:06Z"),
-                token_count_at(1_300, 1_050, 150, "2026-07-10T03:00:07Z"),
+                // 子会话自己的第一轮要等模型回复，离重放的历史隔几秒
+                token_count_at(1_300, 1_050, 150, "2026-07-10T03:00:12Z"),
             ],
         );
 
@@ -2824,7 +2774,115 @@ mod tests {
             [format!("{CODEX_THREAD_REQUEST_ID_PREFIX}:{CHILD_A_ID}:2")],
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         )?;
-        assert_eq!(usage, (300, 150, 50));
+        // input_tokens 入库的是未命中缓存的输入（300 − 150）
+        assert_eq!(usage, (150, 150, 50));
+        Ok(())
+    }
+
+    /// 实际日志里见过：子 agent 开头重放的累计值在父文件里找不到，但这段事件
+    /// 全部写在派生时刻，彼此只隔几十毫秒。
+    #[test]
+    #[serial_test::serial]
+    fn test_rewritten_replay_burst_is_skipped_when_parent_signatures_differ() -> Result<(), AppError>
+    {
+        clear_codex_replay_caches();
+        let db = Database::memory()?;
+        let temp = tempdir().unwrap();
+        let parent = rollout_path(temp.path(), PARENT_ID);
+        let child = rollout_path(temp.path(), CHILD_A_ID);
+        write_jsonl(
+            &parent,
+            &[
+                session_meta(PARENT_ID),
+                token_count_at(1_000, 900, 100, "2026-07-10T03:00:01Z"),
+                turn_context_at("2026-07-10T03:00:10Z"),
+            ],
+        );
+        write_jsonl(
+            &child,
+            &[
+                session_meta_at(CHILD_A_ID, None, Some(PARENT_ID), "2026-07-10T03:00:05Z"),
+                token_count_at(5_000, 4_000, 300, "2026-07-10T03:00:05.010Z"),
+                token_count_at(6_000, 5_000, 400, "2026-07-10T03:00:05.030Z"),
+                token_count_at(6_500, 5_200, 450, "2026-07-10T03:00:12Z"),
+            ],
+        );
+
+        let result = sync_test_file(&db, &child, &[&parent, &child])?;
+        assert_eq!((result.imported, result.skipped), (1, 2));
+
+        let conn = lock_conn!(db.conn);
+        let usage: (i64, i64, i64) = conn.query_row(
+            "SELECT input_tokens, cache_read_tokens, output_tokens
+             FROM proxy_request_logs WHERE request_id = ?1",
+            [format!("{CODEX_THREAD_REQUEST_ID_PREFIX}:{CHILD_A_ID}:3")],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )?;
+        assert_eq!(usage, (300, 200, 50));
+        Ok(())
+    }
+
+    /// 实际日志里也见过：开头一段能和父文件对上，后面的累计值被改写、对不上，
+    /// 但整段都写在派生时刻。
+    #[test]
+    #[serial_test::serial]
+    fn test_rewritten_burst_extends_a_partially_matched_replay() -> Result<(), AppError> {
+        clear_codex_replay_caches();
+        let db = Database::memory()?;
+        let temp = tempdir().unwrap();
+        let parent = rollout_path(temp.path(), PARENT_ID);
+        let child = rollout_path(temp.path(), CHILD_A_ID);
+        write_jsonl(
+            &parent,
+            &[
+                session_meta(PARENT_ID),
+                token_count_at(1_000, 900, 100, "2026-07-10T03:00:01Z"),
+                turn_context_at("2026-07-10T03:00:10Z"),
+            ],
+        );
+        write_jsonl(
+            &child,
+            &[
+                session_meta_at(CHILD_A_ID, None, Some(PARENT_ID), "2026-07-10T03:00:05Z"),
+                token_count_at(1_000, 900, 100, "2026-07-10T03:00:05.010Z"),
+                token_count_at(5_000, 4_000, 300, "2026-07-10T03:00:05.020Z"),
+                token_count_at(6_000, 5_000, 400, "2026-07-10T03:00:05.030Z"),
+                token_count_at(6_500, 5_200, 450, "2026-07-10T03:00:12Z"),
+            ],
+        );
+
+        let result = sync_test_file(&db, &child, &[&parent, &child])?;
+        assert_eq!((result.imported, result.skipped), (1, 3));
+        Ok(())
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn test_unmatched_child_with_paced_events_keeps_all_usage() -> Result<(), AppError> {
+        clear_codex_replay_caches();
+        let db = Database::memory()?;
+        let temp = tempdir().unwrap();
+        let parent = rollout_path(temp.path(), PARENT_ID);
+        let child = rollout_path(temp.path(), CHILD_A_ID);
+        write_jsonl(
+            &parent,
+            &[
+                session_meta(PARENT_ID),
+                token_count_at(1_000, 900, 100, "2026-07-10T03:00:01Z"),
+                turn_context_at("2026-07-10T03:00:10Z"),
+            ],
+        );
+        write_jsonl(
+            &child,
+            &[
+                session_meta_at(CHILD_A_ID, None, Some(PARENT_ID), "2026-07-10T03:00:05Z"),
+                token_count_at(200, 100, 20, "2026-07-10T03:00:08Z"),
+                token_count_at(400, 250, 40, "2026-07-10T03:00:15Z"),
+            ],
+        );
+
+        let result = sync_test_file(&db, &child, &[&parent, &child])?;
+        assert_eq!((result.imported, result.skipped), (2, 0));
         Ok(())
     }
 
@@ -2858,7 +2916,8 @@ mod tests {
                 session_meta_at(CHILD_A_ID, None, Some(PARENT_ID), "2026-07-10T03:00:05Z"),
                 turn_context(),
                 token_count_at(1_000, 900, 100, "2026-07-10T03:00:06Z"),
-                token_count_at(1_300, 1_050, 150, "2026-07-10T03:00:07Z"),
+                // 隔开写入：紧跟在 fork 之后的连续写入会被当成重放
+                token_count_at(1_300, 1_050, 150, "2026-07-10T03:00:15Z"),
             ],
         );
 
@@ -2902,9 +2961,10 @@ mod tests {
             &child,
             &[
                 session_meta_at(CHILD_A_ID, Some(PARENT_ID), None, "2026-07-10T03:00:05Z"),
+                // 重放的两条隔开超过 1 秒，只能靠签名对齐认出来
                 token_count_at(100, 50, 10, "2026-07-10T03:00:06Z"),
-                token_count_at(300, 150, 30, "2026-07-10T03:00:07Z"),
-                token_count_at(450, 220, 45, "2026-07-10T03:00:08Z"),
+                token_count_at(300, 150, 30, "2026-07-10T03:00:08Z"),
+                token_count_at(450, 220, 45, "2026-07-10T03:00:15Z"),
             ],
         );
 
@@ -3199,6 +3259,51 @@ mod tests {
         Ok(())
     }
 
+    /// 父文件停在子会话派生时刻之前：刚写过就等它补上，早就不写了就按已有内容导入
+    #[test]
+    #[serial_test::serial]
+    fn test_child_waits_only_for_a_parent_that_is_still_written() -> Result<(), AppError> {
+        clear_codex_replay_caches();
+        let db = Database::memory()?;
+        let temp = tempdir().unwrap();
+        let parent = rollout_path(temp.path(), PARENT_ID);
+        let child = rollout_path(temp.path(), CHILD_A_ID);
+        write_jsonl(
+            &parent,
+            &[
+                session_meta(PARENT_ID),
+                token_count_at(100, 50, 10, "2026-07-10T03:00:01Z"),
+            ],
+        );
+        write_jsonl(
+            &child,
+            &[
+                session_meta_at(CHILD_A_ID, None, Some(PARENT_ID), "2026-07-10T03:00:05Z"),
+                token_count_at(5_000, 4_000, 300, "2026-07-10T03:00:05.010Z"),
+                token_count_at(6_000, 5_000, 400, "2026-07-10T03:00:05.030Z"),
+                token_count_at(6_500, 5_200, 450, "2026-07-10T03:00:12Z"),
+            ],
+        );
+
+        let waiting = sync_test_file(&db, &child, &[&parent, &child])?;
+        assert!(waiting.deferred);
+
+        clear_codex_replay_caches();
+        let long_ago = SystemTime::now() - PARENT_CATCH_UP_WINDOW * 2;
+        fs::OpenOptions::new()
+            .append(true)
+            .open(&parent)
+            .unwrap()
+            .set_times(fs::FileTimes::new().set_modified(long_ago))
+            .unwrap();
+        let imported = sync_test_file(&db, &child, &[&parent, &child])?;
+        assert_eq!(
+            (imported.imported, imported.skipped, imported.deferred),
+            (1, 2, false)
+        );
+        Ok(())
+    }
+
     #[test]
     #[serial_test::serial]
     fn test_missing_parent_is_deferred_and_recovered_without_child_change() -> Result<(), AppError>
@@ -3394,7 +3499,8 @@ mod tests {
             [format!("{CODEX_THREAD_REQUEST_ID_PREFIX}:{PARENT_ID}:2")],
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         )?;
-        assert_eq!(usage, (100, 50, 10));
+        // input_tokens 入库的是未命中缓存的输入（100 − 50）
+        assert_eq!(usage, (50, 50, 10));
         drop(conn);
         assert_eq!(get_sync_state(&db, &archived_file.to_string_lossy())?.1, 4);
 
@@ -3402,70 +3508,14 @@ mod tests {
     }
 
     #[test]
-    fn test_insert_codex_session_skips_matching_proxy_log() -> Result<(), AppError> {
-        let db = Database::memory()?;
-        {
-            let conn = lock_conn!(db.conn);
-            conn.execute(
-                "INSERT INTO proxy_request_logs (
-                    request_id, provider_id, app_type, model, request_model,
-                    input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens,
-                    total_cost_usd, latency_ms, status_code, created_at, data_source
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                rusqlite::params![
-                    "codex-proxy",
-                    "openai",
-                    "codex",
-                    "gpt-5.4",
-                    "gpt-5.4",
-                    10,
-                    2,
-                    1,
-                    7,
-                    "0.01",
-                    100,
-                    200,
-                    1000,
-                    "proxy"
-                ],
-            )?;
-        }
-
-        let delta = DeltaTokens {
-            input: 10,
-            cached_input: 1,
-            output: 2,
-        };
-        let mut suspected_duplicates = 0;
-        let inserted = insert_codex_session_entry(
-            &db,
-            "codex-session-dup",
-            &delta,
-            "gpt-5.4",
-            Some("session-1"),
-            Some("1970-01-01T00:16:45Z"),
-            &mut suspected_duplicates,
-        )?;
-        assert!(!inserted);
-
-        let conn = lock_conn!(db.conn);
-        let count: i64 = conn.query_row("SELECT COUNT(*) FROM proxy_request_logs", [], |row| {
-            row.get(0)
-        })?;
-        assert_eq!(count, 1);
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_codex_session_duplicate_is_observed_but_still_inserted() -> Result<(), AppError> {
+    fn test_identical_codex_usage_in_two_sessions_is_kept() -> Result<(), AppError> {
         let db = Database::memory()?;
         let delta = DeltaTokens {
             input: 10,
             cached_input: 1,
+            cache_write: 0,
             output: 2,
         };
-        let mut suspected_duplicates = 0;
         assert!(insert_codex_session_entry(
             &db,
             "codex-session-a",
@@ -3473,7 +3523,6 @@ mod tests {
             "gpt-5.4",
             Some("session-a"),
             Some("1970-01-01T00:16:40Z"),
-            &mut suspected_duplicates,
         )?);
         assert!(insert_codex_session_entry(
             &db,
@@ -3482,9 +3531,7 @@ mod tests {
             "gpt-5.4",
             Some("session-b"),
             Some("1970-01-01T00:16:45Z"),
-            &mut suspected_duplicates,
         )?);
-        assert_eq!(suspected_duplicates, 1);
 
         let conn = lock_conn!(db.conn);
         let count: i64 = conn.query_row(
@@ -3493,72 +3540,6 @@ mod tests {
             |row| row.get(0),
         )?;
         assert_eq!(count, 2);
-        Ok(())
-    }
-
-    #[test]
-    fn reset_codex_usage_only_removes_codex_rows_and_structural_cursors() -> Result<(), AppError> {
-        let db = Database::memory()?;
-        let temp = tempdir().unwrap();
-        let wide_dir = temp.path();
-        let current_codex = rollout_path(&wide_dir.join("sessions"), CHILD_A_ID);
-        let legacy_codex =
-            format!("C:\\old-codex\\archived_sessions\\rollout-old-{CHILD_B_ID}.jsonl");
-        let gemini_cursor = wide_dir.join("gemini/sessions/session-123.json");
-        let claude_cursor = wide_dir.join(format!("projects/rollout-{PARENT_ID}.jsonl"));
-
-        {
-            let conn = lock_conn!(db.conn);
-            conn.execute_batch(
-                "INSERT INTO proxy_request_logs (
-                    request_id, provider_id, app_type, model, input_tokens,
-                    output_tokens, cache_read_tokens, latency_ms, status_code,
-                    created_at, data_source
-                 ) VALUES
-                    ('codex-row', '_codex_session', 'codex', 'gpt', 1, 1, 0, 0, 200, 1, 'codex_session'),
-                    ('gemini-row', '_gemini_session', 'gemini', 'gemini', 1, 1, 0, 0, 200, 1, 'gemini_session');
-                 INSERT INTO usage_daily_rollups (date, app_type, provider_id, model)
-                 VALUES
-                    ('2026-07-10', 'codex', '_codex_session', 'gpt'),
-                    ('2026-07-10', 'gemini', '_gemini_session', 'gemini');",
-            )?;
-            for path in [
-                current_codex.to_string_lossy().to_string(),
-                legacy_codex,
-                gemini_cursor.to_string_lossy().to_string(),
-                claude_cursor.to_string_lossy().to_string(),
-            ] {
-                conn.execute(
-                    "INSERT INTO session_log_sync
-                     (file_path, last_modified, last_line_offset, last_synced_at)
-                     VALUES (?1, 1, 1, 1)",
-                    [path],
-                )?;
-            }
-
-            reset_codex_usage_on_conn(&conn, wide_dir)?;
-            let codex_rows: i64 = conn.query_row(
-                "SELECT COUNT(*) FROM proxy_request_logs WHERE data_source = 'codex_session'",
-                [],
-                |row| row.get(0),
-            )?;
-            let gemini_rows: i64 = conn.query_row(
-                "SELECT COUNT(*) FROM proxy_request_logs WHERE data_source = 'gemini_session'",
-                [],
-                |row| row.get(0),
-            )?;
-            let codex_rollups: i64 = conn.query_row(
-                "SELECT COUNT(*) FROM usage_daily_rollups WHERE provider_id = '_codex_session'",
-                [],
-                |row| row.get(0),
-            )?;
-            let remaining_cursors: i64 =
-                conn.query_row("SELECT COUNT(*) FROM session_log_sync", [], |row| {
-                    row.get(0)
-                })?;
-            assert_eq!((codex_rows, gemini_rows, codex_rollups), (0, 1, 0));
-            assert_eq!(remaining_cursors, 2);
-        }
         Ok(())
     }
 
@@ -3624,11 +3605,13 @@ mod tests {
         let prev = Some(CumulativeTokens {
             input: 100,
             cached_input: 0,
+            cache_write: 0,
             output: 50,
         });
         let current = CumulativeTokens {
             input: 110,       // delta = 10
             cached_input: 80, // delta = 80（异常：大于 input delta）
+            cache_write: 0,
             output: 60,
         };
         let delta = compute_delta(&prev, &current);
@@ -3685,10 +3668,9 @@ mod tests {
         let result = sync_codex_usage(&db)?;
         let full_elapsed = start.elapsed();
         eprintln!(
-            "[REPLAY] full reimport: imported={} skipped={} suspected_dup={} deferred={} files={} errors={} elapsed={:.2?}",
+            "[REPLAY] full reimport: imported={} skipped={} deferred={} files={} errors={} elapsed={:.2?}",
             result.imported,
             result.skipped,
-            result.suspected_duplicates,
             result.deferred_files,
             result.files_scanned,
             result.errors.len(),

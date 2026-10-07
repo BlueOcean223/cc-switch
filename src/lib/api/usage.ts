@@ -207,8 +207,8 @@ export const usageApi = {
     return invoke("get_session_usage_last_sync");
   },
 
-  rebuildCodexUsage: async (): Promise<SessionSyncResult> => {
-    return invoke("rebuild_codex_usage");
+  rebuildSessionUsage: async (): Promise<SessionSyncResult> => {
+    return invoke("rebuild_session_usage");
   },
 
   getDataSourceBreakdown: async (): Promise<DataSourceSummary[]> => {

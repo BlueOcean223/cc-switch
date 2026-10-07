@@ -1,25 +1,12 @@
 //! SQL fragment helpers shared across usage aggregation queries.
 //!
-//! Anthropic reports `input_tokens` as fresh (cache reads counted
-//! separately); OpenAI Responses API and Google Gemini's
-//! `promptTokenCount` both include the cached portion. Any aggregation
-//! summing `input_tokens` across providers must route through
-//! [`fresh_input_sql`] to recover a consistent semantics.
+//! 现在所有会话导入器都按互不重叠的几桶写入（`input_tokens` 是未命中缓存的
+//! 输入，标记 [`INPUT_TOKEN_SEMANTICS_FRESH`]）。旧版本写入的明细和汇总里，
+//! Codex、Gemini、Grok 的 `input_tokens` 还含着缓存，汇总 `input_tokens` 的查询
+//! 都要经过 [`fresh_input_sql`] 换成同一口径。
 
-/// Set of `app_type` values whose stored `input_tokens` already includes
-/// `cache_read_tokens`. Aggregations subtract cache reads from these rows
-/// to recover the fresh-input semantics used by Claude.
-///
-/// Why list providers explicitly: new providers default to the
-/// Claude-style "input excludes cache" semantics, which is safer if the
-/// caller forgets to update this list. The wrong direction (a new OpenAI-
-/// style provider not added here) shows up loudly as a too-low cache hit
-/// rate, which is easier to catch than the silent over-deduction that
-/// would happen with the opposite default.
-/// 单一语义集（SSOT）：写入侧（token_usage calculator）、回填侧
-/// （usage_stats 成本重算）与展示侧（本文件的 SQL 归一）都必须引用这里，
-/// 防止同一语义散落多处后新增 app 时漏改（grokbuild 曾在回填侧漏掉）。
-/// 前端 `src/types/usage.ts` 的同名常量是跨语言的对应物，改动须同步。
+/// 旧版本写入时 `input_tokens` 含缓存的 `app_type`。只对 semantics 不是 FRESH
+/// 的旧行生效。
 pub(crate) const CACHE_INCLUSIVE_APP_TYPES: &[&str] = &["codex", "gemini", "grokbuild"];
 
 /// `app_type` 的存储 `input_tokens` 是否已包含 cache read/write。
