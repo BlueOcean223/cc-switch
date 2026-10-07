@@ -3229,7 +3229,8 @@
     "types": {
       "new": "新機能",
       "fix": "修正",
-      "improve": "改善"
+      "improve": "改善",
+      "removed": "削除"
     },
     "versionDetails": "詳細",
     "showEarlier": "さらに以前のバージョン {{count}} 件",

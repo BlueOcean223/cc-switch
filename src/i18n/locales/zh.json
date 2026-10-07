@@ -3229,7 +3229,8 @@
     "types": {
       "new": "新增",
       "fix": "修复",
-      "improve": "改进"
+      "improve": "改进",
+      "removed": "移除"
     },
     "versionDetails": "详情",
     "showEarlier": "还有 {{count}} 个更早的版本",

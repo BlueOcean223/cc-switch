@@ -3229,7 +3229,8 @@
     "types": {
       "new": "新增",
       "fix": "修復",
-      "improve": "改進"
+      "improve": "改進",
+      "removed": "移除"
     },
     "versionDetails": "詳情",
     "showEarlier": "還有 {{count}} 個更早的版本",

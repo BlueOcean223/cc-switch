@@ -5,7 +5,12 @@ import { compareVersions } from "@/lib/version";
  * 新版安装包天然带着它自己和之前所有版本的摘要，弹窗不联网。格式见同目录 README。
  */
 
-export const WHATS_NEW_ITEM_TYPES = ["new", "fix", "improve"] as const;
+export const WHATS_NEW_ITEM_TYPES = [
+  "new",
+  "fix",
+  "improve",
+  "removed",
+] as const;
 export type WhatsNewItemType = (typeof WHATS_NEW_ITEM_TYPES)[number];
 
 export const WHATS_NEW_LANGUAGES = ["zh", "zh-TW", "en", "ja"] as const;
@@ -88,12 +93,8 @@ export function resolveWhatsNewLanguage(language: string): WhatsNewLanguage {
     : "en";
 }
 
-/** 官网更新日志：不带版本是列表页。官网只有 zh / en / ja，繁中用简中页面 */
-export function changelogUrl(
-  language: WhatsNewLanguage,
-  version?: string,
-): string {
-  const siteLanguage = language === "zh-TW" ? "zh" : language;
-  const base = `https://ccswitch.io/${siteLanguage}/changelog`;
-  return version ? `${base}/${version}` : base;
+/** 本仓库的 GitHub Releases：不带版本是列表页。发布说明不分语言 */
+export function changelogUrl(version?: string): string {
+  const base = "https://github.com/BlueOcean223/cc-switch/releases";
+  return version ? `${base}/tag/v${version}` : base;
 }

@@ -61,10 +61,7 @@ export function WhatsNewDialog({
   const handleViewFull = () => {
     // 只有一个版本就直接打开这一版，多个版本打开更新日志列表
     openExternal(
-      changelogUrl(
-        language,
-        entries.length === 1 ? entries[0].version : undefined,
-      ),
+      changelogUrl(entries.length === 1 ? entries[0].version : undefined),
     );
     onClose();
   };
@@ -104,9 +101,7 @@ export function WhatsNewDialog({
                 <button
                   type="button"
                   className="inline-flex items-center gap-1 text-caption text-fg-2 hover:text-fg-1"
-                  onClick={() =>
-                    openExternal(changelogUrl(language, entry.version))
-                  }
+                  onClick={() => openExternal(changelogUrl(entry.version))}
                 >
                   {t("whatsNew.versionDetails")}
                   <ExternalLink className="h-3 w-3" />

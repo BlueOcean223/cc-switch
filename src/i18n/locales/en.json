@@ -3229,7 +3229,8 @@
     "types": {
       "new": "New",
       "fix": "Fix",
-      "improve": "Improved"
+      "improve": "Improved",
+      "removed": "Removed"
     },
     "versionDetails": "Details",
     "showEarlier": "{{count}} earlier version(s)",

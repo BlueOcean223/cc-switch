@@ -21,6 +21,7 @@ First release of this fork of [farion1231/cc-switch](https://github.com/farion12
 ### Changed
 
 - **Updates come from this repository only**: the in-app updater reads this repository's GitHub Releases and uses a new signing key, so it no longer offers upstream builds. Without an Apple certificate in CI, the macOS build is ad-hoc signed and not notarized.
+- **Update summary**: the window shown after an upgrade lists this fork's changes, and its links open this repository's GitHub Releases instead of the upstream website. Upstream's 4.0.x summaries describe removed features and are not shown.
 - **Database schema 21**: upstream's schema 20 (the Pi MCP flag) comes first; schema 21 drops the routing tables and unused provider columns, and adds columns for 1-hour cache writes, service tier and recorded cost on usage rows, and for long-context and priority pricing. The database is backed up before migrating; older versions refuse to open a schema-21 database.
 - **Usage pricing**:
   - Requests are priced at the rate in effect when they were made. Earlier prices are built in for GPT-5.6 Sol (cut on 2026-08-21) and GPT-5.6 Terra and Luna (cut on 2026-07-30).
