@@ -1098,6 +1098,7 @@ mod tests {
 
     #[test]
     fn cache_writes_are_split_out_of_input() -> Result<(), AppError> {
+        use std::str::FromStr;
         // inputTokens 含缓存读和缓存写（grok-build: cache_creation_tokens 是
         // input_tokens 的子集）
         let db = Database::memory()?;
@@ -1117,6 +1118,18 @@ mod tests {
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         )?;
         assert_eq!(tokens, (500, 300, 200));
+
+        // xAI 没有单独的缓存写价，缓存写按输入价 $2/M 计，不能记成免费
+        let costs: (String, String) = conn.query_row(
+            "SELECT cache_creation_cost_usd, total_cost_usd
+             FROM proxy_request_logs WHERE data_source = 'grok_session'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+        let dec = |v: &str| Decimal::from_str(v).expect("decimal");
+        assert_eq!(dec(&costs.0), dec("0.0004"));
+        // 500×2 + 300×0.30 + 200×2 + 10×6，单位 $/M
+        assert_eq!(dec(&costs.1), dec("0.00155"));
         Ok(())
     }
 

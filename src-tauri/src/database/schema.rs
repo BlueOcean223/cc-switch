@@ -2221,23 +2221,27 @@ impl Database {
             ("qwq-32b", "QwQ 32B", "0.20", "0.60", "0", "0"),
             ("qwen3-32b", "Qwen3 32B", "0.16", "0.64", "0", "0"),
             // Grok 系列 (xAI)
+            // xAI 只有输入价和缓存命中价，没有单独的缓存写价，缓存写按输入价计
+            // （docs.x.ai/developers/models、prompt-caching/usage-and-pricing，
+            // 2026-10-07 核对），所以缓存写一列填输入价。grok-build 只在 Anthropic
+            // Messages 后端报缓存写，而这个后端不带费用，总是按这里的价格算
             // 4.5/4.6/4.7 均为分档计价：prompt ≥200K 时单价翻倍（4/12，cached 亦翻倍）。
             // 本表无档位列，统一取基础档（<200K），与其它分档厂商口径一致
-            ("grok-4.7", "Grok 4.7", "2", "6", "0.50", "0"),
-            ("grok-4.6", "Grok 4.6", "2", "6", "0.50", "0"),
-            ("grok-4.5", "Grok 4.5", "2", "6", "0.30", "0"),
+            ("grok-4.7", "Grok 4.7", "2", "6", "0.50", "2"),
+            ("grok-4.6", "Grok 4.6", "2", "6", "0.50", "2"),
+            ("grok-4.5", "Grok 4.5", "2", "6", "0.30", "2"),
             // Grok CLI 官方 OAuth 态 modelUsage 上报的内部别名。定价由
             // costUsdTicks（1 tick = 1e-10 USD）双轮实测反推：input/output 与
             // grok-4.5 同为 2/6，cache read 同为 0.30
-            ("grok-4.5-build", "Grok 4.5 Build", "2", "6", "0.30", "0"),
-            ("grok-4.3", "Grok 4.3", "1.25", "2.50", "0.20", "0"),
+            ("grok-4.5-build", "Grok 4.5 Build", "2", "6", "0.30", "2"),
+            ("grok-4.3", "Grok 4.3", "1.25", "2.50", "0.20", "1.25"),
             (
                 "grok-4.20-0309-reasoning",
                 "Grok 4.20 Reasoning",
                 "1.25",
                 "2.50",
                 "0.20",
-                "0",
+                "1.25",
             ),
             (
                 "grok-4.20-0309-non-reasoning",
@@ -2245,7 +2249,7 @@ impl Database {
                 "1.25",
                 "2.50",
                 "0.20",
-                "0",
+                "1.25",
             ),
             (
                 "grok-4-1-fast-reasoning",
@@ -2253,7 +2257,7 @@ impl Database {
                 "0.20",
                 "0.50",
                 "0.05",
-                "0",
+                "0.20",
             ),
             (
                 "grok-4-1-fast-non-reasoning",
@@ -2261,20 +2265,27 @@ impl Database {
                 "0.20",
                 "0.50",
                 "0.05",
-                "0",
+                "0.20",
             ),
-            ("grok-4", "Grok 4", "3", "15", "0.75", "0"),
+            ("grok-4", "Grok 4", "3", "15", "0.75", "3"),
             (
                 "grok-code-fast-1",
                 "Grok Build 0.1 (Code Fast Alias)",
                 "1",
                 "2",
                 "0.20",
-                "0",
+                "1",
             ),
-            ("grok-build-0.1", "Grok Build 0.1", "1", "2", "0.20", "0"),
-            ("grok-3", "Grok 3", "3", "15", "0.75", "0"),
-            ("grok-3-mini", "Grok 3 Mini", "0.25", "0.50", "0.075", "0"),
+            ("grok-build-0.1", "Grok Build 0.1", "1", "2", "0.20", "1"),
+            ("grok-3", "Grok 3", "3", "15", "0.75", "3"),
+            (
+                "grok-3-mini",
+                "Grok 3 Mini",
+                "0.25",
+                "0.50",
+                "0.075",
+                "0.25",
+            ),
             // Mistral 系列
             (
                 "mistral-medium-3.5",

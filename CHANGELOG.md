@@ -46,7 +46,7 @@ First release of this fork of [farion1231/cc-switch](https://github.com/farion12
 - **Codex subagents and forks**: the parent history they replay at the fork instant is no longer counted again. A child whose parent stopped writing before the fork is imported instead of waiting forever.
 - **Claude**: a reply stored while a subagent was still writing it gets its final output tokens and cost.
 - **Codex**: cache writes and the priority / fast tier from thread settings are recorded.
-- **Grok Build**: session logs above 50 MiB are read instead of skipped, and a turn total no longer triggers the long-context tier.
+- **Grok Build**: session logs above 50 MiB are read instead of skipped, and a turn total no longer triggers the long-context tier. Cache writes (reported on the Anthropic Messages backend) are recorded apart from fresh input; Grok models price them at the input price, as xAI has no separate cache-write price.
 - Events older than the 30-day detail window are not imported a second time after their days were rolled up.
 - The connectivity check read the wrong base URL for Codex and Grok Build.
 - URL masking in logs drops `user:pass@` from URLs that have no host.
