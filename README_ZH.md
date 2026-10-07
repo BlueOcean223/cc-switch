@@ -209,13 +209,6 @@ Codex 还可以在 CC Switch 里用“使用 ChatGPT 登录”登录多个 ChatG
 </details>
 
 <details>
-<summary><strong>旧版开过本地路由，升级后配置文件里的地址为什么还是 127.0.0.1？</strong></summary>
-
-这个版本已经没有本地路由。如果升级时本地路由还开着，工具的配置文件里可能还留着本地地址（`http://127.0.0.1:15721`）和占位密钥 `PROXY_MANAGED`。在 CC Switch 里把这个工具切换一次供应商（想继续用当前供应商就再切回来），CC Switch 会用供应商真实的地址和 Key 重写配置文件，并清掉这些残留。
-
-</details>
-
-<details>
 <summary><strong>能在 Claude Code 里使用 OpenAI 兼容接口或本地模型吗？</strong></summary>
 
 要看服务有没有提供工具需要的接口格式。CC Switch 只写配置文件，不转换接口格式：Claude Code 需要 Anthropic Messages 接口，Codex 和 Grok Build 需要 OpenAI Responses 接口，Gemini CLI 需要 Gemini API。很多供应商（DeepSeek、Kimi、智谱 GLM、MiniMax 等）都提供 Anthropic 兼容接口，对应的预设已经填好。只提供 Chat Completions 接口的服务，需要你自己运行一个格式转换代理，再把它的地址填为供应商的请求地址。

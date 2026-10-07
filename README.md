@@ -209,13 +209,6 @@ For Codex, you can also sign in to multiple ChatGPT accounts inside CC Switch vi
 </details>
 
 <details>
-<summary><strong>I used local routing in an earlier version. Why does my config file still point to 127.0.0.1?</strong></summary>
-
-This version has no local routing. If local routing was on when you upgraded, the tool's config file may still contain the local address (`http://127.0.0.1:15721`) and the placeholder key `PROXY_MANAGED`. Switch that tool to another provider once (and back, if you want to keep the current one): CC Switch rewrites the config file with the provider's real address and key and removes the leftovers.
-
-</details>
-
-<details>
 <summary><strong>Can I use OpenAI-compatible APIs or local models in Claude Code?</strong></summary>
 
 Only if the service offers an endpoint in the format the tool expects. CC Switch only writes config files and doesn't convert API formats: Claude Code needs an Anthropic Messages endpoint, Codex and Grok Build need an OpenAI Responses endpoint, and Gemini CLI needs the Gemini API. Many providers (DeepSeek, Kimi, Zhipu GLM, MiniMax, and others) offer an Anthropic-compatible endpoint, and their presets already use it. For a service that only offers Chat Completions, run a format-conversion proxy yourself and enter its address as the provider's endpoint.
