@@ -1194,7 +1194,7 @@ export const hermesProviderPresets: HermesProviderPreset[] = [
     family: "minimax",
     regionKey: "cn",
     websiteUrl: "https://platform.minimax.cn",
-    apiKeyUrl: "https://platform.minimax.cn/subscribe/token-plan",
+    apiKeyUrl: "https://platform.minimax.cn/console/plan",
     settingsConfig: {
       name: "minimax",
       base_url: "https://api.minimax.cn/v1",
@@ -1215,7 +1215,7 @@ export const hermesProviderPresets: HermesProviderPreset[] = [
     family: "minimax",
     regionKey: "intl",
     websiteUrl: "https://platform.minimax.io",
-    apiKeyUrl: "https://platform.minimax.io/subscribe/coding-plan",
+    apiKeyUrl: "https://platform.minimax.io/console/plan",
     settingsConfig: {
       name: "minimax_en",
       base_url: "https://api.minimax.io/v1",

@@ -944,7 +944,7 @@ export const providerPresets: ProviderPreset[] = [
     family: "minimax",
     regionKey: "cn",
     websiteUrl: "https://platform.minimax.cn",
-    apiKeyUrl: "https://platform.minimax.cn/subscribe/token-plan",
+    apiKeyUrl: "https://platform.minimax.cn/console/plan",
     settingsConfig: {
       env: {
         ANTHROPIC_BASE_URL: "https://api.minimax.cn/anthropic",
@@ -969,7 +969,7 @@ export const providerPresets: ProviderPreset[] = [
     family: "minimax",
     regionKey: "intl",
     websiteUrl: "https://platform.minimax.io",
-    apiKeyUrl: "https://platform.minimax.io/subscribe/coding-plan",
+    apiKeyUrl: "https://platform.minimax.io/console/plan",
     settingsConfig: {
       env: {
         ANTHROPIC_BASE_URL: "https://api.minimax.io/anthropic",

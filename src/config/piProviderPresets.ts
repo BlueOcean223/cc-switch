@@ -746,7 +746,7 @@ const piProviderPresetDefinitions: PiProviderPreset[] = [
       baseUrl: "https://api.minimaxi.com/anthropic",
     },
     websiteUrl: "https://platform.minimax.cn",
-    apiKeyUrl: "https://platform.minimax.cn/subscribe/token-plan",
+    apiKeyUrl: "https://platform.minimax.cn/console/plan",
     settingsConfig: {
       name: "MiniMax",
       baseUrl: "https://api.minimax.cn/v1",
@@ -777,7 +777,7 @@ const piProviderPresetDefinitions: PiProviderPreset[] = [
       baseUrl: "https://api.minimax.io/anthropic",
     },
     websiteUrl: "https://platform.minimax.io",
-    apiKeyUrl: "https://platform.minimax.io/subscribe/coding-plan",
+    apiKeyUrl: "https://platform.minimax.io/console/plan",
     settingsConfig: {
       name: "MiniMax en",
       baseUrl: "https://api.minimax.io/v1",
