@@ -347,10 +347,16 @@ export const providerPresets: ProviderPreset[] = [
     nameKey: "providerForm.presets.ucloudCoding",
     websiteUrl: "https://www.compshare.cn",
     apiKeyUrl: "https://www.compshare.cn/coding-plan",
+    // 套餐只含国产模型（DeepSeek / Kimi / GLM / MiniMax），官方接入页各档都用
+    // deepseek-v4-pro：https://www.compshare.cn/docs/modelverse/package_plan/usecases (2026-09-11)
     settingsConfig: {
       env: {
         ANTHROPIC_BASE_URL: "https://cp.compshare.cn",
         ANTHROPIC_AUTH_TOKEN: "",
+        ANTHROPIC_MODEL: "deepseek-v4-pro",
+        ANTHROPIC_DEFAULT_HAIKU_MODEL: "deepseek-v4-pro",
+        ANTHROPIC_DEFAULT_SONNET_MODEL: "deepseek-v4-pro",
+        ANTHROPIC_DEFAULT_OPUS_MODEL: "deepseek-v4-pro",
       },
     },
     endpointCandidates: ["https://cp.compshare.cn"],
@@ -672,30 +678,8 @@ export const providerPresets: ProviderPreset[] = [
     iconColor: "#0F62FE",
   },
   {
-    name: "Baidu Qianfan Coding Plan",
-    family: "baidu-qianfan",
-    planKey: "codingPlan",
-    websiteUrl: "https://cloud.baidu.com/product/qianfan_modelbuilder",
-    apiKeyUrl:
-      "https://console.bce.baidu.com/qianfan/ais/console/applicationConsole/application",
-    settingsConfig: {
-      env: {
-        ANTHROPIC_BASE_URL: "https://qianfan.baidubce.com/anthropic/coding",
-        ANTHROPIC_AUTH_TOKEN: "",
-        ANTHROPIC_MODEL: "qianfan-code-latest",
-        ANTHROPIC_DEFAULT_HAIKU_MODEL: "qianfan-code-latest",
-        ANTHROPIC_DEFAULT_SONNET_MODEL: "qianfan-code-latest",
-        ANTHROPIC_DEFAULT_OPUS_MODEL: "qianfan-code-latest",
-      },
-    },
-    category: "cn_official",
-    endpointCandidates: ["https://qianfan.baidubce.com/anthropic/coding"],
-    icon: "baidu",
-    iconColor: "#2932E1",
-  },
-  {
-    // Token Plan 个人版：2026-07-13 起替代 Coding Plan 发售（存量 Coding
-    // Plan 可用至到期，旧预设保留）。模型=官方 Claude Code 接入页
+    // Token Plan 个人版：2026-07-13 起替代 Coding Plan 发售（Coding Plan
+    // 停售，预设已删）。模型=官方 Claude Code 接入页
     // （2026-07-30 版）全角色 deepseek-v4-pro；Key 是订阅页专属 Key
     name: "Baidu Qianfan Token Plan",
     family: "baidu-qianfan",

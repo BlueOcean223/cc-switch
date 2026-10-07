@@ -5,7 +5,6 @@
 export const PRESET_SEARCH_ALIASES: Record<string, string> = {
   "AWS Bedrock (AKSK)": "amazon 亚马逊",
   "AWS Bedrock (API Key)": "amazon 亚马逊",
-  "Baidu Qianfan Coding Plan": "百度 千帆 文心",
   "Baidu Qianfan Token Plan": "百度 千帆 文心",
   BaiLing: "蚂蚁 百灵 ling",
   DeepSeek: "深度求索",

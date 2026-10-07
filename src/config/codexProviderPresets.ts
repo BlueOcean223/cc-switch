@@ -505,24 +505,6 @@ export const codexProviderPresets: CodexProviderPreset[] = [
     iconColor: "#000000",
   },
   {
-    name: "Compshare Coding Plan",
-    family: "compshare",
-    planKey: "codingPlan",
-    nameKey: "providerForm.presets.ucloudCoding",
-    websiteUrl: "https://www.compshare.cn",
-    apiKeyUrl: "https://www.compshare.cn/coding-plan",
-    auth: generateThirdPartyAuth(""),
-    config: generateThirdPartyConfig(
-      "compshare_coding",
-      "https://cp.compshare.cn/v1",
-      "gpt-5.6-sol",
-    ),
-    endpointCandidates: ["https://cp.compshare.cn/v1"],
-    category: "aggregator",
-    icon: "ucloud",
-    iconColor: "#000000",
-  },
-  {
     name: "Azure OpenAI",
     websiteUrl:
       "https://learn.microsoft.com/en-us/azure/ai-foundry/openai/how-to/codex",

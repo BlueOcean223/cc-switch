@@ -15,6 +15,7 @@ First release of this fork of [farion1231/cc-switch](https://github.com/farion12
 - **Format conversion**: Claude "Upstream Format", Chat Completions and Anthropic upstreams for Codex and Grok Build, reasoning conversion, full-URL endpoints, custom User-Agent and request overrides. Codex presets on Chat Completions endpoints and Claude presets that only worked through routing are gone too.
 - **Claude Desktop** support.
 - **GitHub Copilot and xAI sign-in**, and the Codex OAuth reverse proxy for Claude. ChatGPT accounts for the Codex OpenAI Official card stay.
+- The Compshare Coding Plan preset for Codex, which needed routing to map GPT model names to the plan's models, and the Baidu Qianfan Coding Plan preset, no longer sold since 2026-07-13 (Token Plan replaces it). The Compshare Coding Plan presets for Claude Code, OpenClaw and Hermes now use `deepseek-v4-pro`, as in Compshare's guide; the plan has no Claude or GPT models.
 - Provider spending limits, partner promotion, the tray "open website" item and the new-layout notice.
 - Matching session usage against rows recorded by the old local routing. Rows it recorded are kept and still counted.
 

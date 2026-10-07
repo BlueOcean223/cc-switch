@@ -679,12 +679,12 @@ export const openclawProviderPresets: OpenClawProviderPreset[] = [
       baseUrl: "https://cp.compshare.cn/v1",
       apiKey: "",
       api: "anthropic-messages",
+      // 套餐只含国产模型，没有 Claude；按官方接入页用 deepseek-v4-pro
+      // https://www.compshare.cn/docs/modelverse/package_plan/usecases (2026-09-11)
       models: [
         {
-          id: "claude-opus-5",
-          name: "Claude Opus 5",
-          contextWindow: 1000000,
-          cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
+          id: "deepseek-v4-pro",
+          name: "DeepSeek V4 Pro",
         },
       ],
     },
@@ -700,10 +700,10 @@ export const openclawProviderPresets: OpenClawProviderPreset[] = [
     },
     suggestedDefaults: {
       model: {
-        primary: "compshare-coding/claude-opus-5",
+        primary: "compshare-coding/deepseek-v4-pro",
       },
       modelCatalog: {
-        "compshare-coding/claude-opus-5": { alias: "Opus" },
+        "compshare-coding/deepseek-v4-pro": { alias: "DeepSeek" },
       },
     },
   },

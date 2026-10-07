@@ -486,13 +486,15 @@ export const hermesProviderPresets: HermesProviderPreset[] = [
       base_url: "https://cp.compshare.cn/v1",
       api_key: "",
       api_mode: "chat_completions",
-      models: [{ id: "gpt-5.6-sol", name: "GPT-5.6 Sol" }],
+      // 套餐只含国产模型，没有 GPT；按官方接入页用 deepseek-v4-pro
+      // https://www.compshare.cn/docs/modelverse/package_plan/usecases (2026-09-11)
+      models: [{ id: "deepseek-v4-pro", name: "DeepSeek V4 Pro" }],
     },
     category: "aggregator",
     icon: "ucloud",
     iconColor: "#000000",
     suggestedDefaults: {
-      model: { default: "gpt-5.6-sol", provider: "compshare_coding" },
+      model: { default: "deepseek-v4-pro", provider: "compshare_coding" },
     },
   },
   {
