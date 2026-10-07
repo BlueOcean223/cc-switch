@@ -746,6 +746,7 @@
     },
     "form": {
       "providerKey": "Provider key",
+      "builtInProviderHint": "Pi ships this provider ({{provider}}). CC Switch only writes the API key to models.json; Pi keeps the address, API and model list and updates them itself. If you saved a key for this provider with /login, Pi uses that one first.",
       "providerKeyRequired": "Provider key is required",
       "selectPresetRequired": "Select a preset or custom configuration first",
       "fixJsonFirst": "Fix the configuration JSON below before editing the structured fields.",

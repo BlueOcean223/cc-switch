@@ -166,7 +166,7 @@ impl Provider {
             ),
             // Pi custom providers use the native models.json field names.
             AppType::Pi => (
-                crate::pi_config::provider_base_url(settings).unwrap_or_default(),
+                crate::pi_config::provider_base_url(&self.id, settings).unwrap_or_default(),
                 str_at(settings.get("apiKey")),
             ),
             // OpenCode (OMO) nests credentials under `options` (the SDK options object).

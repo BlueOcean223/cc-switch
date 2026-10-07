@@ -156,7 +156,9 @@ impl StreamCheckService {
             }
             AppType::OpenClaw => Self::extract_openclaw_base_url(provider),
             AppType::Hermes => Self::extract_hermes_base_url(provider),
-            AppType::Pi => crate::pi_config::provider_base_url(&provider.settings_config),
+            AppType::Pi => {
+                crate::pi_config::provider_base_url(&provider.id, &provider.settings_config)
+            }
             AppType::Claude => Self::extract_claude_base_url(provider),
             AppType::Gemini => Self::extract_gemini_base_url(provider),
             AppType::Codex => Self::extract_codex_base_url(provider),

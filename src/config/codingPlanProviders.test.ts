@@ -91,6 +91,15 @@ describe("extractBaseUrlForUsageDetection", () => {
     ).toBe("https://opencode.ai/zen/go/v1");
   });
 
+  it("looks up the address of a key-only entry for a provider Pi ships", () => {
+    expect(
+      extractBaseUrlForUsageDetection("pi", { apiKey: "k" }, "opencode-go"),
+    ).toBe("https://opencode.ai/zen/go/v1");
+    expect(
+      extractBaseUrlForUsageDetection("pi", { apiKey: "k" }, "my-provider"),
+    ).toBeNull();
+  });
+
   it("returns null for unsupported apps", () => {
     expect(
       extractBaseUrlForUsageDetection("gemini", {
@@ -103,6 +112,7 @@ describe("extractBaseUrlForUsageDetection", () => {
 type TestProvider = {
   settingsConfig?: Record<string, any>;
   meta?: Record<string, any>;
+  providerKey?: string;
 };
 
 describe("injectCodingPlanUsageScript", () => {
@@ -139,6 +149,13 @@ describe("injectCodingPlanUsageScript", () => {
     expectInjected(
       inject("pi", {
         settingsConfig: { baseUrl: "https://opencode.ai/zen/go/v1" },
+      }),
+    );
+    // Pi 内置的 opencode-go 条目只有 key
+    expectInjected(
+      inject("pi", {
+        providerKey: "opencode-go",
+        settingsConfig: { apiKey: "k" },
       }),
     );
   });

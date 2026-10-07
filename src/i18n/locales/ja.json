@@ -746,6 +746,7 @@
     },
     "form": {
       "providerKey": "プロバイダーキー",
+      "builtInProviderHint": "Pi にはこのプロバイダー（{{provider}}）が組み込まれています。CC Switch は models.json に API Key だけを書き込み、アドレス、API、モデル一覧は Pi が管理して更新します。/login でこのプロバイダーの Key を保存している場合は、Pi はそちらを優先します。",
       "providerKeyRequired": "プロバイダーキーを入力してください",
       "selectPresetRequired": "先にプリセットまたはカスタム設定を選択してください",
       "fixJsonFirst": "下の設定 JSON を修正してから、構造化フィールドを編集してください。",

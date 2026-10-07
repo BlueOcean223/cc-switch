@@ -746,6 +746,7 @@
     },
     "form": {
       "providerKey": "供应商标识",
+      "builtInProviderHint": "Pi 已内置这个供应商（{{provider}}）。这里只在 models.json 里写 API Key，地址、接口和模型列表由 Pi 维护，随 Pi 更新。用 /login 保存过这个供应商的 Key 时，Pi 优先用那一份。",
       "providerKeyRequired": "供应商标识不能为空",
       "selectPresetRequired": "请先选择一个预设或自定义配置",
       "fixJsonFirst": "请先修复下方配置 JSON，再编辑结构化字段。",

@@ -10,6 +10,7 @@
 import { createUsageScript } from "@/types";
 import { TEMPLATE_TYPES } from "@/config/constants";
 import { extractCodexBaseUrl } from "@/utils/providerConfigUtils";
+import { piBuiltInBaseUrl } from "@/config/piProviderPresets";
 
 export interface CodingPlanProviderEntry {
   /** 与后端 QuotaTier 的 `codingPlanProvider` 取值对齐 */
@@ -110,6 +111,7 @@ export function detectCodingPlanProvider(
 export function extractBaseUrlForUsageDetection(
   appId: string,
   settingsConfig: Record<string, any> | undefined,
+  providerKey?: string,
 ): string | null {
   if (!settingsConfig) return null;
   let raw: unknown;
@@ -128,7 +130,10 @@ export function extractBaseUrlForUsageDetection(
       raw = settingsConfig.options?.baseURL;
       break;
     case "pi":
-      raw = settingsConfig.baseUrl;
+      // Pi 内置供应商的条目只写 key，地址按供应商 ID 找
+      raw =
+        settingsConfig.baseUrl ??
+        (providerKey ? piBuiltInBaseUrl(providerKey) : undefined);
       break;
     default:
       return null;
@@ -152,6 +157,7 @@ export function injectCodingPlanUsageScript<
   T extends {
     settingsConfig?: Record<string, any>;
     meta?: Record<string, any>;
+    providerKey?: string;
   },
 >(appId: string, provider: T): T {
   if (provider.meta?.usage_script) return provider;
@@ -159,6 +165,7 @@ export function injectCodingPlanUsageScript<
   const baseUrl = extractBaseUrlForUsageDetection(
     appId,
     provider.settingsConfig,
+    provider.providerKey,
   );
   const codingPlanProvider = detectCodingPlanProvider(baseUrl);
   if (!codingPlanProvider) return provider;

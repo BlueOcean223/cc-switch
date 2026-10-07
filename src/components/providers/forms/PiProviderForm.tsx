@@ -503,6 +503,12 @@ export function PiProviderForm({
   );
   const initialPreset = useMemo(() => {
     if (!providerId) return null;
+    if (isEdit && !optionalText(initialConfig.baseUrl)) {
+      const builtInPreset = piProviderPresets.find(
+        (candidate) => candidate.piBuiltIn?.provider === providerId,
+      );
+      if (builtInPreset) return builtInPreset;
+    }
     const preset =
       piProviderPresets.find(
         (candidate) => candidate.providerKey === providerId,
@@ -617,6 +623,15 @@ export function PiProviderForm({
   const settingsConfigText = form.watch("settingsConfig");
   const isSettingsConfigValid = parseJsonObject(settingsConfigText) !== null;
   const displayName = form.watch("name");
+  // Pi 已内置的供应商：models.json 里只写 key，地址、接口和模型由 Pi 维护。
+  // 条目里自己写了地址或模型时按普通条目编辑。
+  const builtIn =
+    selectedPreset?.piBuiltIn &&
+    providerKey === selectedPreset.piBuiltIn.provider &&
+    !baseUrl.trim() &&
+    models.length === 0
+      ? selectedPreset.piBuiltIn
+      : undefined;
   const hasConfigurationSelection = isEdit || selectedPresetId !== null;
   const isSubmitReady = hasConfigurationSelection;
 
@@ -878,6 +893,36 @@ export function PiProviderForm({
     const entry = presetEntries.find((candidate) => candidate.id === id);
     if (!entry) return;
     const preset = entry.preset;
+    if (preset.piBuiltIn) {
+      setSelectedPreset(preset);
+      setCategory(preset.category ?? "custom");
+      setProviderKey(preset.piBuiltIn.provider);
+      setNativeNameFollowsDisplay(false);
+      setNativeNameOverride(undefined);
+      displayNameBaselineRef.current = preset.settingsConfig.name.trim();
+      lastValidSettingsConfigRef.current = {};
+      form.reset({
+        name: preset.settingsConfig.name,
+        websiteUrl: preset.websiteUrl,
+        notes: "",
+        settingsConfig: "{}",
+        icon: preset.icon ?? "",
+        iconColor: preset.iconColor ?? "",
+      });
+      setBaseUrl("");
+      setApi("openai-completions");
+      setIncludeApi(false);
+      includeModelsRef.current = false;
+      setApiKey("");
+      setProviderHeaders({});
+      setProviderCompat({});
+      includeCompatRef.current = false;
+      setProviderPassthrough({});
+      replaceModelsState([]);
+      setExpandedModelKeys(new Set());
+      setExpandedThinkingMapKeys(new Set());
+      return;
+    }
     const presetConfig = asObject(preset.settingsConfig);
     const nextModels = preset.settingsConfig.models.map((model) =>
       modelDraft(model),
@@ -1197,7 +1242,7 @@ export function PiProviderForm({
           "#pi-api-key",
         );
       }
-      if (!isEdit && models.length === 0) {
+      if (!isEdit && !builtIn && models.length === 0) {
         throw new PiFormValidationError(
           t("pi.form.modelRequired"),
           "#pi-add-model",
@@ -1491,33 +1536,35 @@ export function PiProviderForm({
               }
             />
 
-            <Field
-              label={t("opencode.npmPackage", {
-                defaultValue: "接口格式",
-              })}
-              htmlFor="pi-provider-api-select"
-            >
-              <Select value={api} onValueChange={handleApiChange}>
-                <SelectTrigger id="pi-provider-api-select" className="w-full">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {PI_API_FORMATS.map((format) => (
-                    <SelectItem key={format.value} value={format.value}>
-                      {format.label}
-                    </SelectItem>
-                  ))}
-                  {!isKnownApiFormat && api && (
-                    <SelectItem value={api}>{api}</SelectItem>
-                  )}
-                </SelectContent>
-              </Select>
-              <p className="text-xs text-fg-2">
-                {t("opencode.npmPackageHint", {
-                  defaultValue: "选择 AI 服务的 API 接口格式",
+            {!builtIn && (
+              <Field
+                label={t("opencode.npmPackage", {
+                  defaultValue: "接口格式",
                 })}
-              </p>
-            </Field>
+                htmlFor="pi-provider-api-select"
+              >
+                <Select value={api} onValueChange={handleApiChange}>
+                  <SelectTrigger id="pi-provider-api-select" className="w-full">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {PI_API_FORMATS.map((format) => (
+                      <SelectItem key={format.value} value={format.value}>
+                        {format.label}
+                      </SelectItem>
+                    ))}
+                    {!isKnownApiFormat && api && (
+                      <SelectItem value={api}>{api}</SelectItem>
+                    )}
+                  </SelectContent>
+                </Select>
+                <p className="text-xs text-fg-2">
+                  {t("opencode.npmPackageHint", {
+                    defaultValue: "选择 AI 服务的 API 接口格式",
+                  })}
+                </p>
+              </Field>
+            )}
 
             <ApiKeySection
               id="pi-api-key"
@@ -1529,558 +1576,579 @@ export function PiProviderForm({
               websiteUrl={selectedPreset?.apiKeyUrl ?? ""}
             />
 
-            <div className="space-y-2">
-              <EndpointField
-                id="pi-provider-base-url"
-                label={t("opencode.baseUrl", { defaultValue: "Base URL" })}
-                value={baseUrl}
-                onChange={handleBaseUrlChange}
-                placeholder="https://api.example.com/v1"
-              />
-              <p className="text-xs text-fg-2">
-                {t("opencode.baseUrlHint", {
-                  defaultValue: "自定义 API 端点地址",
+            {builtIn ? (
+              <p role="note" className="text-xs text-fg-2">
+                {t("pi.form.builtInProviderHint", {
+                  provider: builtIn.provider,
+                  defaultValue:
+                    "Pi 已内置这个供应商（{{provider}}）。这里只在 models.json 里写 API Key，地址、接口和模型列表由 Pi 维护，随 Pi 更新。用 /login 保存过这个供应商的 Key 时，Pi 优先用那一份。",
                 })}
               </p>
-            </div>
-
-            <RequestHeadersEditor
-              headers={providerHeaders}
-              onHeadersChange={handleProviderHeadersChange}
-            />
-
-            <StructuredOptionsEditor
-              id="pi-provider-compat"
-              title={t("pi.form.compatibility")}
-              hint={t("pi.form.compatibilityHint")}
-              addLabel={t("pi.form.addCompatibilityOption")}
-              emptyLabel={t("pi.form.noCompatibilityOptions")}
-              keyLabel={t("pi.form.optionKey")}
-              valueLabel={t("pi.form.optionValue")}
-              keyPlaceholder="supportsDeveloperRole"
-              valuePlaceholder="false"
-              removeLabel={t("pi.form.removeCompatibilityOption")}
-              options={providerCompat}
-              onOptionsChange={handleProviderCompatChange}
-            />
-
-            <div
-              id="pi-models-section"
-              tabIndex={-1}
-              className="space-y-3 border-l border-border pl-3 outline-none"
-            >
-              <div className="flex items-center justify-between gap-3">
-                <FormLabel>
-                  {t("opencode.models", { defaultValue: "模型配置" })}
-                </FormLabel>
-                <div className="flex gap-1">
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    onClick={handleFetchModels}
-                    disabled={isFetchingModels}
-                    className="h-7 gap-1"
-                  >
-                    {isFetchingModels ? (
-                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                    ) : (
-                      <Download className="h-3.5 w-3.5" />
-                    )}
-                    {t("providerForm.fetchModels")}
-                  </Button>
-                  <Button
-                    id="pi-add-model"
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    onClick={addModel}
-                    className="h-7 gap-1"
-                  >
-                    <Plus className="h-3.5 w-3.5" />
-                    {t("pi.form.addModel")}
-                  </Button>
-                </div>
-              </div>
-
-              {models.length === 0 ? (
-                <p role="status" className="py-2 text-sm text-fg-2">
-                  {t("pi.form.noModels", {
-                    defaultValue: "暂无模型配置",
-                  })}
-                </p>
-              ) : (
+            ) : (
+              <>
                 <div className="space-y-2">
-                  <div className="flex items-center gap-2 px-1 text-xs text-fg-2">
-                    <span className="w-9" />
-                    <span className="flex-1">
-                      {t("pi.form.modelId")}
-                      <span
-                        aria-hidden="true"
-                        className="ml-1 text-destructive"
-                      >
-                        *
-                      </span>
-                    </span>
-                    <span className="flex-1">
-                      {t("pi.form.modelName")}
-                      <span
-                        aria-hidden="true"
-                        className="ml-1 text-destructive"
-                      >
-                        *
-                      </span>
-                    </span>
-                    <span className="w-9" />
-                  </div>
-                  {models.map((model) => {
-                    const isExpanded = expandedModelKeys.has(model.key);
-                    const validThinkingLevelMap = isPiThinkingLevelMap(
-                      model.thinkingLevelMap,
-                    )
-                      ? model.thinkingLevelMap
-                      : undefined;
-                    const editableThinkingLevelMap =
-                      validThinkingLevelMap ??
-                      (!model.hasThinkingLevelMap ? {} : undefined);
-                    const thinkingMapIsExpanded = expandedThinkingMapKeys.has(
-                      model.key,
-                    );
-                    return (
-                      <div key={model.key} className="space-y-2">
-                        <div className="flex items-center gap-2">
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            size="icon"
-                            onClick={() => toggleModelDetails(model.key)}
-                            aria-label={t("pi.form.toggleModelDetails", {
-                              defaultValue: "展开或收起模型详情",
-                            })}
-                            className="h-9 w-9 shrink-0"
-                          >
-                            <ChevronRight
-                              className={`h-4 w-4 transition-transform motion-reduce:transition-none ${
-                                isExpanded ? "rotate-90" : ""
-                              }`}
-                            />
-                          </Button>
-                          <div className="flex min-w-0 flex-1 gap-1">
-                            <Input
-                              id={`pi-model-id-${model.key}`}
-                              value={model.id}
-                              onChange={(event) =>
-                                changeModelId(model.key, event.target.value)
-                              }
-                              placeholder="model-id"
-                              aria-label={t("pi.form.modelId")}
-                              required
-                              className="min-w-0 flex-1"
-                            />
-                            {fetchedModels.length > 0 && (
-                              <ModelDropdown
-                                models={fetchedModels}
-                                onSelect={(id) =>
-                                  selectFetchedModelId(model.key, id)
-                                }
-                              />
-                            )}
-                          </div>
-                          <Input
-                            id={`pi-model-name-${model.key}`}
-                            value={model.name}
-                            onChange={(event) =>
-                              updateModelOverride(model.key, {
-                                name: event.target.value,
-                                hasName: true,
-                              })
-                            }
-                            placeholder={t("pi.form.modelNamePlaceholder")}
-                            aria-label={t("pi.form.modelName")}
-                            required={!isEdit || model.hasName}
-                            className="min-w-0 flex-1"
-                          />
-                          <HoverTip content={t("pi.form.removeModel")}>
-                            <Button
-                              type="button"
-                              variant="ghost"
-                              size="icon"
-                              onClick={() => removeModel(model.key)}
-                              aria-label={t("pi.form.removeModel")}
-                              className="h-9 w-9 shrink-0 text-fg-2 hover:text-destructive"
-                            >
-                              <Trash2 className="h-4 w-4" />
-                            </Button>
-                          </HoverTip>
-                        </div>
+                  <EndpointField
+                    id="pi-provider-base-url"
+                    label={t("opencode.baseUrl", { defaultValue: "Base URL" })}
+                    value={baseUrl}
+                    onChange={handleBaseUrlChange}
+                    placeholder="https://api.example.com/v1"
+                  />
+                  <p className="text-xs text-fg-2">
+                    {t("opencode.baseUrlHint", {
+                      defaultValue: "自定义 API 端点地址",
+                    })}
+                  </p>
+                </div>
 
-                        {isExpanded && (
-                          <div className="ml-9 grid gap-3 border-l-2 border-muted pl-4 sm:grid-cols-2">
-                            <div className="flex min-h-9 flex-wrap items-center gap-x-8 gap-y-2 sm:col-span-2">
-                              <div className="flex items-center gap-2.5">
-                                <Label
-                                  htmlFor={`pi-model-reasoning-${model.key}`}
-                                  className="cursor-pointer"
-                                >
-                                  {t("pi.form.reasoning")}
-                                </Label>
-                                <Switch
-                                  id={`pi-model-reasoning-${model.key}`}
-                                  checked={model.reasoning === true}
-                                  onCheckedChange={(checked) =>
-                                    updateModelOverride(model.key, {
-                                      reasoning: checked,
-                                      hasReasoning: true,
-                                    })
-                                  }
-                                />
-                              </div>
-                              <div className="flex items-center gap-2.5">
-                                <Label
-                                  htmlFor={`pi-model-image-input-${model.key}`}
-                                  className="cursor-pointer"
-                                >
-                                  {t("pi.form.imageInput")}
-                                </Label>
-                                <Switch
-                                  id={`pi-model-image-input-${model.key}`}
-                                  checked={supportsImageInput(model.input)}
-                                  onCheckedChange={(checked) =>
-                                    updateModelOverride(model.key, {
-                                      input: withImageInput(
-                                        model.input,
-                                        checked,
-                                      ),
-                                      hasInput: true,
-                                    })
-                                  }
-                                />
-                              </div>
-                            </div>
-                            <Field
-                              label={
-                                <>
-                                  {t("pi.form.contextWindow")}
-                                  <span
-                                    aria-hidden="true"
-                                    className="ml-1 text-destructive"
-                                  >
-                                    *
-                                  </span>
-                                </>
-                              }
-                              htmlFor={`pi-model-context-window-${model.key}`}
-                            >
-                              <Input
-                                id={`pi-model-context-window-${model.key}`}
-                                aria-label={t("pi.form.contextWindow")}
-                                type="number"
-                                step="any"
-                                min="1"
-                                inputMode="decimal"
-                                required={!isEdit || model.hasContextWindow}
-                                value={model.contextWindow}
-                                onChange={(event) =>
-                                  updateModelOverride(model.key, {
-                                    contextWindow: event.target.value,
-                                    hasContextWindow: true,
-                                  })
-                                }
-                                placeholder="128000"
-                              />
-                            </Field>
-                            <Field
-                              label={
-                                <>
-                                  {t("pi.form.maxTokens")}
-                                  <span
-                                    aria-hidden="true"
-                                    className="ml-1 text-destructive"
-                                  >
-                                    *
-                                  </span>
-                                </>
-                              }
-                              htmlFor={`pi-model-max-tokens-${model.key}`}
-                            >
-                              <Input
-                                id={`pi-model-max-tokens-${model.key}`}
-                                aria-label={t("pi.form.maxTokens")}
-                                type="number"
-                                step="any"
-                                min="1"
-                                inputMode="decimal"
-                                required={!isEdit || model.hasMaxTokens}
-                                value={model.maxTokens}
-                                onChange={(event) =>
-                                  updateModelOverride(model.key, {
-                                    maxTokens: event.target.value,
-                                    hasMaxTokens: true,
-                                  })
-                                }
-                                placeholder="16384"
-                              />
-                            </Field>
-                            {model.reasoning === true && (
-                              <div
-                                id={`pi-model-thinking-levels-${model.key}`}
-                                tabIndex={-1}
-                                className="w-full space-y-2 sm:col-span-2"
+                <RequestHeadersEditor
+                  headers={providerHeaders}
+                  onHeadersChange={handleProviderHeadersChange}
+                />
+
+                <StructuredOptionsEditor
+                  id="pi-provider-compat"
+                  title={t("pi.form.compatibility")}
+                  hint={t("pi.form.compatibilityHint")}
+                  addLabel={t("pi.form.addCompatibilityOption")}
+                  emptyLabel={t("pi.form.noCompatibilityOptions")}
+                  keyLabel={t("pi.form.optionKey")}
+                  valueLabel={t("pi.form.optionValue")}
+                  keyPlaceholder="supportsDeveloperRole"
+                  valuePlaceholder="false"
+                  removeLabel={t("pi.form.removeCompatibilityOption")}
+                  options={providerCompat}
+                  onOptionsChange={handleProviderCompatChange}
+                />
+
+                <div
+                  id="pi-models-section"
+                  tabIndex={-1}
+                  className="space-y-3 border-l border-border pl-3 outline-none"
+                >
+                  <div className="flex items-center justify-between gap-3">
+                    <FormLabel>
+                      {t("opencode.models", { defaultValue: "模型配置" })}
+                    </FormLabel>
+                    <div className="flex gap-1">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={handleFetchModels}
+                        disabled={isFetchingModels}
+                        className="h-7 gap-1"
+                      >
+                        {isFetchingModels ? (
+                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        ) : (
+                          <Download className="h-3.5 w-3.5" />
+                        )}
+                        {t("providerForm.fetchModels")}
+                      </Button>
+                      <Button
+                        id="pi-add-model"
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={addModel}
+                        className="h-7 gap-1"
+                      >
+                        <Plus className="h-3.5 w-3.5" />
+                        {t("pi.form.addModel")}
+                      </Button>
+                    </div>
+                  </div>
+
+                  {models.length === 0 ? (
+                    <p role="status" className="py-2 text-sm text-fg-2">
+                      {t("pi.form.noModels", {
+                        defaultValue: "暂无模型配置",
+                      })}
+                    </p>
+                  ) : (
+                    <div className="space-y-2">
+                      <div className="flex items-center gap-2 px-1 text-xs text-fg-2">
+                        <span className="w-9" />
+                        <span className="flex-1">
+                          {t("pi.form.modelId")}
+                          <span
+                            aria-hidden="true"
+                            className="ml-1 text-destructive"
+                          >
+                            *
+                          </span>
+                        </span>
+                        <span className="flex-1">
+                          {t("pi.form.modelName")}
+                          <span
+                            aria-hidden="true"
+                            className="ml-1 text-destructive"
+                          >
+                            *
+                          </span>
+                        </span>
+                        <span className="w-9" />
+                      </div>
+                      {models.map((model) => {
+                        const isExpanded = expandedModelKeys.has(model.key);
+                        const validThinkingLevelMap = isPiThinkingLevelMap(
+                          model.thinkingLevelMap,
+                        )
+                          ? model.thinkingLevelMap
+                          : undefined;
+                        const editableThinkingLevelMap =
+                          validThinkingLevelMap ??
+                          (!model.hasThinkingLevelMap ? {} : undefined);
+                        const thinkingMapIsExpanded =
+                          expandedThinkingMapKeys.has(model.key);
+                        return (
+                          <div key={model.key} className="space-y-2">
+                            <div className="flex items-center gap-2">
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="icon"
+                                onClick={() => toggleModelDetails(model.key)}
+                                aria-label={t("pi.form.toggleModelDetails", {
+                                  defaultValue: "展开或收起模型详情",
+                                })}
+                                className="h-9 w-9 shrink-0"
                               >
-                                <div className="flex min-h-9 items-center">
-                                  <Button
-                                    type="button"
-                                    variant="ghost"
-                                    size="sm"
-                                    onClick={() =>
-                                      setExpandedThinkingMapKeys((current) => {
-                                        const next = new Set(current);
-                                        if (next.has(model.key)) {
-                                          next.delete(model.key);
-                                          setEditingThinkingLevel((editing) =>
-                                            editing?.modelKey === model.key
-                                              ? null
-                                              : editing,
-                                          );
-                                        } else {
-                                          next.add(model.key);
-                                        }
-                                        return next;
+                                <ChevronRight
+                                  className={`h-4 w-4 transition-transform motion-reduce:transition-none ${
+                                    isExpanded ? "rotate-90" : ""
+                                  }`}
+                                />
+                              </Button>
+                              <div className="flex min-w-0 flex-1 gap-1">
+                                <Input
+                                  id={`pi-model-id-${model.key}`}
+                                  value={model.id}
+                                  onChange={(event) =>
+                                    changeModelId(model.key, event.target.value)
+                                  }
+                                  placeholder="model-id"
+                                  aria-label={t("pi.form.modelId")}
+                                  required
+                                  className="min-w-0 flex-1"
+                                />
+                                {fetchedModels.length > 0 && (
+                                  <ModelDropdown
+                                    models={fetchedModels}
+                                    onSelect={(id) =>
+                                      selectFetchedModelId(model.key, id)
+                                    }
+                                  />
+                                )}
+                              </div>
+                              <Input
+                                id={`pi-model-name-${model.key}`}
+                                value={model.name}
+                                onChange={(event) =>
+                                  updateModelOverride(model.key, {
+                                    name: event.target.value,
+                                    hasName: true,
+                                  })
+                                }
+                                placeholder={t("pi.form.modelNamePlaceholder")}
+                                aria-label={t("pi.form.modelName")}
+                                required={!isEdit || model.hasName}
+                                className="min-w-0 flex-1"
+                              />
+                              <HoverTip content={t("pi.form.removeModel")}>
+                                <Button
+                                  type="button"
+                                  variant="ghost"
+                                  size="icon"
+                                  onClick={() => removeModel(model.key)}
+                                  aria-label={t("pi.form.removeModel")}
+                                  className="h-9 w-9 shrink-0 text-fg-2 hover:text-destructive"
+                                >
+                                  <Trash2 className="h-4 w-4" />
+                                </Button>
+                              </HoverTip>
+                            </div>
+
+                            {isExpanded && (
+                              <div className="ml-9 grid gap-3 border-l-2 border-muted pl-4 sm:grid-cols-2">
+                                <div className="flex min-h-9 flex-wrap items-center gap-x-8 gap-y-2 sm:col-span-2">
+                                  <div className="flex items-center gap-2.5">
+                                    <Label
+                                      htmlFor={`pi-model-reasoning-${model.key}`}
+                                      className="cursor-pointer"
+                                    >
+                                      {t("pi.form.reasoning")}
+                                    </Label>
+                                    <Switch
+                                      id={`pi-model-reasoning-${model.key}`}
+                                      checked={model.reasoning === true}
+                                      onCheckedChange={(checked) =>
+                                        updateModelOverride(model.key, {
+                                          reasoning: checked,
+                                          hasReasoning: true,
+                                        })
+                                      }
+                                    />
+                                  </div>
+                                  <div className="flex items-center gap-2.5">
+                                    <Label
+                                      htmlFor={`pi-model-image-input-${model.key}`}
+                                      className="cursor-pointer"
+                                    >
+                                      {t("pi.form.imageInput")}
+                                    </Label>
+                                    <Switch
+                                      id={`pi-model-image-input-${model.key}`}
+                                      checked={supportsImageInput(model.input)}
+                                      onCheckedChange={(checked) =>
+                                        updateModelOverride(model.key, {
+                                          input: withImageInput(
+                                            model.input,
+                                            checked,
+                                          ),
+                                          hasInput: true,
+                                        })
+                                      }
+                                    />
+                                  </div>
+                                </div>
+                                <Field
+                                  label={
+                                    <>
+                                      {t("pi.form.contextWindow")}
+                                      <span
+                                        aria-hidden="true"
+                                        className="ml-1 text-destructive"
+                                      >
+                                        *
+                                      </span>
+                                    </>
+                                  }
+                                  htmlFor={`pi-model-context-window-${model.key}`}
+                                >
+                                  <Input
+                                    id={`pi-model-context-window-${model.key}`}
+                                    aria-label={t("pi.form.contextWindow")}
+                                    type="number"
+                                    step="any"
+                                    min="1"
+                                    inputMode="decimal"
+                                    required={!isEdit || model.hasContextWindow}
+                                    value={model.contextWindow}
+                                    onChange={(event) =>
+                                      updateModelOverride(model.key, {
+                                        contextWindow: event.target.value,
+                                        hasContextWindow: true,
                                       })
                                     }
-                                    aria-label={
-                                      thinkingMapIsExpanded
-                                        ? t("common.collapse")
-                                        : t("pi.form.customizeThinkingLevels")
+                                    placeholder="128000"
+                                  />
+                                </Field>
+                                <Field
+                                  label={
+                                    <>
+                                      {t("pi.form.maxTokens")}
+                                      <span
+                                        aria-hidden="true"
+                                        className="ml-1 text-destructive"
+                                      >
+                                        *
+                                      </span>
+                                    </>
+                                  }
+                                  htmlFor={`pi-model-max-tokens-${model.key}`}
+                                >
+                                  <Input
+                                    id={`pi-model-max-tokens-${model.key}`}
+                                    aria-label={t("pi.form.maxTokens")}
+                                    type="number"
+                                    step="any"
+                                    min="1"
+                                    inputMode="decimal"
+                                    required={!isEdit || model.hasMaxTokens}
+                                    value={model.maxTokens}
+                                    onChange={(event) =>
+                                      updateModelOverride(model.key, {
+                                        maxTokens: event.target.value,
+                                        hasMaxTokens: true,
+                                      })
                                     }
-                                    aria-expanded={thinkingMapIsExpanded}
-                                    className="-ml-2 h-8 gap-1.5 px-2 text-fg-1"
+                                    placeholder="16384"
+                                  />
+                                </Field>
+                                {model.reasoning === true && (
+                                  <div
+                                    id={`pi-model-thinking-levels-${model.key}`}
+                                    tabIndex={-1}
+                                    className="w-full space-y-2 sm:col-span-2"
                                   >
-                                    <span>
-                                      {t("pi.form.thinkingLevelsLabel")}
-                                    </span>
-                                    <ChevronDown
-                                      className={`h-4 w-4 transition-transform motion-reduce:transition-none ${
-                                        thinkingMapIsExpanded
-                                          ? "rotate-180"
-                                          : ""
-                                      }`}
-                                    />
-                                  </Button>
-                                </div>
-
-                                {thinkingMapIsExpanded &&
-                                  editableThinkingLevelMap && (
-                                    <div className="overflow-hidden rounded-lg border border-border/70 bg-surface">
-                                      {PI_THINKING_LEVELS.map((level) => {
-                                        const mode = thinkingLevelMode(
-                                          editableThinkingLevelMap,
-                                          level,
-                                        );
-                                        const mappedValue =
-                                          editableThinkingLevelMap[level];
-                                        const popoverOpen =
-                                          editingThinkingLevel?.modelKey ===
-                                            model.key &&
-                                          editingThinkingLevel.level === level;
-                                        return (
-                                          <Popover
-                                            key={level}
-                                            open={popoverOpen}
-                                            onOpenChange={(open) =>
-                                              setEditingThinkingLevel(
-                                                open
-                                                  ? {
-                                                      modelKey: model.key,
-                                                      level,
-                                                    }
-                                                  : null,
+                                    <div className="flex min-h-9 items-center">
+                                      <Button
+                                        type="button"
+                                        variant="ghost"
+                                        size="sm"
+                                        onClick={() =>
+                                          setExpandedThinkingMapKeys(
+                                            (current) => {
+                                              const next = new Set(current);
+                                              if (next.has(model.key)) {
+                                                next.delete(model.key);
+                                                setEditingThinkingLevel(
+                                                  (editing) =>
+                                                    editing?.modelKey ===
+                                                    model.key
+                                                      ? null
+                                                      : editing,
+                                                );
+                                              } else {
+                                                next.add(model.key);
+                                              }
+                                              return next;
+                                            },
+                                          )
+                                        }
+                                        aria-label={
+                                          thinkingMapIsExpanded
+                                            ? t("common.collapse")
+                                            : t(
+                                                "pi.form.customizeThinkingLevels",
                                               )
-                                            }
-                                          >
-                                            <PopoverTrigger asChild>
-                                              <button
-                                                type="button"
-                                                aria-label={t(
-                                                  "pi.form.editThinkingLevel",
-                                                  {
-                                                    level: t(
-                                                      `pi.form.thinkingLevels.${level}`,
-                                                    ),
-                                                  },
-                                                )}
-                                                className="group flex h-[42px] w-full items-center gap-3 border-b border-border/40 px-4 text-left text-sm transition-colors last:border-b-0 hover:bg-subtle"
-                                              >
-                                                <span className="flex-1">
-                                                  {t(
-                                                    `pi.form.thinkingLevels.${level}`,
-                                                  )}
-                                                </span>
-                                                <span
-                                                  className={
-                                                    mode === "value"
-                                                      ? "max-w-[18rem] truncate text-right font-mono text-xs text-fg-1"
-                                                      : "text-xs text-fg-2"
-                                                  }
-                                                >
-                                                  {mode === "default"
-                                                    ? t(
-                                                        "pi.form.thinkingLevelDefault",
-                                                      )
-                                                    : mode === "unsupported"
-                                                      ? t(
-                                                          "pi.form.thinkingLevelUnsupported",
-                                                        )
-                                                      : mappedValue}
-                                                </span>
-                                                <PopoverAnchor asChild>
-                                                  <span
-                                                    className={`inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md transition-[color,background-color,transform] duration-200 ${
-                                                      popoverOpen
-                                                        ? "translate-x-0.5 bg-primary/10 text-primary"
-                                                        : "text-fg-3 group-hover:translate-x-0.5 group-hover:text-fg-2"
-                                                    }`}
-                                                  >
-                                                    <ChevronRight className="h-3.5 w-3.5" />
-                                                  </span>
-                                                </PopoverAnchor>
-                                              </button>
-                                            </PopoverTrigger>
-                                            <PopoverContent
-                                              side="left"
-                                              align="center"
-                                              sideOffset={10}
-                                              collisionPadding={24}
-                                              sticky="always"
-                                              className="pi-thinking-popover z-[1000] w-72 space-y-3 p-4 shadow-xl"
-                                            >
-                                              <p className="text-sm font-medium">
-                                                {t(
-                                                  `pi.form.thinkingLevels.${level}`,
-                                                )}
-                                              </p>
-                                              <label className="flex cursor-pointer items-center gap-2.5 text-sm">
-                                                <input
-                                                  type="radio"
-                                                  name={`pi-thinking-level-mode-${model.key}-${level}`}
-                                                  checked={mode === "default"}
-                                                  onChange={() =>
-                                                    updateThinkingLevelMode(
-                                                      model.key,
-                                                      level,
-                                                      "default",
-                                                    )
-                                                  }
-                                                  className="ui-radio"
-                                                />
-                                                {t(
-                                                  "pi.form.thinkingLevelFollowDefault",
-                                                )}
-                                              </label>
-                                              <div className="flex items-center gap-2.5 text-sm">
-                                                <input
-                                                  id={`pi-thinking-level-value-${model.key}-${level}`}
-                                                  type="radio"
-                                                  name={`pi-thinking-level-mode-${model.key}-${level}`}
-                                                  checked={mode === "value"}
-                                                  aria-label={t(
-                                                    "pi.form.thinkingLevelMapTo",
-                                                  )}
-                                                  onChange={() =>
-                                                    updateThinkingLevelMode(
-                                                      model.key,
-                                                      level,
-                                                      "value",
-                                                    )
-                                                  }
-                                                  className="ui-radio"
-                                                />
-                                                <label
-                                                  htmlFor={`pi-thinking-level-value-${model.key}-${level}`}
-                                                  className="shrink-0 cursor-pointer"
-                                                >
-                                                  {t(
-                                                    "pi.form.thinkingLevelMapTo",
-                                                  )}
-                                                </label>
-                                                <Input
-                                                  value={
-                                                    typeof mappedValue ===
-                                                    "string"
-                                                      ? mappedValue
-                                                      : level
-                                                  }
-                                                  onChange={(event) =>
-                                                    updateThinkingLevelMap(
-                                                      model.key,
-                                                      (map) => ({
-                                                        ...map,
-                                                        [level]:
-                                                          event.target.value,
-                                                      }),
-                                                    )
-                                                  }
-                                                  onFocus={() =>
-                                                    mode !== "value" &&
-                                                    updateThinkingLevelMode(
-                                                      model.key,
-                                                      level,
-                                                      "value",
-                                                    )
-                                                  }
-                                                  aria-label={t(
-                                                    "pi.form.thinkingLevelValue",
-                                                    {
-                                                      level: t(
-                                                        `pi.form.thinkingLevels.${level}`,
-                                                      ),
-                                                    },
-                                                  )}
-                                                  className="h-8 min-w-0 flex-1 font-mono text-xs"
-                                                />
-                                              </div>
-                                              <label className="flex cursor-pointer items-center gap-2.5 text-sm">
-                                                <input
-                                                  type="radio"
-                                                  name={`pi-thinking-level-mode-${model.key}-${level}`}
-                                                  checked={
-                                                    mode === "unsupported"
-                                                  }
-                                                  onChange={() =>
-                                                    updateThinkingLevelMode(
-                                                      model.key,
-                                                      level,
-                                                      "unsupported",
-                                                    )
-                                                  }
-                                                  className="ui-radio"
-                                                />
-                                                {t(
-                                                  "pi.form.thinkingLevelMarkUnavailable",
-                                                )}
-                                              </label>
-                                            </PopoverContent>
-                                          </Popover>
-                                        );
-                                      })}
+                                        }
+                                        aria-expanded={thinkingMapIsExpanded}
+                                        className="-ml-2 h-8 gap-1.5 px-2 text-fg-1"
+                                      >
+                                        <span>
+                                          {t("pi.form.thinkingLevelsLabel")}
+                                        </span>
+                                        <ChevronDown
+                                          className={`h-4 w-4 transition-transform motion-reduce:transition-none ${
+                                            thinkingMapIsExpanded
+                                              ? "rotate-180"
+                                              : ""
+                                          }`}
+                                        />
+                                      </Button>
                                     </div>
-                                  )}
+
+                                    {thinkingMapIsExpanded &&
+                                      editableThinkingLevelMap && (
+                                        <div className="overflow-hidden rounded-lg border border-border/70 bg-surface">
+                                          {PI_THINKING_LEVELS.map((level) => {
+                                            const mode = thinkingLevelMode(
+                                              editableThinkingLevelMap,
+                                              level,
+                                            );
+                                            const mappedValue =
+                                              editableThinkingLevelMap[level];
+                                            const popoverOpen =
+                                              editingThinkingLevel?.modelKey ===
+                                                model.key &&
+                                              editingThinkingLevel.level ===
+                                                level;
+                                            return (
+                                              <Popover
+                                                key={level}
+                                                open={popoverOpen}
+                                                onOpenChange={(open) =>
+                                                  setEditingThinkingLevel(
+                                                    open
+                                                      ? {
+                                                          modelKey: model.key,
+                                                          level,
+                                                        }
+                                                      : null,
+                                                  )
+                                                }
+                                              >
+                                                <PopoverTrigger asChild>
+                                                  <button
+                                                    type="button"
+                                                    aria-label={t(
+                                                      "pi.form.editThinkingLevel",
+                                                      {
+                                                        level: t(
+                                                          `pi.form.thinkingLevels.${level}`,
+                                                        ),
+                                                      },
+                                                    )}
+                                                    className="group flex h-[42px] w-full items-center gap-3 border-b border-border/40 px-4 text-left text-sm transition-colors last:border-b-0 hover:bg-subtle"
+                                                  >
+                                                    <span className="flex-1">
+                                                      {t(
+                                                        `pi.form.thinkingLevels.${level}`,
+                                                      )}
+                                                    </span>
+                                                    <span
+                                                      className={
+                                                        mode === "value"
+                                                          ? "max-w-[18rem] truncate text-right font-mono text-xs text-fg-1"
+                                                          : "text-xs text-fg-2"
+                                                      }
+                                                    >
+                                                      {mode === "default"
+                                                        ? t(
+                                                            "pi.form.thinkingLevelDefault",
+                                                          )
+                                                        : mode === "unsupported"
+                                                          ? t(
+                                                              "pi.form.thinkingLevelUnsupported",
+                                                            )
+                                                          : mappedValue}
+                                                    </span>
+                                                    <PopoverAnchor asChild>
+                                                      <span
+                                                        className={`inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md transition-[color,background-color,transform] duration-200 ${
+                                                          popoverOpen
+                                                            ? "translate-x-0.5 bg-primary/10 text-primary"
+                                                            : "text-fg-3 group-hover:translate-x-0.5 group-hover:text-fg-2"
+                                                        }`}
+                                                      >
+                                                        <ChevronRight className="h-3.5 w-3.5" />
+                                                      </span>
+                                                    </PopoverAnchor>
+                                                  </button>
+                                                </PopoverTrigger>
+                                                <PopoverContent
+                                                  side="left"
+                                                  align="center"
+                                                  sideOffset={10}
+                                                  collisionPadding={24}
+                                                  sticky="always"
+                                                  className="pi-thinking-popover z-[1000] w-72 space-y-3 p-4 shadow-xl"
+                                                >
+                                                  <p className="text-sm font-medium">
+                                                    {t(
+                                                      `pi.form.thinkingLevels.${level}`,
+                                                    )}
+                                                  </p>
+                                                  <label className="flex cursor-pointer items-center gap-2.5 text-sm">
+                                                    <input
+                                                      type="radio"
+                                                      name={`pi-thinking-level-mode-${model.key}-${level}`}
+                                                      checked={
+                                                        mode === "default"
+                                                      }
+                                                      onChange={() =>
+                                                        updateThinkingLevelMode(
+                                                          model.key,
+                                                          level,
+                                                          "default",
+                                                        )
+                                                      }
+                                                      className="ui-radio"
+                                                    />
+                                                    {t(
+                                                      "pi.form.thinkingLevelFollowDefault",
+                                                    )}
+                                                  </label>
+                                                  <div className="flex items-center gap-2.5 text-sm">
+                                                    <input
+                                                      id={`pi-thinking-level-value-${model.key}-${level}`}
+                                                      type="radio"
+                                                      name={`pi-thinking-level-mode-${model.key}-${level}`}
+                                                      checked={mode === "value"}
+                                                      aria-label={t(
+                                                        "pi.form.thinkingLevelMapTo",
+                                                      )}
+                                                      onChange={() =>
+                                                        updateThinkingLevelMode(
+                                                          model.key,
+                                                          level,
+                                                          "value",
+                                                        )
+                                                      }
+                                                      className="ui-radio"
+                                                    />
+                                                    <label
+                                                      htmlFor={`pi-thinking-level-value-${model.key}-${level}`}
+                                                      className="shrink-0 cursor-pointer"
+                                                    >
+                                                      {t(
+                                                        "pi.form.thinkingLevelMapTo",
+                                                      )}
+                                                    </label>
+                                                    <Input
+                                                      value={
+                                                        typeof mappedValue ===
+                                                        "string"
+                                                          ? mappedValue
+                                                          : level
+                                                      }
+                                                      onChange={(event) =>
+                                                        updateThinkingLevelMap(
+                                                          model.key,
+                                                          (map) => ({
+                                                            ...map,
+                                                            [level]:
+                                                              event.target
+                                                                .value,
+                                                          }),
+                                                        )
+                                                      }
+                                                      onFocus={() =>
+                                                        mode !== "value" &&
+                                                        updateThinkingLevelMode(
+                                                          model.key,
+                                                          level,
+                                                          "value",
+                                                        )
+                                                      }
+                                                      aria-label={t(
+                                                        "pi.form.thinkingLevelValue",
+                                                        {
+                                                          level: t(
+                                                            `pi.form.thinkingLevels.${level}`,
+                                                          ),
+                                                        },
+                                                      )}
+                                                      className="h-8 min-w-0 flex-1 font-mono text-xs"
+                                                    />
+                                                  </div>
+                                                  <label className="flex cursor-pointer items-center gap-2.5 text-sm">
+                                                    <input
+                                                      type="radio"
+                                                      name={`pi-thinking-level-mode-${model.key}-${level}`}
+                                                      checked={
+                                                        mode === "unsupported"
+                                                      }
+                                                      onChange={() =>
+                                                        updateThinkingLevelMode(
+                                                          model.key,
+                                                          level,
+                                                          "unsupported",
+                                                        )
+                                                      }
+                                                      className="ui-radio"
+                                                    />
+                                                    {t(
+                                                      "pi.form.thinkingLevelMarkUnavailable",
+                                                    )}
+                                                  </label>
+                                                </PopoverContent>
+                                              </Popover>
+                                            );
+                                          })}
+                                        </div>
+                                      )}
+                                  </div>
+                                )}
                               </div>
                             )}
                           </div>
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
+                        );
+                      })}
+                    </div>
+                  )}
 
-              <p className="text-xs text-fg-2">
-                {t("opencode.modelsHint", {
-                  defaultValue: "配置可用的模型及其显示名称。",
-                })}
-              </p>
-            </div>
+                  <p className="text-xs text-fg-2">
+                    {t("opencode.modelsHint", {
+                      defaultValue: "配置可用的模型及其显示名称。",
+                    })}
+                  </p>
+                </div>
+              </>
+            )}
           </fieldset>
         )}
 

@@ -28,6 +28,13 @@ export interface PiProviderPreset extends PresetFamilyFields {
   name: string;
   nameKey?: string;
   providerKey: string;
+  /**
+   * Pi 已内置这个供应商时的内置 ID 和地址（Pi 1.0.4）。添加到 Pi 时只在
+   * models.json 的这个 ID 下写 key，模型和地址由 Pi 维护；baseUrl 只给 CC Switch
+   * 判断用量查询用，不写进 models.json。settingsConfig 仍是完整的端点和模型，
+   * MiniMax Code 预设从这里派生。
+   */
+  piBuiltIn?: { provider: string; baseUrl: string };
   websiteUrl: string;
   apiKeyUrl?: string;
   settingsConfig: {
@@ -104,6 +111,10 @@ const piProviderPresetDefinitions: PiProviderPreset[] = [
     planKey: "payg",
     regionKey: "cn",
     providerKey: "cc-switch-kimi",
+    piBuiltIn: {
+      provider: "moonshotai-cn",
+      baseUrl: "https://api.moonshot.cn/v1",
+    },
     websiteUrl: "https://platform.kimi.com",
     apiKeyUrl: "https://platform.kimi.com/console/api-keys",
     settingsConfig: {
@@ -141,6 +152,10 @@ const piProviderPresetDefinitions: PiProviderPreset[] = [
     planKey: "payg",
     regionKey: "intl",
     providerKey: "cc-switch-kimi-global",
+    piBuiltIn: {
+      provider: "moonshotai",
+      baseUrl: "https://api.moonshot.ai/v1",
+    },
     websiteUrl: "https://platform.kimi.ai",
     apiKeyUrl: "https://platform.kimi.ai/console/api-keys",
     settingsConfig: {
@@ -177,6 +192,10 @@ const piProviderPresetDefinitions: PiProviderPreset[] = [
     planKey: "coding",
     regionKey: "cn",
     providerKey: "cc-switch-kimi-for-coding",
+    piBuiltIn: {
+      provider: "kimi-coding",
+      baseUrl: "https://api.kimi.com/coding",
+    },
     websiteUrl: "https://www.kimi.com/code/",
     apiKeyUrl: "https://platform.kimi.com/console/api-keys",
     settingsConfig: {
@@ -362,6 +381,7 @@ const piProviderPresetDefinitions: PiProviderPreset[] = [
   {
     name: "DeepSeek",
     providerKey: "cc-switch-deep-seek",
+    piBuiltIn: { provider: "deepseek", baseUrl: "https://api.deepseek.com" },
     websiteUrl: "https://platform.deepseek.com",
     apiKeyUrl: "https://platform.deepseek.com/api_keys",
     settingsConfig: {
@@ -389,6 +409,10 @@ const piProviderPresetDefinitions: PiProviderPreset[] = [
     family: "zhipu",
     regionKey: "cn",
     providerKey: "cc-switch-zhipu-glm",
+    piBuiltIn: {
+      provider: "zai-coding-cn",
+      baseUrl: "https://open.bigmodel.cn/api/coding/paas/v4",
+    },
     websiteUrl: "https://open.bigmodel.cn",
     apiKeyUrl: "https://www.bigmodel.cn/claude-code",
     settingsConfig: {
@@ -412,6 +436,10 @@ const piProviderPresetDefinitions: PiProviderPreset[] = [
     family: "zhipu",
     regionKey: "intl",
     providerKey: "cc-switch-zhipu-glm-en",
+    piBuiltIn: {
+      provider: "zai",
+      baseUrl: "https://api.z.ai/api/coding/paas/v4",
+    },
     websiteUrl: "https://z.ai",
     apiKeyUrl: "https://z.ai/subscribe",
     settingsConfig: {
@@ -716,6 +744,10 @@ const piProviderPresetDefinitions: PiProviderPreset[] = [
     family: "minimax",
     regionKey: "cn",
     providerKey: "cc-switch-mini-max",
+    piBuiltIn: {
+      provider: "minimax-cn",
+      baseUrl: "https://api.minimaxi.com/anthropic",
+    },
     websiteUrl: "https://platform.minimax.cn",
     apiKeyUrl: "https://platform.minimax.cn/subscribe/token-plan",
     settingsConfig: {
@@ -743,6 +775,10 @@ const piProviderPresetDefinitions: PiProviderPreset[] = [
     family: "minimax",
     regionKey: "intl",
     providerKey: "cc-switch-mini-max-en",
+    piBuiltIn: {
+      provider: "minimax",
+      baseUrl: "https://api.minimax.io/anthropic",
+    },
     websiteUrl: "https://platform.minimax.io",
     apiKeyUrl: "https://platform.minimax.io/subscribe/coding-plan",
     settingsConfig: {
@@ -768,6 +804,7 @@ const piProviderPresetDefinitions: PiProviderPreset[] = [
   {
     name: "BaiLing",
     providerKey: "cc-switch-bai-ling",
+    piBuiltIn: { provider: "ant-ling", baseUrl: "https://api.ant-ling.com/v1" },
     websiteUrl: "https://developer.ant-ling.com/zh-CN/docs/",
     apiKeyUrl: "https://chat.ant-ling.com/open",
     settingsConfig: {
@@ -789,6 +826,7 @@ const piProviderPresetDefinitions: PiProviderPreset[] = [
     family: "xiaomi-mimo",
     planKey: "payg",
     providerKey: "cc-switch-xiaomi-mi-mo",
+    piBuiltIn: { provider: "xiaomi", baseUrl: "https://api.xiaomimimo.com/v1" },
     websiteUrl: "https://platform.xiaomimimo.com",
     apiKeyUrl: "https://platform.xiaomimimo.com/#/console/api-keys",
     settingsConfig: {
@@ -834,6 +872,10 @@ const piProviderPresetDefinitions: PiProviderPreset[] = [
     family: "xiaomi-mimo",
     planKey: "tokenPlan",
     providerKey: "cc-switch-xiaomi-mi-mo-token-plan-china",
+    piBuiltIn: {
+      provider: "xiaomi-token-plan-cn",
+      baseUrl: "https://token-plan-cn.xiaomimimo.com/v1",
+    },
     websiteUrl: "https://platform.xiaomimimo.com/#/token-plan",
     apiKeyUrl: "https://platform.xiaomimimo.com/#/console/plan-manage",
     settingsConfig: {
@@ -865,6 +907,10 @@ const piProviderPresetDefinitions: PiProviderPreset[] = [
   {
     name: "OpenCode Go",
     providerKey: "cc-switch-open-code-go",
+    piBuiltIn: {
+      provider: "opencode-go",
+      baseUrl: "https://opencode.ai/zen/go/v1",
+    },
     websiteUrl: "https://opencode.ai/go",
     apiKeyUrl: "https://opencode.ai/go",
     settingsConfig: {
@@ -941,6 +987,10 @@ const piProviderPresetDefinitions: PiProviderPreset[] = [
   {
     name: "OpenRouter",
     providerKey: "cc-switch-open-router",
+    piBuiltIn: {
+      provider: "openrouter",
+      baseUrl: "https://openrouter.ai/api/v1",
+    },
     websiteUrl: "https://openrouter.ai",
     apiKeyUrl: "https://openrouter.ai/keys",
     settingsConfig: {
@@ -993,6 +1043,10 @@ const piProviderPresetDefinitions: PiProviderPreset[] = [
   {
     name: "Nvidia",
     providerKey: "cc-switch-nvidia",
+    piBuiltIn: {
+      provider: "nvidia",
+      baseUrl: "https://integrate.api.nvidia.com/v1",
+    },
     websiteUrl: "https://build.nvidia.com",
     apiKeyUrl: "https://build.nvidia.com/settings/api-keys",
     settingsConfig: {
@@ -1602,3 +1656,10 @@ function materializeVerifiedThinkingProfiles(
 export const piProviderPresets = piProviderPresetDefinitions.map(
   materializeVerifiedThinkingProfiles,
 );
+
+/** 只写 key 的内置供应商条目没有 baseUrl，按 ID 找回地址，给用量判断用。 */
+export function piBuiltInBaseUrl(providerKey: string): string | undefined {
+  return piProviderPresets.find(
+    (preset) => preset.piBuiltIn?.provider === providerKey,
+  )?.piBuiltIn?.baseUrl;
+}

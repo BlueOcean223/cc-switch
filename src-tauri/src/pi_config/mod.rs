@@ -257,7 +257,35 @@ pub(crate) fn validate_provider_node(provider_key: &str, config: &Value) -> Resu
     Ok(())
 }
 
-pub(crate) fn provider_base_url(config: &Value) -> Result<String, AppError> {
+/// Pi 1.0.4 内置供应商的请求地址，只收 CC Switch 预设会直接写成内置 ID 的那些。
+/// 这类条目在 models.json 里只写 key，模型和地址都由 Pi 维护；这里的地址只给
+/// CC Switch 自己的用量查询和连通性检查用，不写进 models.json。同一供应商混用
+/// 几种接口时（openrouter、opencode-go）取 Chat Completions 的地址。
+const PI_BUILTIN_BASE_URLS: &[(&str, &str)] = &[
+    ("ant-ling", "https://api.ant-ling.com/v1"),
+    ("deepseek", "https://api.deepseek.com"),
+    ("kimi-coding", "https://api.kimi.com/coding"),
+    ("minimax", "https://api.minimax.io/anthropic"),
+    ("minimax-cn", "https://api.minimaxi.com/anthropic"),
+    ("moonshotai", "https://api.moonshot.ai/v1"),
+    ("moonshotai-cn", "https://api.moonshot.cn/v1"),
+    ("nvidia", "https://integrate.api.nvidia.com/v1"),
+    ("opencode-go", "https://opencode.ai/zen/go/v1"),
+    ("openrouter", "https://openrouter.ai/api/v1"),
+    ("xiaomi", "https://api.xiaomimimo.com/v1"),
+    (
+        "xiaomi-token-plan-cn",
+        "https://token-plan-cn.xiaomimimo.com/v1",
+    ),
+    ("zai", "https://api.z.ai/api/coding/paas/v4"),
+    (
+        "zai-coding-cn",
+        "https://open.bigmodel.cn/api/coding/paas/v4",
+    ),
+];
+
+/// 供应商的请求地址：先看条目自己的 `baseUrl`，再看模型上的，都没有时按内置 ID 查。
+pub(crate) fn provider_base_url(provider_key: &str, config: &Value) -> Result<String, AppError> {
     let provider = config.as_object().ok_or_else(|| {
         AppError::InvalidInput("Pi provider configuration must be an object".to_string())
     })?;
@@ -271,6 +299,12 @@ pub(crate) fn provider_base_url(config: &Value) -> Result<String, AppError> {
                         .iter()
                         .find_map(|model| nonempty_string(model.get("baseUrl")))
                 })
+        })
+        .or_else(|| {
+            PI_BUILTIN_BASE_URLS
+                .iter()
+                .find(|(id, _)| *id == provider_key)
+                .map(|(_, url)| *url)
         })
         .map(str::to_string)
         .ok_or_else(|| AppError::InvalidInput("Pi provider has no request URL".to_string()))
@@ -546,6 +580,21 @@ mod tests {
             .expect("a built-in provider key may be explicitly configured");
         assert!(validate_provider_node("", &json!({})).is_err());
         assert!(validate_provider_node("anthropic", &json!("invalid")).is_err());
+    }
+
+    #[test]
+    fn key_only_builtin_entries_resolve_the_builtin_url() {
+        let key_only = json!({"apiKey": "secret"});
+        assert_eq!(
+            provider_base_url("deepseek", &key_only).unwrap(),
+            "https://api.deepseek.com"
+        );
+        // 条目自己写了地址时以条目为准
+        assert_eq!(
+            provider_base_url("deepseek", &provider()).unwrap(),
+            "https://api.example.com/v1"
+        );
+        assert!(provider_base_url("cc-switch-example", &key_only).is_err());
     }
 
     #[test]
