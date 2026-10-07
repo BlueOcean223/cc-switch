@@ -2890,6 +2890,8 @@
     "listSeparator": ", ",
     "helpTitle": "How MCP syncs",
     "help": "This list is the source of truth: it is written into the config files of the apps you tick, and rewritten from here when you switch providers. OpenClaw is not supported, so it has no column; Pi needs 1.0 or later and does not support SSE.",
+    "grokHelpTitle": "Grok Build also reads Claude's MCP servers",
+    "grokHelp": "By default Grok Build also loads the MCP servers in ~/.claude.json, so a server enabled in the Claude column shows up in Grok even when this column is unchecked. When names clash, the one in Grok's own config.toml wins. To stop that, set mcps = false under [compat.claude] in Grok's config.toml.",
     "importFromApps": "Import from apps",
     "add": "Add MCP",
     "moreActions": "More MCP actions",
@@ -3094,6 +3096,10 @@
     "piColumnTitle": "Pi counts a Skill as enabled when its folder exists in ~/.pi/agent/skills",
     "piHelpTitle": "How Pi counts as enabled",
     "piHelp": "Whether the folder exists in ~/.pi/agent/skills.",
+    "grokHelpTitle": "Grok Build also reads Claude's skills",
+    "grokHelp": "By default Grok Build also loads ~/.claude/skills, so a skill enabled in the Claude column shows up in Grok even when this column is unchecked. To stop that, set skills = false under [compat.claude] in Grok's config.toml.",
+    "opencodeHelpTitle": "OpenCode also reads Claude's skills",
+    "opencodeHelp": "By default OpenCode also loads ~/.claude/skills, so a skill enabled in the Claude column shows up in OpenCode even when this column is unchecked. To stop that, start OpenCode with OPENCODE_DISABLE_CLAUDE_CODE_SKILLS=1.",
     "pop": {
       "onlyApp": "Show only ones enabled in {{app}}",
       "showAll": "Show all Skills"

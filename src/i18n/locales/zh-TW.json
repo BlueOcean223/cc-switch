@@ -2890,6 +2890,8 @@
     "listSeparator": "、",
     "helpTitle": "MCP 怎麼同步",
     "help": "以這裡為準：寫進你勾選的應用的設定檔，切換供應商時按這裡重寫。OpenClaw 不支援，所以表格裡沒有這一欄；Pi 需要 1.0 以上，且不支援 SSE。",
+    "grokHelpTitle": "Grok Build 也讀 Claude 的 MCP",
+    "grokHelp": "Grok Build 預設還會讀 ~/.claude.json 裡的 MCP 伺服器，所以在 Claude 欄啟用的伺服器，這一欄不勾也會出現在 Grok 裡；同名時以 Grok 自己 config.toml 裡的為準。不需要時在 Grok 的 config.toml 裡 [compat.claude] 下寫 mcps = false。",
     "importFromApps": "從應用匯入",
     "add": "新增 MCP",
     "moreActions": "MCP 的更多操作",
@@ -3094,6 +3096,10 @@
     "piColumnTitle": "Pi 按 ~/.pi/agent/skills 裡有沒有這個目錄來判斷",
     "piHelpTitle": "Pi 怎麼算啟用",
     "piHelp": "看 ~/.pi/agent/skills 裡有沒有這個目錄。",
+    "grokHelpTitle": "Grok Build 也讀 Claude 的 Skills",
+    "grokHelp": "Grok Build 預設還會讀 ~/.claude/skills，所以在 Claude 欄啟用的 Skill，這一欄不勾也會出現在 Grok 裡。不需要時在 Grok 的 config.toml 裡 [compat.claude] 下寫 skills = false。",
+    "opencodeHelpTitle": "OpenCode 也讀 Claude 的 Skills",
+    "opencodeHelp": "OpenCode 預設還會讀 ~/.claude/skills，所以在 Claude 欄啟用的 Skill，這一欄不勾也會出現在 OpenCode 裡。不需要時用環境變數 OPENCODE_DISABLE_CLAUDE_CODE_SKILLS=1 啟動 OpenCode。",
     "pop": {
       "onlyApp": "只看在 {{app}} 啟用的",
       "showAll": "顯示全部 Skill"

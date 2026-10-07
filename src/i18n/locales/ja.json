@@ -2890,6 +2890,8 @@
     "listSeparator": "、",
     "helpTitle": "MCP の同期のしくみ",
     "help": "ここが正です。チェックしたアプリの設定ファイルに書き込み、プロバイダー切り替え時にここから書き直します。OpenClaw は非対応のため列がありません。Pi は 1.0 以降が必要で、SSE には対応していません。",
+    "grokHelpTitle": "Grok Build は Claude の MCP も読み込みます",
+    "grokHelp": "Grok Build はデフォルトで ~/.claude.json の MCP サーバーも読み込むため、Claude 列で有効にしたサーバーはこの列のチェックを外しても Grok に表示されます。同じ名前のサーバーは Grok 自身の config.toml のものが優先されます。不要な場合は Grok の config.toml の [compat.claude] に mcps = false を書いてください。",
     "importFromApps": "アプリから取り込む",
     "add": "MCP を追加",
     "moreActions": "MCP のその他の操作",
@@ -3094,6 +3096,10 @@
     "piColumnTitle": "Pi は ~/.pi/agent/skills にそのフォルダーがあるかで判定します",
     "piHelpTitle": "Pi の有効の判定",
     "piHelp": "~/.pi/agent/skills にそのフォルダーがあるかどうかです。",
+    "grokHelpTitle": "Grok Build は Claude の Skills も読み込みます",
+    "grokHelp": "Grok Build はデフォルトで ~/.claude/skills も読み込むため、Claude 列で有効にした Skill はこの列のチェックを外しても Grok に表示されます。不要な場合は Grok の config.toml の [compat.claude] に skills = false を書いてください。",
+    "opencodeHelpTitle": "OpenCode は Claude の Skills も読み込みます",
+    "opencodeHelp": "OpenCode はデフォルトで ~/.claude/skills も読み込むため、Claude 列で有効にした Skill はこの列のチェックを外しても OpenCode に表示されます。不要な場合は環境変数 OPENCODE_DISABLE_CLAUDE_CODE_SKILLS=1 を付けて OpenCode を起動してください。",
     "pop": {
       "onlyApp": "{{app}} で有効なものだけ表示",
       "showAll": "すべての Skill を表示"

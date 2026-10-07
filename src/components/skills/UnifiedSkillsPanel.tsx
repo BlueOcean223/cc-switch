@@ -246,6 +246,21 @@ const UnifiedSkillsPanel: React.FC<UnifiedSkillsPanelProps> = ({
   const names = (apps: AppId[]) =>
     apps.map((app) => APP_DISPLAY_NAME[app]).join(listSeparator);
   const noun = t("skillsPage.noun");
+  // 列头弹层里的说明。Pi 的启用按目录判断；Grok、OpenCode 默认还读
+  // ~/.claude/skills，只关这两列挡不住 Claude 列启用的 Skill。
+  const skillColumnHelp: Partial<
+    Record<AppId, { title: string; body: string }>
+  > = {
+    pi: { title: t("skillsPage.piHelpTitle"), body: t("skillsPage.piHelp") },
+    grokbuild: {
+      title: t("skillsPage.grokHelpTitle"),
+      body: t("skillsPage.grokHelp"),
+    },
+    opencode: {
+      title: t("skillsPage.opencodeHelpTitle"),
+      body: t("skillsPage.opencodeHelp"),
+    },
+  };
   const installedSkills = skills ?? [];
 
   // ─── 更新 ───────────────────────────────────────────────────────────
@@ -1284,14 +1299,7 @@ const UnifiedSkillsPanel: React.FC<UnifiedSkillsPanelProps> = ({
                       noun={noun}
                       disabled={controlsDisabled}
                       title={isPi ? t("skillsPage.piColumnTitle") : undefined}
-                      help={
-                        isPi
-                          ? {
-                              title: t("skillsPage.piHelpTitle"),
-                              body: t("skillsPage.piHelp"),
-                            }
-                          : undefined
-                      }
+                      help={skillColumnHelp[app]}
                       extraAction={{
                         label:
                           statusFilter === appFilter

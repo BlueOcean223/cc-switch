@@ -2890,6 +2890,8 @@
     "listSeparator": "、",
     "helpTitle": "MCP 怎么同步",
     "help": "以这里为准：写进你勾选的应用的配置文件，切换供应商时按这里重写。OpenClaw 不支持，所以表格里没有这一列；Pi 需要 1.0 及以上，且不支持 SSE。",
+    "grokHelpTitle": "Grok Build 也读 Claude 的 MCP",
+    "grokHelp": "Grok Build 默认还会读 ~/.claude.json 里的 MCP 服务器，所以在 Claude 列启用的服务器，这一列不勾也会出现在 Grok 里；同名时用 Grok 自己 config.toml 里的。不需要时在 Grok 的 config.toml 里 [compat.claude] 下写 mcps = false。",
     "importFromApps": "从应用导入",
     "add": "添加 MCP",
     "moreActions": "MCP 的更多操作",
@@ -3094,6 +3096,10 @@
     "piColumnTitle": "Pi 按 ~/.pi/agent/skills 里有没有这个目录来判断",
     "piHelpTitle": "Pi 怎么算启用",
     "piHelp": "看 ~/.pi/agent/skills 里有没有这个目录。",
+    "grokHelpTitle": "Grok Build 也读 Claude 的 Skills",
+    "grokHelp": "Grok Build 默认还会读 ~/.claude/skills，所以在 Claude 列启用的 Skill，这一列不勾也会出现在 Grok 里。不需要时在 Grok 的 config.toml 里 [compat.claude] 下写 skills = false。",
+    "opencodeHelpTitle": "OpenCode 也读 Claude 的 Skills",
+    "opencodeHelp": "OpenCode 默认还会读 ~/.claude/skills，所以在 Claude 列启用的 Skill，这一列不勾也会出现在 OpenCode 里。不需要时用环境变量 OPENCODE_DISABLE_CLAUDE_CODE_SKILLS=1 启动 OpenCode。",
     "pop": {
       "onlyApp": "只看在 {{app}} 启用的",
       "showAll": "显示全部 Skill"

@@ -782,6 +782,15 @@ const UnifiedMcpPanel: React.FC<UnifiedMcpPanelProps> = ({
                             scopeKind={scope.kind}
                             noun={noun}
                             disabled={controlsDisabled}
+                            // Grok 默认还读 ~/.claude.json 的 MCP，只关这一列挡不住
+                            help={
+                              app === "grokbuild"
+                                ? {
+                                    title: t("mcpPage.grokHelpTitle"),
+                                    body: t("mcpPage.grokHelp"),
+                                  }
+                                : undefined
+                            }
                             onEnableRest={() => void handleBulk(app, true)}
                             onDisableAll={() => void handleBulk(app, false)}
                           />
