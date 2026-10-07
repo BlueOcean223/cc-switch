@@ -94,7 +94,6 @@ describe("ClaudeFormFields", () => {
       expect(modelFetchApiMock.fetchModelsForConfig).toHaveBeenCalledWith(
         "https://relay.example.com",
         "sk-test",
-        false,
         undefined,
       );
     });

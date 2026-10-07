@@ -276,8 +276,6 @@ export function McodeProviderForm({
             category={category}
             shouldShowApiKeyLink={Boolean(preset?.apiKeyUrl)}
             websiteUrl={preset?.apiKeyUrl ?? ""}
-            isPartner={preset?.isPartner}
-            partnerPromotionKey={preset?.partnerPromotionKey}
             baseUrl={config.options?.baseURL ?? ""}
             onBaseUrlChange={(baseURL) => updateOptions({ baseURL })}
             headers={config.options?.headers ?? {}}

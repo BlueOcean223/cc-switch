@@ -62,15 +62,6 @@ impl GeminiProjection {
         }
     }
 
-    /// 只清空关键字段，不写任何值。
-    pub fn empty() -> Self {
-        Self {
-            env: Vec::new(),
-            selected_type: None,
-            model_name: None,
-        }
-    }
-
     pub fn env_patch(&self) -> DotenvPatch {
         DotenvPatch {
             clear: Some(floor::gemini_floor_env),
@@ -90,15 +81,6 @@ impl GeminiProjection {
             None => patch.remove.push(model_name_path()),
         }
         patch
-    }
-
-    /// 摘要用的规范形式。
-    pub fn to_value(&self) -> Value {
-        json!({
-            "env": self.env,
-            "selectedType": self.selected_type,
-            "modelName": self.model_name,
-        })
     }
 }
 

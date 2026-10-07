@@ -58,7 +58,7 @@ export interface ProviderSection {
 
 // ─── 切换式应用（Claude Code / Codex / Gemini CLI / Grok Build）──────────────
 
-export interface SwitchInput {
+interface SwitchInput {
   app: AppId;
   t: TFunction;
   providers: Provider[];

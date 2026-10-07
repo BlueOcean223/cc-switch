@@ -108,7 +108,6 @@ pub struct Planned {
     pub file: LiveFile,
     /// 写前内容的 hash，`None` 表示文件不存在。
     pub pre: Option<String>,
-    pre_bytes: Option<Vec<u8>>,
     /// 写后内容的 hash；`None` 表示删掉这个文件。
     pub planned: Option<String>,
     bytes: Option<Vec<u8>>,
@@ -117,10 +116,6 @@ pub struct Planned {
 impl Planned {
     pub fn is_noop(&self) -> bool {
         self.pre == self.planned
-    }
-
-    pub fn pre_bytes(&self) -> Option<&[u8]> {
-        self.pre_bytes.as_deref()
     }
 }
 
@@ -139,7 +134,6 @@ pub(crate) fn plan_from(
     Ok(Planned {
         file: file.clone(),
         pre: digest(pre_bytes.as_deref()),
-        pre_bytes,
         planned: digest(bytes.as_deref()),
         bytes,
     })

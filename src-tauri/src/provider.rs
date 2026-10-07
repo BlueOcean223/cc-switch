@@ -342,10 +342,7 @@ pub struct ProviderMeta {
     /// 请求地址管理：测速后自动选择最佳端点
     #[serde(rename = "endpointAutoSelect", skip_serializing_if = "Option::is_none")]
     pub endpoint_auto_select: Option<bool>,
-    /// 合作伙伴标记（前端使用 isPartner，保持字段名一致）
-    #[serde(rename = "isPartner", skip_serializing_if = "Option::is_none")]
-    pub is_partner: Option<bool>,
-    /// 合作伙伴促销 key，用于识别 PackyCode 等特殊供应商
+    /// 预设标识 key；Gemini 靠 `google-official` 识别官方登录方式
     #[serde(
         rename = "partnerPromotionKey",
         skip_serializing_if = "Option::is_none"
@@ -420,13 +417,6 @@ impl ProviderMeta {
             return binding.account_id.clone();
         }
         None
-    }
-}
-
-impl ProviderManager {
-    /// 获取所有供应商
-    pub fn get_all_providers(&self) -> &IndexMap<String, Provider> {
-        &self.providers
     }
 }
 
@@ -827,7 +817,7 @@ pub struct OpenCodeModelLimit {
 mod tests {
     use super::{
         ClaudeModelConfig, CodexModelConfig, GeminiModelConfig, OpenCodeProviderConfig, Provider,
-        ProviderManager, ProviderMeta, UniversalProvider,
+        ProviderMeta, UniversalProvider,
     };
     use serde_json::json;
 
@@ -880,21 +870,6 @@ mod tests {
         assert!(provider.meta.is_none());
         assert!(provider.icon.is_none());
         assert!(provider.icon_color.is_none());
-    }
-
-    #[test]
-    fn provider_manager_get_all_providers_returns_map() {
-        let mut manager = ProviderManager::default();
-        let provider = Provider::with_id(
-            "provider-1".to_string(),
-            "Provider".to_string(),
-            json!({ "env": {} }),
-            None,
-        );
-        manager.providers.insert("provider-1".to_string(), provider);
-
-        assert_eq!(manager.get_all_providers().len(), 1);
-        assert!(manager.get_all_providers().contains_key("provider-1"));
     }
 
     #[test]

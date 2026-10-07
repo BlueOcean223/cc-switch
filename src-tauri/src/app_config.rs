@@ -199,20 +199,6 @@ impl SkillApps {
         apps.set_enabled_for(app, true);
         apps
     }
-
-    /// 从来源标签列表构建启用状态
-    ///
-    /// 标签与 AppType::as_str() 一致时启用对应应用，
-    /// 其他标签（如 "agents", "cc-switch"）忽略。
-    pub fn from_labels(labels: &[String]) -> Self {
-        let mut apps = Self::default();
-        for label in labels {
-            if let Ok(app) = label.parse::<AppType>() {
-                apps.set_enabled_for(&app, true);
-            }
-        }
-        apps
-    }
 }
 
 /// 已安装的 Skill（v3.10.0+ 统一结构）
@@ -479,36 +465,6 @@ pub struct CommonConfigSnippets {
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hermes: Option<String>,
-}
-
-impl CommonConfigSnippets {
-    /// 获取指定应用的通用配置片段
-    pub fn get(&self, app: &AppType) -> Option<&String> {
-        match app {
-            AppType::Claude => self.claude.as_ref(),
-            AppType::Codex => self.codex.as_ref(),
-            AppType::Gemini => self.gemini.as_ref(),
-            AppType::GrokBuild => None,
-            AppType::OpenCode => self.opencode.as_ref(),
-            AppType::OpenClaw => self.openclaw.as_ref(),
-            AppType::Hermes => self.hermes.as_ref(),
-            AppType::Pi | AppType::Mcode => None,
-        }
-    }
-
-    /// 设置指定应用的通用配置片段
-    pub fn set(&mut self, app: &AppType, snippet: Option<String>) {
-        match app {
-            AppType::Claude => self.claude = snippet,
-            AppType::Codex => self.codex = snippet,
-            AppType::Gemini => self.gemini = snippet,
-            AppType::GrokBuild => {}
-            AppType::OpenCode => self.opencode = snippet,
-            AppType::OpenClaw => self.openclaw = snippet,
-            AppType::Hermes => self.hermes = snippet,
-            AppType::Pi | AppType::Mcode => {}
-        }
-    }
 }
 
 /// 多应用配置结构（向后兼容）

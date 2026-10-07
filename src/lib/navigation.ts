@@ -65,10 +65,6 @@ export function isAppPage(view: View): view is AppPage {
   return (APP_PAGES as string[]).includes(view);
 }
 
-export function isGlobalPage(view: View): view is GlobalPage {
-  return (GLOBAL_PAGES as string[]).includes(view);
-}
-
 export function parseView(value: string | null | undefined): View | null {
   if (!value) return null;
   if (value in LEGACY_VIEWS) return LEGACY_VIEWS[value];

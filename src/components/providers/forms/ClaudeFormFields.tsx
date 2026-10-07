@@ -56,8 +56,6 @@ interface ClaudeFormFieldsProps {
   category?: ProviderCategory;
   shouldShowApiKeyLink: boolean;
   websiteUrl: string;
-  isPartner?: boolean;
-  partnerPromotionKey?: string;
 
   // Template Values
   templateValueEntries: Array<[string, TemplateValueConfig]>;
@@ -106,8 +104,6 @@ export function ClaudeFormFields({
   category,
   shouldShowApiKeyLink,
   websiteUrl,
-  isPartner,
-  partnerPromotionKey,
   templateValueEntries,
   templateValues,
   templatePresetName,
@@ -189,7 +185,7 @@ export function ClaudeFormFields({
     const modelsUrl = matchedPreset?.modelsUrl;
 
     setIsFetchingModels(true);
-    fetchModelsForConfig(baseUrl, apiKey, false, modelsUrl)
+    fetchModelsForConfig(baseUrl, apiKey, modelsUrl)
       .then((models) => {
         setFetchedModels(models);
         showModelFetchResult(models.length);
@@ -319,8 +315,6 @@ export function ClaudeFormFields({
           required
           shouldShowLink={shouldShowApiKeyLink}
           websiteUrl={websiteUrl}
-          isPartner={isPartner}
-          partnerPromotionKey={partnerPromotionKey}
         />
       )}
     </>

@@ -141,9 +141,6 @@ pub const CODEX_FLOOR_NESTED: &[&[&str]] = &[
     &["memories", "consolidation_model"],
 ];
 
-/// CC Switch 写进 Codex live 的供应商表。
-pub const CODEX_PROVIDER_TABLE: &[&str] = &["model_providers", "custom"];
-
 /// Codex 的供应商独有字段（顶层）。
 ///
 /// `web_search` 的值不来自行文本，而由 `codex_native_gateway_rejects_web_search`

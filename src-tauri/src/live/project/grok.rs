@@ -12,7 +12,7 @@
 
 use std::path::Path;
 
-use serde_json::{json, Value};
+use serde_json::Value;
 use toml_edit::{ArrayOfTables, DocumentMut, Item, Table, TableLike};
 
 use crate::error::AppError;
@@ -71,14 +71,6 @@ impl GrokProjection {
 
     pub fn table_name(&self) -> Option<&str> {
         self.table.as_ref().map(|(name, _)| name.as_str())
-    }
-
-    /// 摘要用的规范形式。
-    pub fn to_value(&self) -> Value {
-        match &self.table {
-            Some((name, table)) => json!({"table": name, "toml": normalized_text(name, table)}),
-            None => Value::Null,
-        }
     }
 
     /// 写入记录里的表名。
@@ -312,6 +304,7 @@ fn table_mut<'a>(
 mod tests {
     use super::*;
     use crate::live::patch::LivePatch;
+    use serde_json::json;
 
     const PLACEHOLDER: &str = "PROXY_MANAGED";
 

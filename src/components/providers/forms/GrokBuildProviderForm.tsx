@@ -85,10 +85,6 @@ export function GrokBuildProviderForm({
   const [category, setCategory] = useState<ProviderCategory | undefined>(
     initialData?.category ?? "custom",
   );
-  const [isPartner, setIsPartner] = useState(
-    initialData?.meta?.isPartner ?? false,
-  );
-  const [partnerPromotionKey, setPartnerPromotionKey] = useState<string>();
   const [profile, setProfile] = useState(initialConfig.model);
   const [upstreamModel, setUpstreamModel] = useState(
     initialConfig.upstreamModel ?? initialConfig.model,
@@ -200,8 +196,6 @@ export function GrokBuildProviderForm({
     setSelectedPresetId(presetId);
     if (presetId === "custom") {
       setCategory("custom");
-      setIsPartner(false);
-      setPartnerPromotionKey(undefined);
       setPresetEndpoints([]);
       return;
     }
@@ -213,8 +207,6 @@ export function GrokBuildProviderForm({
       form.setValue("icon", grokBuildOfficialPreset.icon ?? "");
       form.setValue("iconColor", grokBuildOfficialPreset.iconColor ?? "");
       setCategory("official");
-      setIsPartner(false);
-      setPartnerPromotionKey(undefined);
       setPresetEndpoints([]);
       setRawConfig("");
       clearDraftProjection();
@@ -238,8 +230,6 @@ export function GrokBuildProviderForm({
     form.setValue("icon", preset.icon ?? "");
     form.setValue("iconColor", preset.iconColor ?? "");
     setCategory(preset.category ?? "custom");
-    setIsPartner(preset.isPartner ?? false);
-    setPartnerPromotionKey(preset.partnerPromotionKey);
     setBaseUrl(presetBaseUrl);
     setApiKey(presetApiKey);
     setUpstreamModel(presetModel);
@@ -283,7 +273,6 @@ export function GrokBuildProviderForm({
         settingsConfig: JSON.stringify({ config: rawConfig }),
         presetId: selectedPresetId ?? undefined,
         presetCategory: "official",
-        isPartner: false,
         meta: initialData?.meta,
       });
       return;
@@ -347,8 +336,6 @@ export function GrokBuildProviderForm({
     const meta: ProviderMeta = {
       ...initialMeta,
       endpointAutoSelect,
-      isPartner,
-      partnerPromotionKey,
     };
     if (!providerId && Object.keys(customEndpoints).length > 0) {
       meta.custom_endpoints = customEndpoints;
@@ -361,7 +348,6 @@ export function GrokBuildProviderForm({
       settingsConfig: JSON.stringify({ config: finalConfig }),
       presetId: selectedPresetId ?? undefined,
       presetCategory: category ?? "custom",
-      isPartner,
       meta,
     };
 
@@ -402,8 +388,6 @@ export function GrokBuildProviderForm({
               category={category}
               shouldShowApiKeyLink={Boolean(apiKeyLinkUrl)}
               websiteUrl={apiKeyLinkUrl}
-              isPartner={isPartner}
-              partnerPromotionKey={partnerPromotionKey}
               shouldShowSpeedTest
               codexBaseUrl={baseUrl}
               onBaseUrlChange={(value) => {

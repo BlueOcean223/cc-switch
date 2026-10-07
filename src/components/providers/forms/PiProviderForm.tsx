@@ -1072,17 +1072,10 @@ export function PiProviderForm({
     const requestGeneration = ++modelFetchGenerationRef.current;
     setFetchedModels([]);
     setIsFetchingModels(true);
-    fetchModelsForConfig(
-      endpoint,
-      apiKey,
-      undefined,
-      undefined,
-      customUserAgent,
-      {
-        apiFormat: api,
-        requestHeaders,
-      },
-    )
+    fetchModelsForConfig(endpoint, apiKey, undefined, customUserAgent, {
+      apiFormat: api,
+      requestHeaders,
+    })
       .then((result) => {
         if (modelFetchGenerationRef.current !== requestGeneration) return;
         setFetchedModels(result);
@@ -1542,8 +1535,6 @@ export function PiProviderForm({
               category={category}
               shouldShowLink={Boolean(selectedPreset?.apiKeyUrl)}
               websiteUrl={selectedPreset?.apiKeyUrl ?? ""}
-              isPartner={selectedPreset?.isPartner}
-              partnerPromotionKey={selectedPreset?.partnerPromotionKey}
             />
 
             <div className="space-y-2">

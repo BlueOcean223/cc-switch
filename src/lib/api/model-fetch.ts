@@ -28,7 +28,6 @@ export interface ModelFetchOptions {
 export async function fetchModelsForConfig(
   baseUrl: string,
   apiKey: string,
-  isFullUrl?: boolean,
   modelsUrl?: string,
   customUserAgent?: string,
   options?: ModelFetchOptions,
@@ -36,7 +35,6 @@ export async function fetchModelsForConfig(
   return invoke("fetch_models_for_config", {
     baseUrl,
     apiKey,
-    isFullUrl,
     modelsUrl,
     customUserAgent,
     apiFormat: options?.apiFormat,

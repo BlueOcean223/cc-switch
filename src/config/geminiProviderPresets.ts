@@ -23,8 +23,6 @@ export interface GeminiProviderPreset extends PresetFamilyFields {
   model?: string;
   description?: string;
   category?: ProviderCategory;
-  isPartner?: boolean;
-  primePartner?: boolean; // 旧版的置顶合作伙伴标记；v7 起界面不再读取，新预设不写
   partnerPromotionKey?: string;
   endpointCandidates?: string[];
   theme?: GeminiPresetTheme;
@@ -109,20 +107,3 @@ export const geminiProviderPresets: GeminiProviderPreset[] = [
     iconColor: "#6566F1",
   },
 ];
-
-export function getGeminiPresetByName(
-  name: string,
-): GeminiProviderPreset | undefined {
-  return geminiProviderPresets.find((preset) => preset.name === name);
-}
-
-export function getGeminiPresetByUrl(
-  url: string,
-): GeminiProviderPreset | undefined {
-  if (!url) return undefined;
-  return geminiProviderPresets.find(
-    (preset) =>
-      preset.baseURL &&
-      url.toLowerCase().includes(preset.baseURL.toLowerCase()),
-  );
-}

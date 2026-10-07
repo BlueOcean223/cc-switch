@@ -12,7 +12,6 @@ import type { PresetFamilyFields } from "./presetFamilies";
  * `PROVIDER_SOURCE_FIELD` / `PROVIDER_SOURCE_CUSTOM_LIST` / `PROVIDER_SOURCE_DICT`.
  */
 export const HERMES_PROVIDER_SOURCE_FIELD = "_cc_source";
-export const HERMES_PROVIDER_SOURCE_CUSTOM_LIST = "custom_providers";
 export const HERMES_PROVIDER_SOURCE_DICT = "providers_dict";
 
 /**
@@ -104,8 +103,6 @@ export interface HermesProviderPreset extends PresetFamilyFields {
   apiKeyUrl?: string;
   settingsConfig: HermesProviderSettingsConfig;
   isOfficial?: boolean;
-  isPartner?: boolean;
-  primePartner?: boolean; // 旧版的置顶合作伙伴标记；v7 起界面不再读取，新预设不写
   partnerPromotionKey?: string;
   category?: ProviderCategory;
   templateValues?: Record<string, TemplateValueConfig>;

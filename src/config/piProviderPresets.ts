@@ -40,8 +40,6 @@ export interface PiProviderPreset extends PresetFamilyFields {
     models: PiPresetModel[];
   };
   category?: ProviderCategory;
-  isPartner?: boolean;
-  primePartner?: boolean;
   partnerPromotionKey?: string;
   theme?: PresetTheme;
   icon?: string;

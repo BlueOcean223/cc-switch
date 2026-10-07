@@ -19,18 +19,11 @@ export interface Provider {
   sortIndex?: number; // 排序索引（用于自定义拖拽排序）
   // 备注信息
   notes?: string;
-  // 新增：是否为商业合作伙伴
-  isPartner?: boolean;
   // 可选：供应商元数据（仅存于 ~/.cc-switch/config.json，不写入 live 配置）
   meta?: ProviderMeta;
   // 图标配置
   icon?: string; // 图标名称（如 "openai", "anthropic"）
   iconColor?: string; // 图标颜色（Hex 格式，如 "#00A67E"）
-}
-
-export interface AppConfig {
-  providers: Record<string, Provider>;
-  current: string;
 }
 
 // 自定义端点配置
@@ -127,8 +120,6 @@ export interface ProviderMeta {
   usage_script?: UsageScript;
   // 请求地址管理：测速后自动选择最佳端点
   endpointAutoSelect?: boolean;
-  // 是否为官方合作伙伴
-  isPartner?: boolean;
   // 合作伙伴促销 key（后端靠 "google-official" 识别 Google 官方 Gemini）
   partnerPromotionKey?: string;
   // Codex：决定写进模型目录的工具形态，新存的第三方供应商一律是 "openai_responses"
@@ -724,19 +715,6 @@ export interface OpenCodeProviderConfig {
   name?: string; // 供应商显示名称
   options: OpenCodeProviderOptions;
   models: Record<string, OpenCodeModel>;
-}
-
-// OpenCode MCP 服务器配置（与统一格式不同）
-export interface OpenCodeMcpServerSpec {
-  type: "local" | "remote";
-  // local 类型字段
-  command?: string[]; // 与统一格式不同：命令和参数合并为数组
-  environment?: Record<string, string>; // 与统一格式不同：使用 environment 而非 env
-  // remote 类型字段
-  url?: string;
-  headers?: Record<string, string>;
-  // 通用字段
-  enabled?: boolean;
 }
 
 // ============================================================================

@@ -1280,7 +1280,7 @@ impl SkillService {
         Ok(())
     }
 
-    /// 判定 check_updates 应使用的本地哈希。
+    /// 判定 check_updates_report 应使用的本地哈希。
     ///
     /// 次序关键：必须先确认 SSOT 目录存在，再信任数据库缓存的 content_hash。
     /// 换机恢复数据库备份后 Skill 文件不随库迁移，此时缓存哈希仍在而目录已
@@ -1321,15 +1321,10 @@ impl SkillService {
         }
     }
 
-    /// 检查所有已安装 Skill 的更新
+    /// 检查所有已安装 Skill 的更新，并逐仓库报告没读到的仓库（下载失败 / 超时 / 扫描失败）。
     ///
     /// 仅检查有 repo_owner 的 Skill（本地 Skill 跳过），
     /// 按仓库分组下载，避免重复下载同一仓库。
-    pub async fn check_updates(&self, db: &Arc<Database>) -> Result<Vec<SkillUpdateInfo>> {
-        Ok(self.check_updates_report(db).await?.updates)
-    }
-
-    /// 检查更新，并逐仓库报告没读到的仓库（下载失败 / 超时 / 扫描失败）。
     pub async fn check_updates_report(&self, db: &Arc<Database>) -> Result<SkillUpdateCheckResult> {
         let skills = db.get_all_installed_skills()?;
         let mut updates = Vec::new();
@@ -1767,42 +1762,6 @@ impl SkillService {
             return Err(error);
         }
         result
-    }
-
-    /// 为缺少 content_hash 的已安装 Skill 补算哈希
-    pub fn backfill_content_hashes(db: &Arc<Database>) -> Result<usize> {
-        let _state_guard = skill_state_write_guard();
-        let skills = db.get_all_installed_skills()?;
-        let ssot_dir = Self::get_ssot_dir()?;
-        let mut count = 0;
-
-        for skill in skills.values() {
-            if skill.content_hash.is_some() {
-                continue;
-            }
-            let Ok(directory) = Self::require_valid_directory(&skill.directory) else {
-                log::warn!("跳过非法 directory 的哈希回填: {:?}", skill.directory);
-                continue;
-            };
-            let skill_dir = ssot_dir.join(&directory);
-            if !skill_dir.exists() {
-                continue;
-            }
-            match Self::compute_dir_hash(&skill_dir) {
-                Ok(hash) => {
-                    let _ = db.update_skill_hash(&skill.id, &hash, 0);
-                    count += 1;
-                }
-                Err(e) => {
-                    log::warn!("补算哈希失败 {}: {e}", skill.id);
-                }
-            }
-        }
-
-        if count > 0 {
-            log::info!("已为 {count} 个 Skill 补算内容哈希");
-        }
-        Ok(count)
     }
 
     /// 迁移 Skill 存储位置（在两个 SSOT 目录间移动文件）
@@ -2638,12 +2597,6 @@ impl SkillService {
         }
 
         Ok(())
-    }
-
-    /// 复制 Skill 到应用目录（保留用于向后兼容）
-    #[deprecated(note = "请使用 sync_to_app_dir() 代替")]
-    pub fn copy_to_app(directory: &str, app: &AppType) -> Result<()> {
-        Self::sync_to_app_dir(directory, app)
     }
 
     /// 删除路径（支持 symlink 和真实目录）
@@ -3509,7 +3462,7 @@ impl SkillService {
     /// 下载仓库
     ///
     /// 这里是仓库坐标进入 URL 的**唯一收敛点**——`fetch_repo_skills`、`install`、
-    /// `check_updates`、`update_skill` 四条路径都经过它，而 `skill_repos` / `skills`
+    /// `check_updates_report`、`update_skill` 四条路径都经过它，而 `skill_repos` / `skills`
     /// 两张表都会被同步导入的远端快照整表覆盖，入库校验管不住它们。所以主防线放这里。
     async fn download_repo(&self, repo: &SkillRepo) -> Result<(tempfile::TempDir, String)> {
         Self::validate_repo_ref(&repo.owner, &repo.name, &repo.branch)?;
@@ -4369,37 +4322,6 @@ impl SkillService {
                 }
             }
         }
-
-        Ok(())
-    }
-
-    // ========== 仓库管理（保留原有逻辑）==========
-
-    /// 列出仓库
-    pub fn list_repos(&self, store: &SkillStore) -> Vec<SkillRepo> {
-        store.repos.clone()
-    }
-
-    /// 添加仓库
-    pub fn add_repo(&self, store: &mut SkillStore, repo: SkillRepo) -> Result<()> {
-        if let Some(pos) = store
-            .repos
-            .iter()
-            .position(|r| r.owner == repo.owner && r.name == repo.name)
-        {
-            store.repos[pos] = repo;
-        } else {
-            store.repos.push(repo);
-        }
-
-        Ok(())
-    }
-
-    /// 删除仓库
-    pub fn remove_repo(&self, store: &mut SkillStore, owner: String, name: String) -> Result<()> {
-        store
-            .repos
-            .retain(|r| !(r.owner == owner && r.name == name));
 
         Ok(())
     }
@@ -7045,15 +6967,21 @@ mod tests {
                     saved.content_hash,
                     Some(SkillService::compute_dir_hash(&local).unwrap())
                 );
-                assert!(service.check_updates(&db).await.unwrap().is_empty());
+                assert!(service
+                    .check_updates_report(&db)
+                    .await
+                    .unwrap()
+                    .updates
+                    .is_empty());
 
                 write_skill(&remote.path().join(new_path), "renamed-skill");
                 // Competing directory/name matches must not override the saved source.
                 write_skill(&remote.path().join(directory), directory);
                 let updates = service
-                    .check_updates(&db)
+                    .check_updates_report(&db)
                     .await
-                    .expect("check renamed skill");
+                    .expect("check renamed skill")
+                    .updates;
                 assert_eq!(
                     updates.len(),
                     1,
@@ -7071,7 +6999,12 @@ mod tests {
                     SkillService::read_skill_name_desc(&local.join("SKILL.md"), directory).0,
                     "renamed-skill"
                 );
-                assert!(service.check_updates(&db).await.unwrap().is_empty());
+                assert!(service
+                    .check_updates_report(&db)
+                    .await
+                    .unwrap()
+                    .updates
+                    .is_empty());
             }
         }
     }

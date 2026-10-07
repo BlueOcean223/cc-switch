@@ -9,8 +9,6 @@ export interface OpenCodeProviderPreset extends PresetFamilyFields {
   apiKeyUrl?: string;
   settingsConfig: OpenCodeProviderConfig;
   isOfficial?: boolean;
-  isPartner?: boolean;
-  primePartner?: boolean; // 旧版的置顶合作伙伴标记；v7 起界面不再读取，新预设不写
   partnerPromotionKey?: string;
   category?: ProviderCategory;
   templateValues?: Record<string, TemplateValueConfig>;

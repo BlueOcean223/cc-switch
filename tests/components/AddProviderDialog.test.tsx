@@ -374,7 +374,6 @@ context_window = 500000
         ],
       }),
       meta: {
-        isPartner: true,
         endpointAutoSelect: true,
         custom_endpoints: {
           "https://failover.example.com/v1": {
@@ -398,7 +397,7 @@ context_window = 500000
     await waitFor(() => expect(handleSubmit).toHaveBeenCalledTimes(1));
     expect(handleSubmit.mock.calls[0][0]).toMatchObject({
       providerKey: "pi-provider",
-      meta: { isPartner: true },
+      meta: { endpointAutoSelect: true },
     });
     expect(handleSubmit.mock.calls[0][0]).not.toHaveProperty(
       "piActivateModelId",

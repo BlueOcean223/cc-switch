@@ -95,7 +95,6 @@ fn parse_opencode_models(output: &str) -> Vec<OpenCodeModelRef> {
 pub async fn fetch_models_for_config(
     base_url: String,
     api_key: String,
-    is_full_url: Option<bool>,
     models_url: Option<String>,
     custom_user_agent: Option<String>,
     api_format: Option<String>,
@@ -108,7 +107,6 @@ pub async fn fetch_models_for_config(
     model_fetch::fetch_models(
         &base_url,
         &api_key,
-        is_full_url.unwrap_or(false),
         models_url.as_deref(),
         user_agent,
         api_format.as_deref(),

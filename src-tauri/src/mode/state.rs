@@ -138,10 +138,6 @@ impl PendingTarget {
             ..Self::default()
         }
     }
-
-    pub fn is_empty(&self) -> bool {
-        self.pointer.is_none() && self.written.is_none() && self.extra.is_empty()
-    }
 }
 
 /// 状态文件是所有应用共用的，读改写要串行。

@@ -109,9 +109,6 @@ pub enum CodexOAuthError {
     #[error("等待用户授权中")]
     AuthorizationPending,
 
-    #[error("用户拒绝授权")]
-    AccessDenied,
-
     #[error("Device Code 已过期")]
     ExpiredToken,
 
@@ -263,6 +260,7 @@ impl CodexLiveAuthSwitchGuard {
 }
 
 impl RefreshTokenAdoptionOutcome {
+    #[cfg(test)]
     fn state_changed(self) -> bool {
         matches!(
             self,
@@ -1148,6 +1146,7 @@ impl CodexOAuthManager {
     /// refresh_token 采纳进本地存储，避免用陈腐 token 覆盖 CLI 的有效登录。
     ///
     /// 仅当账号确由本 manager 托管、且值确有变化时才更新并落盘；返回是否更新。
+    #[cfg(test)]
     pub async fn adopt_account_refresh_token(
         &self,
         account_id: &str,
@@ -1379,6 +1378,7 @@ impl CodexOAuthManager {
 
     // ==================== 多账号管理 ====================
 
+    #[cfg(test)]
     pub async fn list_accounts(&self) -> Vec<GitHubAccount> {
         let accounts = self.accounts.read().await.clone();
         let default_id = self.resolve_default_account_id().await;
@@ -1500,11 +1500,6 @@ impl CodexOAuthManager {
         }
 
         Ok(())
-    }
-
-    pub async fn is_authenticated(&self) -> bool {
-        let accounts = self.accounts.read().await;
-        !accounts.is_empty()
     }
 
     /// 获取认证状态摘要
@@ -2278,7 +2273,6 @@ mod tests {
     async fn test_manager_initial_state() {
         let temp = tempfile::tempdir().unwrap();
         let manager = CodexOAuthManager::new(temp.path().to_path_buf());
-        assert!(!manager.is_authenticated().await);
         assert!(manager.list_accounts().await.is_empty());
     }
 

@@ -33,7 +33,6 @@ export interface GrokBuildProviderPreset extends PresetFamilyFields {
   auth: Record<string, any>;
   config: string; // Codex 风格 TOML 载体（只消费 base_url / model）
   isOfficial?: boolean;
-  isPartner?: boolean;
   partnerPromotionKey?: string;
   category?: ProviderCategory;
   endpointCandidates?: string[];

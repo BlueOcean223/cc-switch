@@ -83,13 +83,12 @@ const KNOWN_COMPAT_SUFFIXES: &[&str] = &[
 pub async fn fetch_models(
     base_url: &str,
     api_key: &str,
-    is_full_url: bool,
     models_url_override: Option<&str>,
     user_agent: Option<HeaderValue>,
     api_format: Option<&str>,
     request_headers: Option<&BTreeMap<String, String>>,
 ) -> Result<Vec<FetchedModel>, String> {
-    let candidates = build_models_url_candidates(base_url, is_full_url, models_url_override)?;
+    let candidates = build_models_url_candidates(base_url, models_url_override)?;
     let headers =
         build_model_fetch_headers(api_key, api_format, user_agent.as_ref(), request_headers)?;
     let client = crate::http_client::get();
@@ -241,7 +240,6 @@ fn build_model_fetch_headers(
 /// 结果已去重且保持首次出现顺序。
 pub fn build_models_url_candidates(
     base_url: &str,
-    is_full_url: bool,
     models_url_override: Option<&str>,
 ) -> Result<Vec<String>, String> {
     if let Some(raw) = models_url_override {
@@ -257,21 +255,6 @@ pub fn build_models_url_candidates(
     }
 
     let mut candidates: Vec<String> = Vec::new();
-
-    if is_full_url {
-        if let Some(idx) = trimmed.find("/v1/") {
-            candidates.push(format!("{}/v1/models", &trimmed[..idx]));
-        } else if let Some(idx) = trimmed.rfind('/') {
-            let root = &trimmed[..idx];
-            if root.contains("://") && root.len() > root.find("://").unwrap() + 3 {
-                candidates.push(format!("{root}/v1/models"));
-            }
-        }
-        if candidates.is_empty() {
-            return Err("Cannot derive models endpoint from full URL".to_string());
-        }
-        return Ok(candidates);
-    }
 
     // baseURL 已以版本段 /v{N} 结尾时（如 `/v1`、智谱 `/api/coding/paas/v4`），
     // OpenAI 惯例的模型端点是 `{base}/models`，不能再补 `/v1`
@@ -406,19 +389,19 @@ mod tests {
 
     #[test]
     fn test_candidates_plain_root() {
-        let c = build_models_url_candidates("https://api.siliconflow.cn", false, None).unwrap();
+        let c = build_models_url_candidates("https://api.siliconflow.cn", None).unwrap();
         assert_eq!(c, vec!["https://api.siliconflow.cn/v1/models"]);
     }
 
     #[test]
     fn test_candidates_trailing_slash() {
-        let c = build_models_url_candidates("https://api.example.com/", false, None).unwrap();
+        let c = build_models_url_candidates("https://api.example.com/", None).unwrap();
         assert_eq!(c, vec!["https://api.example.com/v1/models"]);
     }
 
     #[test]
     fn test_candidates_with_v1() {
-        let c = build_models_url_candidates("https://api.example.com/v1", false, None).unwrap();
+        let c = build_models_url_candidates("https://api.example.com/v1", None).unwrap();
         assert_eq!(c, vec!["https://api.example.com/v1/models"]);
     }
 
@@ -426,9 +409,8 @@ mod tests {
     fn test_candidates_zhipu_coding_paas_v4() {
         // 智谱 Coding Plan 端点以 /v4 版本段结尾：模型端点是 {base}/models，
         // 正确路径必须排在 .../v4/v1/models（404）之前。
-        let c =
-            build_models_url_candidates("https://open.bigmodel.cn/api/coding/paas/v4", false, None)
-                .unwrap();
+        let c = build_models_url_candidates("https://open.bigmodel.cn/api/coding/paas/v4", None)
+            .unwrap();
         assert_eq!(
             c,
             vec![
@@ -440,8 +422,7 @@ mod tests {
 
     #[test]
     fn test_candidates_zai_coding_paas_v4() {
-        let c = build_models_url_candidates("https://api.z.ai/api/coding/paas/v4", false, None)
-            .unwrap();
+        let c = build_models_url_candidates("https://api.z.ai/api/coding/paas/v4", None).unwrap();
         assert_eq!(
             c,
             vec![
@@ -465,26 +446,14 @@ mod tests {
     }
 
     #[test]
-    fn test_candidates_full_url() {
-        let c = build_models_url_candidates(
-            "https://proxy.example.com/v1/chat/completions",
-            true,
-            None,
-        )
-        .unwrap();
-        assert_eq!(c, vec!["https://proxy.example.com/v1/models"]);
-    }
-
-    #[test]
     fn test_candidates_empty() {
-        assert!(build_models_url_candidates("", false, None).is_err());
+        assert!(build_models_url_candidates("", None).is_err());
     }
 
     #[test]
     fn test_candidates_override_returns_single() {
         let c = build_models_url_candidates(
             "https://api.deepseek.com/anthropic",
-            false,
             Some("https://api.deepseek.com/models"),
         )
         .unwrap();
@@ -493,15 +462,13 @@ mod tests {
 
     #[test]
     fn test_candidates_override_empty_falls_through() {
-        let c =
-            build_models_url_candidates("https://api.siliconflow.cn", false, Some("   ")).unwrap();
+        let c = build_models_url_candidates("https://api.siliconflow.cn", Some("   ")).unwrap();
         assert_eq!(c, vec!["https://api.siliconflow.cn/v1/models"]);
     }
 
     #[test]
     fn test_candidates_deepseek_strip_anthropic() {
-        let c =
-            build_models_url_candidates("https://api.deepseek.com/anthropic", false, None).unwrap();
+        let c = build_models_url_candidates("https://api.deepseek.com/anthropic", None).unwrap();
         assert_eq!(
             c,
             vec![
@@ -514,8 +481,8 @@ mod tests {
 
     #[test]
     fn test_candidates_zhipu_strip_api_anthropic() {
-        let c = build_models_url_candidates("https://open.bigmodel.cn/api/anthropic", false, None)
-            .unwrap();
+        let c =
+            build_models_url_candidates("https://open.bigmodel.cn/api/anthropic", None).unwrap();
         assert_eq!(
             c,
             vec![
@@ -528,12 +495,8 @@ mod tests {
 
     #[test]
     fn test_candidates_bailian_strip_apps_anthropic() {
-        let c = build_models_url_candidates(
-            "https://dashscope.aliyuncs.com/apps/anthropic",
-            false,
-            None,
-        )
-        .unwrap();
+        let c = build_models_url_candidates("https://dashscope.aliyuncs.com/apps/anthropic", None)
+            .unwrap();
         assert_eq!(
             c,
             vec![
@@ -546,8 +509,7 @@ mod tests {
 
     #[test]
     fn test_candidates_stepfun_strip_step_plan() {
-        let c =
-            build_models_url_candidates("https://api.stepfun.com/step_plan", false, None).unwrap();
+        let c = build_models_url_candidates("https://api.stepfun.com/step_plan", None).unwrap();
         assert_eq!(
             c,
             vec![
@@ -560,12 +522,8 @@ mod tests {
 
     #[test]
     fn test_candidates_doubao_strip_api_coding() {
-        let c = build_models_url_candidates(
-            "https://ark.cn-beijing.volces.com/api/coding",
-            false,
-            None,
-        )
-        .unwrap();
+        let c = build_models_url_candidates("https://ark.cn-beijing.volces.com/api/coding", None)
+            .unwrap();
         assert_eq!(
             c,
             vec![
@@ -578,7 +536,7 @@ mod tests {
 
     #[test]
     fn test_candidates_rightcode_strip_claude() {
-        let c = build_models_url_candidates("https://www.right.codes/claude", false, None).unwrap();
+        let c = build_models_url_candidates("https://www.right.codes/claude", None).unwrap();
         assert_eq!(
             c,
             vec![
@@ -593,7 +551,7 @@ mod tests {
     fn test_candidates_longer_suffix_wins() {
         // baseURL 以 /api/anthropic 结尾时，应剥离整个 /api/anthropic，
         // 而不是只剥离 /anthropic（那样会得到残缺的 https://.../api 根）。
-        let c = build_models_url_candidates("https://api.z.ai/api/anthropic", false, None).unwrap();
+        let c = build_models_url_candidates("https://api.z.ai/api/anthropic", None).unwrap();
         assert_eq!(
             c,
             vec![
@@ -606,14 +564,14 @@ mod tests {
 
     #[test]
     fn test_candidates_no_suffix_no_strip() {
-        let c = build_models_url_candidates("https://openrouter.ai/api", false, None).unwrap();
+        let c = build_models_url_candidates("https://openrouter.ai/api", None).unwrap();
         assert_eq!(c, vec!["https://openrouter.ai/api/v1/models"]);
     }
 
     #[test]
     fn test_candidates_deduplicate() {
         // 虚构 case：baseURL 就是 "scheme://host"，剥不出子路径，应只有一个候选。
-        let c = build_models_url_candidates("https://host.example.com", false, None).unwrap();
+        let c = build_models_url_candidates("https://host.example.com", None).unwrap();
         assert_eq!(c.len(), 1);
     }
 

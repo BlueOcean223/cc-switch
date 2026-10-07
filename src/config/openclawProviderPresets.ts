@@ -28,8 +28,6 @@ export interface OpenClawProviderPreset extends PresetFamilyFields {
   /** OpenClaw settings_config structure */
   settingsConfig: OpenClawProviderConfig;
   isOfficial?: boolean;
-  isPartner?: boolean;
-  primePartner?: boolean; // 旧版的置顶合作伙伴标记；v7 起界面不再读取，新预设不写
   partnerPromotionKey?: string;
   category?: ProviderCategory;
   /** Template variable definitions */

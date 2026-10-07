@@ -86,10 +86,6 @@ windows-sys = { version = "0.61", features = [
 [target.'cfg(all(target_os = "windows", target_arch = "aarch64"))'.dependencies]
 rquickjs = { version = "0.8", features = ["bindgen"] }
 
-[target.'cfg(target_os = "macos")'.dependencies]
-objc2 = "0.5"
-objc2-app-kit = { version = "0.2", features = ["NSColor"] }
-
 # Optimize release binary size to help reduce AppImage footprint
 [profile.release]
 # 主 crate 体量大，codegen-units = 1 时 LLVM 只能单线程跑，发布编译的大头都在它身上。

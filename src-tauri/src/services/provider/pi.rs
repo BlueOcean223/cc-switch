@@ -272,7 +272,6 @@ fn strip_unsupported_pi_metadata(provider: &mut Provider) {
     };
     provider.meta = Some(ProviderMeta {
         usage_script: meta.usage_script,
-        is_partner: meta.is_partner,
         partner_promotion_key: meta.partner_promotion_key,
         ..ProviderMeta::default()
     });
@@ -316,7 +315,7 @@ mod tests {
                 endpoint_auto_select: Some(true),
                 live_config_managed: Some(false),
                 api_format: Some("openai_chat".to_string()),
-                is_partner: Some(true),
+                partner_promotion_key: Some("pi-test".to_string()),
                 ..ProviderMeta::default()
             }),
             icon: None,
@@ -364,7 +363,7 @@ mod tests {
         assert_eq!(meta.live_config_managed, None);
         assert_eq!(meta.endpoint_auto_select, None);
         assert_eq!(meta.api_format, None);
-        assert_eq!(meta.is_partner, Some(true));
+        assert_eq!(meta.partner_promotion_key.as_deref(), Some("pi-test"));
 
         ProviderService::switch(&state, AppType::Pi, "cc-switch-test").expect("enable provider");
         assert!(crate::pi_config::pi_provider_exists("cc-switch-test").unwrap());

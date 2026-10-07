@@ -57,15 +57,6 @@ export interface DeepLinkImportRequest {
   usageAutoInterval?: number;
 }
 
-export interface McpImportResult {
-  importedCount: number;
-  importedIds: string[];
-  failed: Array<{
-    id: string;
-    error: string;
-  }>;
-}
-
 export type ImportResult =
   | { type: "provider"; id: string }
   | { type: "prompt"; id: string }
