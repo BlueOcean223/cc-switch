@@ -47,6 +47,7 @@ First release of this fork of [farion1231/cc-switch](https://github.com/farion12
 
 - Install this release manually. An installed upstream CC Switch updates from upstream releases and never sees this repository.
 - Upstream versions refuse to open the database after this release has migrated it to schema 21. The pre-migration backup is in `~/.cc-switch/backups/`.
+- Codex totals for past days can go down after the rebuild. The old totals counted the parent history that subagents and forks replay a second time. Separately, when Codex migrates old session logs to the paginated format (`codex migrate-rollouts --apply` or the background migration), a subagent log can keep only what follows its last compaction; usage before that point is no longer in the logs, so the rebuilt days come out lower than what was actually used.
 
 ## [4.0.3] - 2026-10-06
 
