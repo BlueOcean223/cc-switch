@@ -96,14 +96,15 @@
 
 ## Version Information
 
-- Documentation version: v3.20.4
-- Last updated: 2026-09-26
-- Applicable to CC Switch v3.20.4+
+- Documentation version: v5.0.0
+- Last updated: 2026-10-06
+- Applicable to CC Switch v5.0.0+
 
 ### Recent Major Changes
 
 - **New managed apps**: Grok Build (v3.18.0), Pi (v3.20.0), and MiniMax Code (v3.20.4), bringing the total to 9 managed apps — see [1.1 Introduction](./1-getting-started/1.1-introduction.md)
-- **Local routing, failover, Claude Desktop, and GitHub Copilot / xAI sign-in removed**: CC Switch now only writes each tool's config files; Codex providers connect directly through native Responses endpoints — see [2.1 Add Provider](./2-providers/2.1-add.md)
+- **Local routing, failover, Claude Desktop, and GitHub Copilot / xAI sign-in removed**: CC Switch now only writes each tool's config files; Codex providers connect directly through native Responses endpoints (v5.0.0) — see [2.1 Add Provider](./2-providers/2.1-add.md)
+- **Usage costs corrected**: requests are priced at the rate in effect when they were made, with 1-hour cache writes, the priority tier and long-context tiers counted; usage is rebuilt from the session logs once after upgrading (v5.0.0) — see [4.1 Usage Statistics → How Cost Is Calculated](./4-usage/4.1-usage.md#how-cost-is-calculated)
 - **Codex switching writes only config.toml**: third-party API keys are no longer written to `auth.json` (v3.20.1) — see [1.5 Personalization → Codex App Enhancements](./1-getting-started/1.5-settings.md#codex-app-enhancements)
 - **Connectivity check replaces model test**: it only checks whether the address is reachable and no longer sends real model requests (v3.16.3) — see [4.2 Connectivity Check](./4-usage/4.2-connectivity-check.md)
 - **Usage statistics from session logs**: usage is imported from each tool's local session logs — see [4.1 Usage Statistics](./4-usage/4.1-usage.md)

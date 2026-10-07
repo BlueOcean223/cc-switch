@@ -96,14 +96,15 @@
 
 ## 版本信息
 
-- 文档版本：v3.20.4
-- 最后更新：2026-09-26
-- 适用于 CC Switch v3.20.4+
+- 文档版本：v5.0.0
+- 最后更新：2026-10-06
+- 适用于 CC Switch v5.0.0+
 
 ### 近期主要变化
 
 - **新增受管应用**：Grok Build（v3.18.0）、Pi（v3.20.0）、MiniMax Code（v3.20.4），受管应用共 9 个 — 详见 [1.1 软件介绍](./1-getting-started/1.1-introduction.md)
-- **移除本地路由、故障转移、Claude Desktop 和 GitHub Copilot / xAI 登录**：CC Switch 现在只写各工具的配置文件；Codex 供应商直接连接原生 Responses 接口 — 详见 [2.1 添加供应商](./2-providers/2.1-add.md)
+- **移除本地路由、故障转移、Claude Desktop 和 GitHub Copilot / xAI 登录**：CC Switch 现在只写各工具的配置文件；Codex 供应商直接连接原生 Responses 接口（v5.0.0）— 详见 [2.1 添加供应商](./2-providers/2.1-add.md)
+- **用量费用修正**：按请求发生时的价格计费，计入 1 小时缓存写入、priority 档和超长上下文档位，升级后按会话日志重建一次用量（v5.0.0）— 详见 [4.1 用量统计 → 费用怎么算](./4-usage/4.1-usage.md#费用怎么算)
 - **Codex 切换只写 config.toml**：第三方 API Key 不再写入 `auth.json`（v3.20.1）— 详见 [1.5 个性化配置 → Codex 应用增强](./1-getting-started/1.5-settings.md#codex-应用增强)
 - **连通检测取代模型检查**：只探测地址是否可达，不再发送真实模型请求（v3.16.3）— 详见 [4.2 连通检测](./4-usage/4.2-connectivity-check.md)
 - **从会话记录统计用量**：从各工具的本地会话记录导入 — 详见 [4.1 用量统计](./4-usage/4.1-usage.md)

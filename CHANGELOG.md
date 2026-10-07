@@ -5,6 +5,49 @@ All notable changes to CC Switch will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.0.0] - 2026-10-06
+
+First release of this fork of [farion1231/cc-switch](https://github.com/farion1231/cc-switch), based on upstream 4.0.3. CC Switch now only manages each tool's config files: switching a provider writes the tool's own files, and requests go straight from the tool to the provider. Nothing runs a local proxy any more. The major version goes up because features were removed and the database schema moves to 21. Entries for 4.0.3 and earlier describe the upstream project.
+
+### Removed
+
+- **Local routing**: the local proxy and the takeover of Claude Code, Codex, Gemini CLI and Grok Build, Aggregation (Stack) mode, failover queues, circuit breakers, provider health and the rectifier.
+- **Format conversion**: Claude "Upstream Format", Chat Completions and Anthropic upstreams for Codex and Grok Build, reasoning conversion, full-URL endpoints, custom User-Agent and request overrides. Codex presets on Chat Completions endpoints and Claude presets that only worked through routing are gone too.
+- **Claude Desktop** support.
+- **GitHub Copilot and xAI sign-in**, and the Codex OAuth reverse proxy for Claude. ChatGPT accounts for the Codex OpenAI Official card stay.
+- Provider spending limits, partner promotion, the tray "open website" item and the new-layout notice.
+- Matching session usage against rows recorded by the old local routing. Rows it recorded are kept and still counted.
+
+### Changed
+
+- **Updates come from this repository only**: the in-app updater reads this repository's GitHub Releases and uses a new signing key, so it no longer offers upstream builds. Without an Apple certificate in CI, the macOS build is ad-hoc signed and not notarized.
+- **Database schema 21**: upstream's schema 20 (the Pi MCP flag) comes first; schema 21 drops the routing tables and unused provider columns, and adds columns for 1-hour cache writes, service tier and recorded cost on usage rows, and for long-context and priority pricing. The database is backed up before migrating; older versions refuse to open a schema-21 database.
+- **Usage pricing**:
+  - Requests are priced at the rate in effect when they were made. Earlier prices are built in for GPT-5.6 Sol (cut on 2026-08-21) and GPT-5.6 Terra and Luna (cut on 2026-07-30).
+  - Claude 1-hour cache writes cost 2x the input price; fast / priority requests use the model's multiplier; a request whose prompt exceeds the long-context threshold (272K for GPT-5.4 and later, 200K for Claude Sonnet 4 / 4.5, Gemini Pro and xAI) is billed at the higher rate in full.
+  - Built-in prices win at startup and the overrides in `~/.cc-switch/model-pricing.json` are applied on top. Stored costs are recalculated on every launch and after pricing edits.
+  - Pi and OpenCode are priced from the pricing table first; the cost they recorded is used only for models missing from it. Pi kept charging the old GPT-5.6 Sol price after the cut. Grok Build keeps the cost xAI returns.
+
+### Added
+
+- **Usage rebuild**: after upgrading, usage is rebuilt once from the session logs. "Rebuild Usage" in the usage Data sources sheet does the same on demand. The database is backed up first, and days whose logs have been deleted keep their daily totals.
+- Pricing for Claude Sonnet 5.5, and long-context and priority settings for the built-in models.
+
+### Fixed
+
+- **Codex subagents and forks**: the parent history they replay at the fork instant is no longer counted again. A child whose parent stopped writing before the fork is imported instead of waiting forever.
+- **Claude**: a reply stored while a subagent was still writing it gets its final output tokens and cost.
+- **Codex**: cache writes and the priority / fast tier from thread settings are recorded.
+- **Grok Build**: session logs above 50 MiB are read instead of skipped, and a turn total no longer triggers the long-context tier.
+- Events older than the 30-day detail window are not imported a second time after their days were rolled up.
+- The connectivity check read the wrong base URL for Codex and Grok Build.
+- URL masking in logs drops `user:pass@` from URLs that have no host.
+
+### Upgrade notes
+
+- Install this release manually. An installed upstream CC Switch updates from upstream releases and never sees this repository.
+- Upstream versions refuse to open the database after this release has migrated it to schema 21. The pre-migration backup is in `~/.cc-switch/backups/`.
+
 ## [4.0.3] - 2026-10-06
 
 Fixes and smaller additions on top of 4.0.2. Claude Code mapped to GPT or Grok no longer reasons at full strength with thinking turned off, and `low` effort no longer returns 400 on pro models. Claude Code behind a gateway can skip the auto mode server check with a new quick toggle (on by default for new third-party providers), and every quick toggle now explains itself. Skills imported with several apps ticked actually reach those apps, OpenCode Go works from Claude Desktop, and mixed LF / CRLF SSE streams no longer lose tool calls. MCP and prompt editors open as full pages that ask before discarding unsaved changes; Backup & Restore shows every backup location under `~/.cc-switch` with its size; ChatGPT subscriptions show their Codex Credits balance; the usage tables count cache tokens and the model tab gains success rate and speed. OpenCode 2.0 native providers round-trip through the JSON editor, and OpenCode Zen and MoArk join the presets.

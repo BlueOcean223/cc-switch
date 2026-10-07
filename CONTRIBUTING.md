@@ -82,7 +82,7 @@ For a debug build, append `--debug` to the command above. This single-quote form
 ### Releasing
 
 1. Set the new version in `package.json`, `src-tauri/Cargo.toml` and `src-tauri/tauri.conf.json`, and refresh `src-tauri/Cargo.lock`. The in-app updater only offers a version higher than the installed one.
-2. Push a `v*` tag (for example `v4.0.1`). `.github/workflows/release.yml` builds every platform and publishes the GitHub Release as a prerelease.
+2. Push a `v*` tag (for example `v5.0.1`). `.github/workflows/release.yml` builds every platform and publishes the GitHub Release as a prerelease.
 3. Check the build, then edit the release on GitHub and set it as the latest release. The in-app updater reads `latest.json` from the latest full release, so it does not see a prerelease.
 
 The workflow needs these repository secrets (Settings → Secrets and variables → Actions):
@@ -347,7 +347,7 @@ pnpm tauri build -c '{"bundle":{"createUpdaterArtifacts":false}}'
 ### 发布
 
 1. 把 `package.json`、`src-tauri/Cargo.toml` 和 `src-tauri/tauri.conf.json` 里的版本号改成新版本，并更新 `src-tauri/Cargo.lock`。应用内更新只会提示比已安装版本更高的版本。
-2. 推送 `v*` 标签（例如 `v4.0.1`）。`.github/workflows/release.yml` 会构建所有平台，并以预发布（prerelease）的形式发布 GitHub Release。
+2. 推送 `v*` 标签（例如 `v5.0.1`）。`.github/workflows/release.yml` 会构建所有平台，并以预发布（prerelease）的形式发布 GitHub Release。
 3. 确认构建没有问题后，在 GitHub 上编辑这个 Release，把它设为最新版本（latest）。应用内更新读取的是最新正式版里的 `latest.json`，看不到预发布版本。
 
 工作流需要这些仓库 Secrets（Settings → Secrets and variables → Actions）：
