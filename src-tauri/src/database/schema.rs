@@ -174,9 +174,7 @@ impl Database {
             input_cost_per_million TEXT NOT NULL, output_cost_per_million TEXT NOT NULL,
             cache_read_cost_per_million TEXT NOT NULL DEFAULT '0',
             cache_creation_cost_per_million TEXT NOT NULL DEFAULT '0',
-            long_context_threshold INTEGER,
-            long_context_input_multiplier TEXT NOT NULL DEFAULT '1',
-            long_context_output_multiplier TEXT NOT NULL DEFAULT '1',
+            long_context_tiers TEXT NOT NULL DEFAULT '[]',
             priority_multiplier TEXT NOT NULL DEFAULT '1'
         )",
             [],
@@ -1128,12 +1126,8 @@ impl Database {
         }
         if Self::table_exists(conn, "model_pricing")? {
             for (column, definition) in [
-                ("long_context_threshold", "INTEGER"),
-                ("long_context_input_multiplier", "TEXT NOT NULL DEFAULT '1'"),
-                (
-                    "long_context_output_multiplier",
-                    "TEXT NOT NULL DEFAULT '1'",
-                ),
+                // 超长上下文档位数组的 JSON，格式见 model_pricing::LongContextTier
+                ("long_context_tiers", "TEXT NOT NULL DEFAULT '[]'"),
                 ("priority_multiplier", "TEXT NOT NULL DEFAULT '1'"),
             ] {
                 Self::add_column_if_missing(conn, "model_pricing", column, definition)?;
@@ -2430,7 +2424,7 @@ impl Database {
     /// 同一模型带推理强度后缀的行（`-low` / `-high` …）一并设置。
     fn apply_model_pricing_tiers(conn: &Connection) -> Result<(), AppError> {
         // 早期迁移（v8 -> v9）也会 seed 定价，那时还没有档位列；启动时会再 seed 一次
-        if !Self::has_column(conn, "model_pricing", "long_context_threshold")? {
+        if !Self::has_column(conn, "model_pricing", "long_context_tiers")? {
             return Ok(());
         }
         /// (阈值, 输入侧倍率, 输出倍率)
@@ -2494,25 +2488,27 @@ impl Database {
         let mut stmt = conn
             .prepare(
                 "UPDATE model_pricing SET
-                    long_context_threshold = ?2,
-                    long_context_input_multiplier = ?3,
-                    long_context_output_multiplier = ?4,
-                    priority_multiplier = ?5
+                    long_context_tiers = ?2,
+                    priority_multiplier = ?3
                  WHERE model_id = ?1
                     OR model_id IN (?1 || '-minimal', ?1 || '-low', ?1 || '-medium',
                                     ?1 || '-high', ?1 || '-xhigh')",
             )
             .map_err(|e| AppError::Database(format!("准备模型定价档位语句失败: {e}")))?;
         for (model_id, long_context, priority) in tiers {
-            let (threshold, input_multiplier, output_multiplier) = match long_context {
-                Some((threshold, input, output)) => (Some(*threshold), *input, *output),
-                None => (None, "1", "1"),
-            };
+            let long_context_tiers: Vec<_> = long_context
+                .iter()
+                .map(
+                    |(threshold, input, output)| crate::services::model_pricing::LongContextTier {
+                        threshold_tokens: *threshold,
+                        input_multiplier: input.to_string(),
+                        output_multiplier: output.to_string(),
+                    },
+                )
+                .collect();
             stmt.execute(rusqlite::params![
                 model_id,
-                threshold,
-                input_multiplier,
-                output_multiplier,
+                crate::services::model_pricing::long_context_tiers_to_json(&long_context_tiers),
                 priority
             ])
             .map_err(|e| AppError::Database(format!("写入模型 {model_id} 定价档位失败: {e}")))?;

@@ -68,6 +68,7 @@ impl ServiceTier {
 /// 超过 `threshold_tokens` 时，整次请求按高价计费。OpenAI（GPT-5.4 起 272K）、
 /// Gemini 2.5 Pro 和开了 1M 上下文的 Claude Sonnet 4/4.5（200K）都是这个规则：
 /// 输入侧（输入、缓存读、缓存写）乘 `input_multiplier`，输出乘 `output_multiplier`。
+/// 千问、豆包等按提示长度分多档（如 32K、128K），超过几档就按阈值最高的那档算。
 #[derive(Debug, Clone, PartialEq)]
 pub struct LongContextPricing {
     pub threshold_tokens: u64,
@@ -100,7 +101,8 @@ pub struct ModelPricing {
     pub prices: BasePrices,
     /// 调价前的单价，按 `until` 从早到晚排列
     pub earlier: Vec<EarlierPrices>,
-    pub long_context: Option<LongContextPricing>,
+    /// 超长上下文档位，按阈值从低到高排列
+    pub long_context_tiers: Vec<LongContextPricing>,
     /// priority / fast 档相对标准价的倍数；1 表示该模型没有这个档位或倍数未知。
     pub priority_multiplier: Decimal,
 }
@@ -118,7 +120,7 @@ impl ModelPricing {
     /// 一轮包含多次模型调用），看不出单次请求的提示长度，按标准价计。
     pub fn without_long_context(self) -> Self {
         Self {
-            long_context: None,
+            long_context_tiers: Vec::new(),
             ..self
         }
     }
@@ -149,12 +151,15 @@ impl CostCalculator {
         let million = Decimal::from(1_000_000);
         let prices = pricing.prices_at(created_at);
 
-        let (input_multiplier, output_multiplier) = match &pricing.long_context {
-            Some(lc) if usage.prompt_tokens() > lc.threshold_tokens => {
+        let prompt_tokens = usage.prompt_tokens();
+        let (input_multiplier, output_multiplier) = pricing
+            .long_context_tiers
+            .iter()
+            .rev()
+            .find(|lc| prompt_tokens > lc.threshold_tokens)
+            .map_or((Decimal::ONE, Decimal::ONE), |lc| {
                 (lc.input_multiplier, lc.output_multiplier)
-            }
-            _ => (Decimal::ONE, Decimal::ONE),
-        };
+            });
         let tier_multiplier = match tier {
             ServiceTier::Standard => Decimal::ONE,
             ServiceTier::Priority => pricing.priority_multiplier,
@@ -205,7 +210,7 @@ impl ModelPricing {
                 cache_creation: Decimal::from_str(cache_creation)?,
             },
             earlier: Vec::new(),
-            long_context: None,
+            long_context_tiers: Vec::new(),
             priority_multiplier: Decimal::ONE,
         })
     }
@@ -275,11 +280,11 @@ mod tests {
 
     fn gpt_5_6_sol() -> ModelPricing {
         ModelPricing {
-            long_context: Some(LongContextPricing {
+            long_context_tiers: vec![LongContextPricing {
                 threshold_tokens: 272_000,
                 input_multiplier: dec("2"),
                 output_multiplier: dec("1.5"),
-            }),
+            }],
             priority_multiplier: dec("2"),
             ..ModelPricing::from_strings("4", "20", "0.4", "5").unwrap()
         }
@@ -298,6 +303,33 @@ mod tests {
         assert_eq!(cost.input_cost, dec("0.08")); // 10K × $8
         assert_eq!(cost.cache_read_cost, dec("0.216")); // 270K × $0.8
         assert_eq!(cost.output_cost, dec("0.03")); // 1K × $30
+    }
+
+    #[test]
+    fn the_highest_tier_the_prompt_exceeds_applies() {
+        // 千问 qwen3-max：32K 以上输入 ×2、输出 ×2，128K 以上 ×2.5
+        let pricing = ModelPricing {
+            long_context_tiers: vec![
+                LongContextPricing {
+                    threshold_tokens: 32_000,
+                    input_multiplier: dec("2"),
+                    output_multiplier: dec("2"),
+                },
+                LongContextPricing {
+                    threshold_tokens: 128_000,
+                    input_multiplier: dec("2.5"),
+                    output_multiplier: dec("2.5"),
+                },
+            ],
+            ..ModelPricing::from_strings("1.2", "6", "0.24", "0").unwrap()
+        };
+        let input_cost = |prompt| {
+            CostCalculator::calculate(&usage(prompt, 0, 0, 0), &pricing, ServiceTier::Standard, AT)
+                .input_cost
+        };
+        assert_eq!(input_cost(20_000), dec("0.024")); // 20K × $1.2
+        assert_eq!(input_cost(100_000), dec("0.24")); // 100K × $2.4
+        assert_eq!(input_cost(200_000), dec("0.6")); // 200K × $3
     }
 
     #[test]

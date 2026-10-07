@@ -57,7 +57,8 @@ export interface ModelPricing {
   outputCostPerMillion: string;
   cacheReadCostPerMillion: string;
   cacheCreationCostPerMillion: string;
-  longContext?: LongContextTier;
+  /** 按阈值从低到高；超过几档就按阈值最高的那档算 */
+  longContextTiers?: LongContextTier[];
 }
 
 /** 提示超过 thresholdTokens 时，整次请求输入侧（含缓存读写）和输出分别乘的倍率。 */

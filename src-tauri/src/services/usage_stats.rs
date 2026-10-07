@@ -1993,8 +1993,7 @@ fn query_model_pricing(
 ) -> Result<Option<ModelPricing>, AppError> {
     const COLUMNS: &str = "model_id, input_cost_per_million, output_cost_per_million,
         cache_read_cost_per_million, cache_creation_cost_per_million,
-        long_context_threshold, long_context_input_multiplier,
-        long_context_output_multiplier, priority_multiplier";
+        long_context_tiers, priority_multiplier";
     let (sql, param) = match mode {
         PricingMatch::Exact => (
             format!("SELECT {COLUMNS} FROM model_pricing WHERE model_id = ?1"),
@@ -2016,40 +2015,31 @@ fn query_model_pricing(
                 row.get::<_, String>(2)?,
                 row.get::<_, String>(3)?,
                 row.get::<_, String>(4)?,
-                row.get::<_, Option<i64>>(5)?,
+                row.get::<_, String>(5)?,
                 row.get::<_, String>(6)?,
-                row.get::<_, String>(7)?,
-                row.get::<_, String>(8)?,
             ))
         })
         .optional()
         .map_err(|e| AppError::Database(format!("查询模型定价失败: {e}")))?;
-    let Some((
-        matched_id,
-        input,
-        output,
-        cache_read,
-        cache_creation,
-        threshold,
-        lc_in,
-        lc_out,
-        priority,
-    )) = row
-    else {
+    let Some((matched_id, input, output, cache_read, cache_creation, tiers, priority)) = row else {
         return Ok(None);
     };
     let parse = |label: &str, value: &str| {
         rust_decimal::Decimal::from_str(value)
             .map_err(|e| AppError::Database(format!("解析模型 {model_id} 的{label}失败: {e}")))
     };
-    let long_context = match threshold {
-        Some(threshold) if threshold > 0 => Some(LongContextPricing {
-            threshold_tokens: threshold as u64,
-            input_multiplier: parse("超长上下文输入倍率", &lc_in)?,
-            output_multiplier: parse("超长上下文输出倍率", &lc_out)?,
-        }),
-        _ => None,
-    };
+    let long_context_tiers =
+        crate::services::model_pricing::long_context_tiers_from_json(&matched_id, &tiers)
+            .into_iter()
+            .filter(|tier| tier.threshold_tokens > 0)
+            .map(|tier| {
+                Ok(LongContextPricing {
+                    threshold_tokens: tier.threshold_tokens as u64,
+                    input_multiplier: parse("超长上下文输入倍率", &tier.input_multiplier)?,
+                    output_multiplier: parse("超长上下文输出倍率", &tier.output_multiplier)?,
+                })
+            })
+            .collect::<Result<Vec<_>, AppError>>()?;
     let pricing = ModelPricing {
         prices: BasePrices {
             input: parse("输入价格", &input)?,
@@ -2058,7 +2048,7 @@ fn query_model_pricing(
             cache_creation: parse("缓存写入价格", &cache_creation)?,
         },
         earlier: Vec::new(),
-        long_context,
+        long_context_tiers,
         priority_multiplier: parse("priority 倍率", &priority)?,
     };
     Ok(Some(with_price_history(&matched_id, pricing)))

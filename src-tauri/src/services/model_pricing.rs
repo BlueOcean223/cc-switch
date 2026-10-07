@@ -36,20 +36,34 @@ pub struct ModelPricingInfo {
     pub output_cost_per_million: String,
     pub cache_read_cost_per_million: String,
     pub cache_creation_cost_per_million: String,
-    /// 超长上下文档位，来自 models.dev 的 `cost.tiers`。没有时不改库里已有的档位
-    /// （内置模型的档位由代码写入，手动编辑价格也不会清掉它）。
+    /// 超长上下文档位，来自 models.dev 的 `cost.tiers`，按阈值从低到高排列。没有时
+    /// 不改库里已有的档位（内置模型的档位由代码写入，手动编辑价格也不会清掉它）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub long_context: Option<LongContextTier>,
+    pub long_context_tiers: Option<Vec<LongContextTier>>,
 }
 
 /// 提示长度超过 `threshold_tokens` 时，整次请求的输入侧（输入、缓存读写）乘
-/// `input_multiplier`，输出乘 `output_multiplier`（见 `token_usage::LongContextPricing`）。
+/// `input_multiplier`，输出乘 `output_multiplier`；超过多档时取阈值最高的那档
+/// （见 `token_usage::LongContextPricing`）。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LongContextTier {
     pub threshold_tokens: i64,
     pub input_multiplier: String,
     pub output_multiplier: String,
+}
+
+/// `model_pricing.long_context_tiers` 列的内容：档位数组的 JSON。
+pub fn long_context_tiers_to_json(tiers: &[LongContextTier]) -> String {
+    serde_json::to_string(tiers).unwrap_or_else(|_| "[]".to_string())
+}
+
+/// 读 `model_pricing.long_context_tiers` 列。内容坏了按没有档位处理并记日志。
+pub fn long_context_tiers_from_json(model_id: &str, json: &str) -> Vec<LongContextTier> {
+    serde_json::from_str(json).unwrap_or_else(|error| {
+        log::warn!("模型 {model_id} 的超长上下文档位无法解析，按没有档位计价: {error}");
+        Vec::new()
+    })
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -167,29 +181,48 @@ fn normalize_pricing(entry: ModelPricingInfo) -> Result<ModelPricingInfo, AppErr
             "cache_creation_cost",
             &entry.cache_creation_cost_per_million,
         )?,
-        long_context: entry
-            .long_context
-            .map(|tier| -> Result<LongContextTier, AppError> {
-                if tier.threshold_tokens <= 0 {
-                    return Err(AppError::Message(format!(
-                        "long_context threshold must be positive: {}",
-                        tier.threshold_tokens
-                    )));
-                }
-                Ok(LongContextTier {
-                    threshold_tokens: tier.threshold_tokens,
-                    input_multiplier: normalize_decimal(
-                        "long_context_input_multiplier",
-                        &tier.input_multiplier,
-                    )?,
-                    output_multiplier: normalize_decimal(
-                        "long_context_output_multiplier",
-                        &tier.output_multiplier,
-                    )?,
-                })
-            })
+        long_context_tiers: entry
+            .long_context_tiers
+            .map(normalize_long_context_tiers)
             .transpose()?,
     })
+}
+
+fn normalize_long_context_tiers(
+    tiers: Vec<LongContextTier>,
+) -> Result<Vec<LongContextTier>, AppError> {
+    let mut normalized = tiers
+        .into_iter()
+        .map(|tier| -> Result<LongContextTier, AppError> {
+            if tier.threshold_tokens <= 0 {
+                return Err(AppError::Message(format!(
+                    "long_context threshold must be positive: {}",
+                    tier.threshold_tokens
+                )));
+            }
+            Ok(LongContextTier {
+                threshold_tokens: tier.threshold_tokens,
+                input_multiplier: normalize_decimal(
+                    "long_context_input_multiplier",
+                    &tier.input_multiplier,
+                )?,
+                output_multiplier: normalize_decimal(
+                    "long_context_output_multiplier",
+                    &tier.output_multiplier,
+                )?,
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    normalized.sort_by_key(|tier| tier.threshold_tokens);
+    if normalized
+        .windows(2)
+        .any(|pair| pair[0].threshold_tokens == pair[1].threshold_tokens)
+    {
+        return Err(AppError::Message(
+            "long_context tiers must not repeat a threshold".to_string(),
+        ));
+    }
+    Ok(normalized)
 }
 
 fn normalize_key_list(values: Vec<String>) -> Vec<String> {
@@ -277,46 +310,31 @@ fn upsert_pricing(
     transaction: &Transaction<'_>,
     entry: &ModelPricingInfo,
 ) -> Result<usize, AppError> {
-    let (threshold, input_multiplier, output_multiplier) = match &entry.long_context {
-        Some(tier) => (
-            Some(tier.threshold_tokens),
-            tier.input_multiplier.as_str(),
-            tier.output_multiplier.as_str(),
-        ),
-        None => (None, "1", "1"),
-    };
+    let tiers = entry
+        .long_context_tiers
+        .as_deref()
+        .map(long_context_tiers_to_json);
     // ?7 为 NULL（条目没带档位）时保留库里已有的档位
     transaction
         .execute(
             "INSERT INTO model_pricing (
                 model_id, display_name, input_cost_per_million, output_cost_per_million,
                 cache_read_cost_per_million, cache_creation_cost_per_million,
-                long_context_threshold, long_context_input_multiplier,
-                long_context_output_multiplier
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+                long_context_tiers
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, COALESCE(?7, '[]'))
             ON CONFLICT(model_id) DO UPDATE SET
                 display_name = excluded.display_name,
                 input_cost_per_million = excluded.input_cost_per_million,
                 output_cost_per_million = excluded.output_cost_per_million,
                 cache_read_cost_per_million = excluded.cache_read_cost_per_million,
                 cache_creation_cost_per_million = excluded.cache_creation_cost_per_million,
-                long_context_threshold =
-                    COALESCE(excluded.long_context_threshold, long_context_threshold),
-                long_context_input_multiplier = CASE
-                    WHEN excluded.long_context_threshold IS NULL THEN long_context_input_multiplier
-                    ELSE excluded.long_context_input_multiplier END,
-                long_context_output_multiplier = CASE
-                    WHEN excluded.long_context_threshold IS NULL THEN long_context_output_multiplier
-                    ELSE excluded.long_context_output_multiplier END
+                long_context_tiers = COALESCE(?7, long_context_tiers)
             WHERE display_name <> excluded.display_name
                OR input_cost_per_million <> excluded.input_cost_per_million
                OR output_cost_per_million <> excluded.output_cost_per_million
                OR cache_read_cost_per_million <> excluded.cache_read_cost_per_million
                OR cache_creation_cost_per_million <> excluded.cache_creation_cost_per_million
-               OR (excluded.long_context_threshold IS NOT NULL AND (
-                    long_context_threshold IS NOT excluded.long_context_threshold
-                    OR long_context_input_multiplier <> excluded.long_context_input_multiplier
-                    OR long_context_output_multiplier <> excluded.long_context_output_multiplier))",
+               OR (?7 IS NOT NULL AND long_context_tiers <> ?7)",
             params![
                 entry.model_id,
                 entry.display_name,
@@ -324,9 +342,7 @@ fn upsert_pricing(
                 entry.output_cost_per_million,
                 entry.cache_read_cost_per_million,
                 entry.cache_creation_cost_per_million,
-                threshold,
-                input_multiplier,
-                output_multiplier
+                tiers
             ],
         )
         .map_err(|error| AppError::Database(format!("更新模型定价失败: {error}")))
@@ -459,10 +475,10 @@ fn update_model_pricing_batch_inner(
         for entry in &entries {
             let mut entry = entry.clone();
             // 手动编辑不带档位，沿用文件里同步来的那一份
-            if entry.long_context.is_none() {
-                entry.long_context = file_models
+            if entry.long_context_tiers.is_none() {
+                entry.long_context_tiers = file_models
                     .get(&entry.model_id)
-                    .and_then(|existing| existing.long_context.clone());
+                    .and_then(|existing| existing.long_context_tiers.clone());
             }
             file_models.insert(entry.model_id.clone(), entry);
         }
@@ -568,7 +584,7 @@ mod tests {
             output_cost_per_million: "5".to_string(),
             cache_read_cost_per_million: "0.1".to_string(),
             cache_creation_cost_per_million: "1.5".to_string(),
-            long_context: None,
+            long_context_tiers: None,
         }
     }
 
@@ -681,14 +697,16 @@ mod tests {
 
     #[test]
     #[serial]
-    fn synced_long_context_tier_survives_manual_price_edits() {
+    fn synced_long_context_tiers_survive_manual_price_edits() {
         with_test_home(|db, path| {
+            let tier = |threshold_tokens, multiplier: &str| LongContextTier {
+                threshold_tokens,
+                input_multiplier: multiplier.to_string(),
+                output_multiplier: multiplier.to_string(),
+            };
             let mut synced = sample_pricing();
-            synced.long_context = Some(LongContextTier {
-                threshold_tokens: 272_000,
-                input_multiplier: "2".to_string(),
-                output_multiplier: "1.5".to_string(),
-            });
+            // 乱序传入，存进库里按阈值从低到高
+            synced.long_context_tiers = Some(vec![tier(128_000, "2.5"), tier(32_000, "2")]);
             update_model_pricing_batch(db, vec![synced]).expect("sync models.dev pricing");
 
             let mut manual = sample_pricing();
@@ -696,17 +714,21 @@ mod tests {
             update_model_pricing(db, manual).expect("edit price by hand");
 
             let conn = db.conn.lock().expect("lock test database");
-            let tier: (Option<i64>, String, String, String) = conn
+            let (tiers, input): (String, String) = conn
                 .query_row(
-                    "SELECT long_context_threshold, long_context_input_multiplier,
-                            long_context_output_multiplier, input_cost_per_million
+                    "SELECT long_context_tiers, input_cost_per_million
                      FROM model_pricing WHERE model_id = ?1",
                     params!["custom-model"],
-                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+                    |row| Ok((row.get(0)?, row.get(1)?)),
                 )
                 .expect("query pricing");
             drop(conn);
-            assert_eq!(tier, (Some(272_000), "2".into(), "1.5".into(), "9".into()));
+            let expected = vec![tier(32_000, "2"), tier(128_000, "2.5")];
+            assert_eq!(
+                long_context_tiers_from_json("custom-model", &tiers),
+                expected
+            );
+            assert_eq!(input, "9");
 
             let content = fs::read_to_string(path).expect("read pricing file");
             let file: ModelPricingFile = serde_json::from_str(&content).expect("parse file");
@@ -716,14 +738,18 @@ mod tests {
                 .find(|entry| entry.model_id == "custom-model")
                 .expect("saved pricing");
             assert_eq!(saved.input_cost_per_million, "9");
-            assert_eq!(
-                saved
-                    .long_context
-                    .as_ref()
-                    .map(|tier| tier.threshold_tokens),
-                Some(272_000)
-            );
+            assert_eq!(saved.long_context_tiers.as_ref(), Some(&expected));
         });
+    }
+
+    #[test]
+    fn long_context_tiers_reject_a_repeated_threshold() {
+        let tier = LongContextTier {
+            threshold_tokens: 200_000,
+            input_multiplier: "2".to_string(),
+            output_multiplier: "1.5".to_string(),
+        };
+        assert!(normalize_long_context_tiers(vec![tier.clone(), tier]).is_err());
     }
 
     #[test]

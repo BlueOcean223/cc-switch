@@ -7,7 +7,7 @@ import {
 import { normalizeModelsDevModelId } from "@/lib/modelsDev";
 import {
   getCommonModelKeys,
-  longContextTier,
+  longContextTiers,
   resolveModelsDevSelection,
   toModelPricing,
 } from "@/lib/modelsDevPricing";
@@ -328,11 +328,11 @@ describe("flattenModels", () => {
   });
 });
 
-describe("longContextTier", () => {
-  it("turns the lowest context tier into multipliers", () => {
+describe("longContextTiers", () => {
+  it("turns context tiers into multipliers", () => {
     // gpt-5.5 on models.dev: prompts over 272K bill input x2, output x1.5
     expect(
-      longContextTier({
+      longContextTiers({
         input: 5,
         output: 30,
         cache_read: 0.5,
@@ -345,28 +345,62 @@ describe("longContextTier", () => {
           },
         ],
       }),
-    ).toEqual({
-      thresholdTokens: 272000,
-      inputMultiplier: "2",
-      outputMultiplier: "1.5",
-    });
-
-    const tiered = longContextTier({
-      input: 1.2,
-      output: 6,
-      tiers: [
-        { input: 3, output: 15, tier: { type: "context", size: 128000 } },
-        { input: 2.4, output: 12, tier: { type: "context", size: 32000 } },
-      ],
-    });
-    expect(tiered?.thresholdTokens).toBe(32000);
-    expect(tiered?.inputMultiplier).toBe("2");
+    ).toEqual([
+      {
+        thresholdTokens: 272000,
+        inputMultiplier: "2",
+        outputMultiplier: "1.5",
+      },
+    ]);
   });
 
-  it("skips tiers one input-side multiplier cannot express", () => {
-    expect(longContextTier({ input: 1, output: 2 })).toBeUndefined();
+  it("keeps every tier, lowest threshold first", () => {
+    // qwen3-max: x2 above 32K, x2.5 above 128K
     expect(
-      longContextTier({
+      longContextTiers({
+        input: 1.2,
+        output: 6,
+        tiers: [
+          { input: 3, output: 15, tier: { type: "context", size: 128000 } },
+          { input: 2.4, output: 12, tier: { type: "context", size: 32000 } },
+        ],
+      }),
+    ).toEqual([
+      { thresholdTokens: 32000, inputMultiplier: "2", outputMultiplier: "2" },
+      {
+        thresholdTokens: 128000,
+        inputMultiplier: "2.5",
+        outputMultiplier: "2.5",
+      },
+    ]);
+  });
+
+  it("skips models with a tier one input-side multiplier cannot express", () => {
+    expect(longContextTiers({ input: 1, output: 2 })).toBeUndefined();
+    // a missing middle tier would misprice prompts above it
+    expect(
+      longContextTiers({
+        input: 1,
+        output: 4,
+        cache_read: 0.2,
+        tiers: [
+          {
+            input: 2,
+            output: 8,
+            cache_read: 0.4,
+            tier: { type: "context", size: 32000 },
+          },
+          {
+            input: 3,
+            output: 12,
+            cache_read: 0.4,
+            tier: { type: "context", size: 128000 },
+          },
+        ],
+      }),
+    ).toBeUndefined();
+    expect(
+      longContextTiers({
         input: 0.1,
         output: 0.4,
         cache_read: 0.02,
@@ -403,10 +437,12 @@ describe("longContextTier", () => {
         },
       },
     });
-    expect(toModelPricing([entry])[0].longContext).toEqual({
-      thresholdTokens: 200000,
-      inputMultiplier: "2",
-      outputMultiplier: "1.5",
-    });
+    expect(toModelPricing([entry])[0].longContextTiers).toEqual([
+      {
+        thresholdTokens: 200000,
+        inputMultiplier: "2",
+        outputMultiplier: "1.5",
+      },
+    ]);
   });
 });

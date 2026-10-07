@@ -22,7 +22,7 @@ export interface ModelsDevEntry {
   output: number;
   cacheRead: number;
   cacheWrite: number;
-  longContext?: LongContextTier;
+  longContextTiers?: LongContextTier[];
 }
 
 const NON_TEXT_MODEL_MARKERS = [
@@ -73,40 +73,47 @@ const ratio = (tierPrice: number | undefined, base: number | undefined) =>
     : undefined;
 
 /**
- * 把 models.dev 的 `cost.tiers` 换成用量统计用的超长上下文倍率。
+ * 把 models.dev 的 `cost.tiers` 换成用量统计用的超长上下文倍率，按阈值从低到高。
  *
- * 库里每个模型只能存一档、输入侧一个倍率，所以取门槛最低的一档；缓存读写的
- * 倍率与输入不一致时这一档表示不了，不导入（主流厂商都一致，不一致的多是聚合商
- * 的个别条目）。
+ * 每档输入侧只存一个倍率，缓存读写的倍率与输入不一致时这一档表示不了；少了中间
+ * 一档会算错，所以有一档表示不了就整个模型都不导入（主流厂商都一致，不一致的多是
+ * 聚合商的个别条目）。
  */
-export function longContextTier(
+export function longContextTiers(
   cost: ModelsDevCost | undefined,
-): LongContextTier | undefined {
-  const tier = cost?.tiers
-    ?.filter(
-      (candidate) =>
-        candidate.tier?.type === "context" &&
-        typeof candidate.tier.size === "number" &&
-        candidate.tier.size > 0,
+): LongContextTier[] | undefined {
+  const tiers: LongContextTier[] = [];
+  const candidates = (cost?.tiers ?? [])
+    .flatMap((tier) =>
+      tier.tier?.type === "context" &&
+      typeof tier.tier.size === "number" &&
+      tier.tier.size > 0
+        ? [{ ...tier, size: tier.tier.size }]
+        : [],
     )
-    .sort((a, b) => (a.tier?.size ?? 0) - (b.tier?.size ?? 0))[0];
-  const input = ratio(tier?.input, cost?.input);
-  if (!tier?.tier?.size || input === undefined) return undefined;
-  const output = ratio(tier.output, cost?.output) ?? 1;
-  for (const cacheRatio of [
-    ratio(tier.cache_read, cost?.cache_read),
-    ratio(tier.cache_write, cost?.cache_write),
-  ]) {
-    if (cacheRatio !== undefined && Math.abs(cacheRatio - input) > 1e-6) {
-      return undefined;
+    .sort((a, b) => a.size - b.size);
+  for (const tier of candidates) {
+    const input = ratio(tier.input, cost?.input);
+    if (input === undefined) return undefined;
+    const output = ratio(tier.output, cost?.output) ?? 1;
+    for (const cacheRatio of [
+      ratio(tier.cache_read, cost?.cache_read),
+      ratio(tier.cache_write, cost?.cache_write),
+    ]) {
+      if (cacheRatio !== undefined && Math.abs(cacheRatio - input) > 1e-6) {
+        return undefined;
+      }
     }
+    tiers.push({
+      thresholdTokens: tier.size,
+      inputMultiplier: formatPrice(input),
+      outputMultiplier: formatPrice(output),
+    });
   }
-  if (input === 1 && output === 1) return undefined;
-  return {
-    thresholdTokens: tier.tier.size,
-    inputMultiplier: formatPrice(input),
-    outputMultiplier: formatPrice(output),
-  };
+  const changesPrice = tiers.some(
+    (tier) => tier.inputMultiplier !== "1" || tier.outputMultiplier !== "1",
+  );
+  return changesPrice ? tiers : undefined;
 }
 
 export function flattenModels(data: ModelsDevResponse): ModelsDevEntry[] {
@@ -136,7 +143,7 @@ export function flattenModels(data: ModelsDevResponse): ModelsDevEntry[] {
         cacheRead: typeof cost?.cache_read === "number" ? cost.cache_read : 0,
         cacheWrite:
           typeof cost?.cache_write === "number" ? cost.cache_write : 0,
-        longContext: longContextTier(cost),
+        longContextTiers: longContextTiers(cost),
       });
     }
   }
@@ -264,7 +271,9 @@ export function toModelPricing(entries: ModelsDevEntry[]): ModelPricing[] {
       outputCostPerMillion: formatPrice(entry.output),
       cacheReadCostPerMillion: formatPrice(entry.cacheRead),
       cacheCreationCostPerMillion: formatPrice(entry.cacheWrite),
-      ...(entry.longContext ? { longContext: entry.longContext } : {}),
+      ...(entry.longContextTiers
+        ? { longContextTiers: entry.longContextTiers }
+        : {}),
     });
   }
   return Array.from(byModelId.values());

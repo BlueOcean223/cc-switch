@@ -1014,19 +1014,20 @@ fn model_pricing_seed_overwrites_builtin_rows_and_sets_tiers() {
 
     // GPT-5.6 Sol 和它带推理强度后缀的行都有 272K 档位和 priority 倍率
     for model_id in ["gpt-5.6-sol", "gpt-5.5-high"] {
-        let tier: (Option<i64>, String, String, String) = conn
+        let tiers: String = conn
             .query_row(
-                "SELECT long_context_threshold, long_context_input_multiplier,
-                        long_context_output_multiplier, priority_multiplier
-                 FROM model_pricing WHERE model_id = ?1",
+                "SELECT long_context_tiers FROM model_pricing WHERE model_id = ?1",
                 [model_id],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+                |row| row.get(0),
             )
             .expect("query tier");
-        assert_eq!(tier.0, Some(272_000), "{model_id}");
         assert_eq!(
-            (tier.1.as_str(), tier.2.as_str()),
-            ("2", "1.5"),
+            crate::services::model_pricing::long_context_tiers_from_json(model_id, &tiers),
+            vec![crate::services::model_pricing::LongContextTier {
+                threshold_tokens: 272_000,
+                input_multiplier: "2".to_string(),
+                output_multiplier: "1.5".to_string(),
+            }],
             "{model_id}"
         );
     }

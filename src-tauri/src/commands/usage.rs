@@ -2,7 +2,7 @@
 
 use crate::error::AppError;
 use crate::services::model_pricing::{
-    LongContextTier, ModelPricingInfo, ModelsDevSyncConfig, ModelsDevSyncState,
+    long_context_tiers_from_json, ModelPricingInfo, ModelsDevSyncConfig, ModelsDevSyncState,
 };
 use crate::services::usage_stats::*;
 use crate::store::AppState;
@@ -192,29 +192,22 @@ pub fn get_model_pricing(state: State<'_, AppState>) -> Result<Vec<ModelPricingI
     let mut stmt = conn.prepare(
         "SELECT model_id, display_name, input_cost_per_million, output_cost_per_million,
                 cache_read_cost_per_million, cache_creation_cost_per_million,
-                long_context_threshold, long_context_input_multiplier,
-                long_context_output_multiplier
+                long_context_tiers
          FROM model_pricing
          ORDER BY display_name",
     )?;
 
     let rows = stmt.query_map([], |row| {
-        let threshold: Option<i64> = row.get(6)?;
+        let model_id: String = row.get(0)?;
+        let tiers = long_context_tiers_from_json(&model_id, &row.get::<_, String>(6)?);
         Ok(ModelPricingInfo {
-            model_id: row.get(0)?,
+            model_id,
             display_name: row.get(1)?,
             input_cost_per_million: row.get(2)?,
             output_cost_per_million: row.get(3)?,
             cache_read_cost_per_million: row.get(4)?,
             cache_creation_cost_per_million: row.get(5)?,
-            long_context: match threshold {
-                Some(threshold_tokens) if threshold_tokens > 0 => Some(LongContextTier {
-                    threshold_tokens,
-                    input_multiplier: row.get(7)?,
-                    output_multiplier: row.get(8)?,
-                }),
-                _ => None,
-            },
+            long_context_tiers: (!tiers.is_empty()).then_some(tiers),
         })
     })?;
 
@@ -247,7 +240,7 @@ pub fn update_model_pricing(
             output_cost_per_million: output_cost,
             cache_read_cost_per_million: cache_read_cost,
             cache_creation_cost_per_million: cache_creation_cost,
-            long_context: None,
+            long_context_tiers: None,
         },
     )?;
     Ok(())
