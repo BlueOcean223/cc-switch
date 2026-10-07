@@ -1,15 +1,14 @@
 //! Gemini CLI 会话日志使用追踪
 //!
-//! 从 ~/.gemini/tmp/<project_hash>/chats/session-*.json(l) 中提取精确 token 使用数据。
+//! 从 ~/.gemini/tmp/<project_hash>/chats/session-*.json 中提取精确 token 使用数据。
 //!
 //! ## 数据流
 //! ```text
-//! ~/.gemini/tmp/*/chats/session-*.json(l) → 全量解析 → 费用计算 → proxy_request_logs 表
+//! ~/.gemini/tmp/*/chats/session-*.json → 全量解析 → 费用计算 → proxy_request_logs 表
 //! ```
 //!
 //! ## 与 Claude/Codex 解析器的差异
-//! - 旧版 JSON 是单个对象；新版 JSONL 按记录回放还原成同样的 messages 数组
-//!   （见 [`crate::session_manager::providers::gemini::parse_session_document`]）
+//! - JSON 格式（非 JSONL）：每个文件是单个 JSON 对象，包含 messages 数组
 //! - 无需 delta 计算：tokens 字段是 per-message 独立值
 //! - 无需状态恢复：不依赖前一条消息的累计值
 //! - 天然去重：每条消息有唯一 id 字段
@@ -22,7 +21,6 @@ use crate::services::session_usage::{
 };
 use crate::services::sql_helpers::INPUT_TOKEN_SEMANTICS_FRESH;
 use crate::services::usage_stats::find_model_pricing;
-use crate::session_manager::providers::gemini::{is_session_file, parse_session_document};
 use crate::token_usage::calculator::{CostBreakdown, CostCalculator, ServiceTier};
 use crate::token_usage::parser::TokenUsage;
 use std::fs;
@@ -124,7 +122,7 @@ fn collect_gemini_session_files(gemini_dir: &Path) -> Vec<PathBuf> {
         return files;
     }
 
-    // 遍历 tmp/<project_hash>/chats/session-*.json(l)
+    // 遍历 tmp/<project_hash>/chats/session-*.json
     let project_dirs = match fs::read_dir(&tmp_dir) {
         Ok(entries) => entries,
         Err(_) => return files,
@@ -146,8 +144,8 @@ fn collect_gemini_session_files(gemini_dir: &Path) -> Vec<PathBuf> {
             let is_session = path
                 .file_name()
                 .and_then(|n| n.to_str())
-                .is_some_and(|n| n.starts_with("session-"))
-                && is_session_file(&path);
+                .map(|n| n.starts_with("session-") && n.ends_with(".json"))
+                .unwrap_or(false);
             if is_session {
                 files.push(path);
             }
@@ -180,8 +178,8 @@ fn sync_single_gemini_file(
     // 读取并解析整个 JSON 文件
     let content = fs::read_to_string(file_path)
         .map_err(|e| AppError::Config(format!("无法读取文件: {e}")))?;
-    let value = parse_session_document(&content)
-        .ok_or_else(|| AppError::Config("JSON 解析失败".to_string()))?;
+    let value: serde_json::Value = serde_json::from_str(&content)
+        .map_err(|e| AppError::Config(format!("JSON 解析失败: {e}")))?;
 
     // 提取顶层 sessionId
     let session_id = value
