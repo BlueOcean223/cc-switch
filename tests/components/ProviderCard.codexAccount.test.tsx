@@ -71,18 +71,13 @@ const managedProvider = (
 const authStatus = (login: string): ManagedAuthStatus => ({
   provider: "codex_oauth",
   authenticated: true,
-  default_account_id: "account-long",
   accounts: [
     {
       id: "account-long",
       provider: "codex_oauth",
       login,
-      avatar_url: null,
       authenticated_at: 0,
-      is_default: true,
-      github_domain: "",
       reauth_required: false,
-      requires_reauth: false,
     },
   ],
 });

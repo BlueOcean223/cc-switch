@@ -742,7 +742,6 @@ fn dry_run_validates_schema_compatibility() {
             meta: None,
             icon: None,
             icon_color: None,
-            in_failover_queue: false,
         },
     );
 

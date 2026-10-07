@@ -78,12 +78,11 @@ export function appDisplayName(appType: string): string {
 }
 
 /**
- * 请求日志「应用」列用的短名：图标已经区分了品牌（Claude Code / Desktop 靠角标），
- * 列里只留最短能认出的名字，把宽度让给供应商列。全名在悬停提示里。
+ * 请求日志「应用」列用的短名：图标已经区分了品牌，列里只留最短能认出的名字，
+ * 把宽度让给供应商列。全名在悬停提示里。
  */
 const APP_SHORT_NAME: Record<AppId, string> = {
   claude: "Claude",
-  "claude-desktop": "Desktop",
   codex: "Codex",
   gemini: "Gemini",
   grokbuild: "Grok",
@@ -229,11 +228,7 @@ export function RequestLogTable({
             title={appDisplayName(log.appType)}
           >
             {isKnownAppId(log.appType) && (
-              <AppGlyph
-                app={log.appType}
-                size={14}
-                badgeClassName="bg-surface"
-              />
+              <AppGlyph app={log.appType} size={14} />
             )}
             <span className="truncate" aria-hidden="true">
               {appShortName(log.appType)}

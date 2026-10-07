@@ -24,7 +24,6 @@ import {
   sectionPresetRows,
 } from "@/components/providers/forms/presetGroups";
 import { providerPresets } from "@/config/claudeProviderPresets";
-import { codexProviderPresets } from "@/config/codexProviderPresets";
 import {
   PRESET_FAMILIES,
   PRESET_PLAN_KEYS,
@@ -88,9 +87,9 @@ const entries: PresetEntry[] = [
     preset: preset("AWS Bedrock", "cloud_provider", "https://aws.amazon.com"),
   },
   {
-    id: "copilot",
-    preset: preset("GitHub Copilot", "third_party", "https://github.com", {
-      providerType: "github_copilot",
+    id: "chatgpt",
+    preset: preset("ChatGPT", "third_party", "https://chatgpt.com", {
+      providerType: "codex_oauth",
     }),
   },
 ];
@@ -151,7 +150,7 @@ const zhipuFamily: PresetEntry[] = [
   },
 ];
 
-// 两维都变但缺格子（腾讯在 Codex 里多一个只有国内的按量付费）
+// 两维都变但缺格子（多一个只有国内的按量付费）：不成网格，用下拉
 const tencentPartial: PresetEntry[] = [
   ["tp-cn", "tokenPlan", "cn"],
   ["tp-intl", "tokenPlan", "intl"],
@@ -184,7 +183,7 @@ describe("preset helpers", () => {
       getVisiblePresetEntries(entries, { query: "", t }).map(
         (entry) => entry.id,
       ),
-    ).toEqual(["alpha", "bedrock", "gamma", "copilot", "huoshan", "zhipu"]);
+    ).toEqual(["alpha", "bedrock", "chatgpt", "gamma", "huoshan", "zhipu"]);
   });
 
   it("searches display names, domains and aliases but not TLDs", () => {
@@ -226,11 +225,11 @@ describe("preset families", () => {
     expect(hits("moonshot")).toEqual([["family:kimi", []]]);
   });
 
-  it("merges Claude's visible presets into 34 rows", () => {
+  it("merges Claude's visible presets into 28 rows", () => {
     const claudeEntries = providerPresets
       .filter((item) => !item.hidden)
       .map((item, index) => ({ id: `claude-${index}`, preset: item }));
-    expect(groupPresetRows(claudeEntries)).toHaveLength(34);
+    expect(groupPresetRows(claudeEntries)).toHaveLength(28);
   });
 
   it("orders plans and regions as the design does where a family says so", () => {
@@ -289,10 +288,6 @@ describe("preset families", () => {
       plans: ["tokenPlan", "enterpriseLite", "enterprisePro"],
       regions: ["cn", "intl"],
     });
-    // Codex 的腾讯多一个只有国内的混元：不成网格，用下拉
-    expect(layoutOf(codexProviderPresets, "tencent")).toEqual({
-      kind: "list",
-    });
     expect(layoutOf(claude, "volcengine")).toEqual({
       kind: "single",
       dimension: "plan",
@@ -322,7 +317,7 @@ describe("preset families", () => {
         (section) => [section.group, section.items.map(({ row }) => row.key)],
       );
     expect(sections("")).toEqual([
-      ["login", ["alpha", "copilot"]],
+      ["login", ["alpha", "chatgpt"]],
       ["vendor", ["huoshan", "family:kimi", "zhipu"]],
       ["thirdparty", ["gamma"]],
       ["cloud", ["bedrock"]],
@@ -437,7 +432,7 @@ describe("ProviderPresetSelector", () => {
       within(login)
         .getAllByRole("button")
         .map((button) => button.getAttribute("aria-label")),
-    ).toEqual(["GitHub Copilot", "preset.alpha"]);
+    ).toEqual(["ChatGPT", "preset.alpha"]);
     expect(
       within(
         within(host).getByRole("region", {
@@ -465,10 +460,10 @@ describe("ProviderPresetSelector", () => {
     await user.click(
       within(host).getByRole("button", { name: /providerPreset.group.login/ }),
     );
-    expect(within(host).getByText("GitHub Copilot")).toBeInTheDocument();
+    expect(within(host).getByText("ChatGPT")).toBeInTheDocument();
     expect(within(host).queryByText("Gamma")).not.toBeInTheDocument();
     expect(
-      within(host).getByText("providerPreset.loginWith.github"),
+      within(host).getByText("providerPreset.loginWith.chatgpt"),
     ).toBeInTheDocument();
 
     const search = within(host).getByRole("textbox", {

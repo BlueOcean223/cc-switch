@@ -16,18 +16,7 @@ import { Input } from "@/components/ui/input";
 import JsonEditor from "@/components/JsonEditor";
 import { useDarkMode } from "@/hooks/useDarkMode";
 import { providerSchema, type ProviderFormData } from "@/lib/schemas/provider";
-import {
-  buildLocalProxyRequestOverrides,
-  formatRequestOverrideObject,
-} from "@/lib/requestOverrides";
-import type {
-  ClaudeApiKeyField,
-  CodexApiFormat,
-  CodexChatReasoning,
-  PromptCacheRoutingMode,
-  ProviderCategory,
-  ProviderMeta,
-} from "@/types";
+import type { ProviderCategory, ProviderMeta } from "@/types";
 import type { ProviderFormProps, ProviderFormValues } from "./ProviderForm";
 import { BasicFormFields } from "./BasicFormFields";
 import { CodexFormFields } from "./CodexFormFields";
@@ -39,10 +28,8 @@ import {
   type GrokBuildProviderPreset,
 } from "@/config/grokBuildProviderPresets";
 import {
-  codexApiFormatFromWireApi,
   extractCodexBaseUrl,
   extractCodexModelName,
-  extractCodexWireApi,
 } from "@/utils/providerConfigUtils";
 import {
   buildGrokBuildConfig,
@@ -130,44 +117,6 @@ export function GrokBuildProviderForm({
     // 只在打开时投影一次：之后的投影跟着预设切换走。
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-  const [apiFormat, setApiFormat] = useState<CodexApiFormat>(
-    (initialData?.meta?.apiFormat as CodexApiFormat | undefined) ??
-      "openai_responses",
-  );
-  const [anthropicAuthField, setAnthropicAuthField] =
-    useState<ClaudeApiKeyField>(
-      initialData?.meta?.apiKeyField ?? "ANTHROPIC_AUTH_TOKEN",
-    );
-  const [impersonateClaudeCode, setImpersonateClaudeCode] = useState(
-    initialData?.meta?.impersonateClaudeCode === true,
-  );
-  const [maxOutputTokens, setMaxOutputTokens] = useState(
-    initialData?.meta?.maxOutputTokens
-      ? String(initialData.meta.maxOutputTokens)
-      : "",
-  );
-  const [codexChatReasoning, setCodexChatReasoning] =
-    useState<CodexChatReasoning>(initialData?.meta?.codexChatReasoning ?? {});
-  const [promptCacheRouting, setPromptCacheRouting] =
-    useState<PromptCacheRoutingMode>(
-      initialData?.meta?.promptCacheRouting ?? "auto",
-    );
-  const [isFullUrl, setIsFullUrl] = useState(
-    initialData?.meta?.isFullUrl ?? false,
-  );
-  const [customUserAgent, setCustomUserAgent] = useState(
-    initialData?.meta?.customUserAgent ?? "",
-  );
-  const [headersOverride, setHeadersOverride] = useState(
-    formatRequestOverrideObject(
-      initialData?.meta?.localProxyRequestOverrides?.headers,
-    ),
-  );
-  const [bodyOverride, setBodyOverride] = useState(
-    formatRequestOverrideObject(
-      initialData?.meta?.localProxyRequestOverrides?.body,
-    ),
-  );
   const [endpointAutoSelect, setEndpointAutoSelect] = useState(
     initialData?.meta?.endpointAutoSelect ?? true,
   );
@@ -280,10 +229,6 @@ export function GrokBuildProviderForm({
     const presetName = preset.nameKey ? String(t(preset.nameKey)) : preset.name;
     const presetBaseUrl = extractCodexBaseUrl(preset.config) ?? "";
     const presetModel = extractCodexModelName(preset.config) ?? profile;
-    const presetApiFormat =
-      preset.apiFormat ??
-      codexApiFormatFromWireApi(extractCodexWireApi(preset.config)) ??
-      "openai_responses";
     const presetApiKey =
       "auth" in preset && typeof preset.auth?.OPENAI_API_KEY === "string"
         ? preset.auth.OPENAI_API_KEY
@@ -298,7 +243,6 @@ export function GrokBuildProviderForm({
     setBaseUrl(presetBaseUrl);
     setApiKey(presetApiKey);
     setUpstreamModel(presetModel);
-    setApiFormat(presetApiFormat);
     setPresetEndpoints(preset.endpointCandidates ?? []);
     const presetConfig = buildGrokBuildConfig({
       model: profile,
@@ -389,41 +333,22 @@ export function GrokBuildProviderForm({
       return;
     }
 
-    const requestOverrides = buildLocalProxyRequestOverrides(
-      headersOverride,
-      bodyOverride,
-    );
-    if (requestOverrides.error) {
-      toast.error(requestOverrides.error);
-      return;
-    }
-
     const customEndpoints = Object.fromEntries(
       draftCustomEndpoints.map((url) => [
         url,
         { url, addedAt: Date.now(), lastUsed: undefined },
       ]),
     );
-    const parsedMaxOutputTokens = Number.parseInt(maxOutputTokens, 10);
     const initialMeta = { ...(initialData?.meta ?? {}) };
     delete initialMeta.custom_endpoints;
+    // 旧版路由用的格式字段：Grok Build 直连时用不上，保存时清掉
+    delete initialMeta.apiFormat;
+    delete initialMeta.apiKeyField;
     const meta: ProviderMeta = {
       ...initialMeta,
-      apiFormat,
-      apiKeyField: anthropicAuthField,
-      isFullUrl,
       endpointAutoSelect,
       isPartner,
       partnerPromotionKey,
-      impersonateClaudeCode,
-      promptCacheRouting,
-      codexChatReasoning,
-      customUserAgent: customUserAgent.trim() || undefined,
-      localProxyRequestOverrides: requestOverrides.overrides,
-      maxOutputTokens:
-        Number.isInteger(parsedMaxOutputTokens) && parsedMaxOutputTokens > 0
-          ? parsedMaxOutputTokens
-          : undefined,
     };
     if (!providerId && Object.keys(customEndpoints).length > 0) {
       meta.custom_endpoints = customEndpoints;
@@ -485,8 +410,6 @@ export function GrokBuildProviderForm({
                 setBaseUrl(value);
                 syncStructuredConfig({ baseUrl: value });
               }}
-              isFullUrl={isFullUrl}
-              onFullUrlChange={setIsFullUrl}
               isEndpointModalOpen={isEndpointModalOpen}
               onEndpointModalToggle={setIsEndpointModalOpen}
               onCustomEndpointsChange={setDraftCustomEndpoints}
@@ -497,27 +420,7 @@ export function GrokBuildProviderForm({
                 setUpstreamModel(value);
                 syncStructuredConfig({ upstreamModel: value });
               }}
-              apiFormat={apiFormat}
-              onApiFormatChange={(value) => {
-                setApiFormat(value);
-              }}
-              anthropicAuthField={anthropicAuthField}
-              onAnthropicAuthFieldChange={setAnthropicAuthField}
-              impersonateClaudeCode={impersonateClaudeCode}
-              onImpersonateClaudeCodeChange={setImpersonateClaudeCode}
-              maxOutputTokens={maxOutputTokens}
-              onMaxOutputTokensChange={setMaxOutputTokens}
-              codexChatReasoning={codexChatReasoning}
-              onCodexChatReasoningChange={setCodexChatReasoning}
-              promptCacheRouting={promptCacheRouting}
-              onPromptCacheRoutingChange={setPromptCacheRouting}
               speedTestEndpoints={speedTestEndpoints}
-              customUserAgent={customUserAgent}
-              onCustomUserAgentChange={setCustomUserAgent}
-              localProxyHeadersOverride={headersOverride}
-              onLocalProxyHeadersOverrideChange={setHeadersOverride}
-              localProxyBodyOverride={bodyOverride}
-              onLocalProxyBodyOverrideChange={setBodyOverride}
             />
 
             <FormItem>

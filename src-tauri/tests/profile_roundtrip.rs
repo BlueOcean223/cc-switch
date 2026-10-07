@@ -29,21 +29,6 @@ fn claude_provider(id: &str, token: &str) -> Provider {
     )
 }
 
-/// Claude Desktop 供应商：无 meta 时默认 Direct 模式，只要求 env 里有 token + base_url
-fn desktop_provider(id: &str, token: &str) -> Provider {
-    Provider::with_id(
-        id.to_string(),
-        id.to_uppercase(),
-        json!({
-            "env": {
-                "ANTHROPIC_AUTH_TOKEN": token,
-                "ANTHROPIC_BASE_URL": "https://desktop.test"
-            }
-        }),
-        None,
-    )
-}
-
 fn mcp_server(id: &str, claude_enabled: bool) -> McpServer {
     serde_json::from_value(json!({
         "id": id,
@@ -120,26 +105,6 @@ fn profile_snapshot_apply_roundtrip_restores_configuration() {
         .set_current_provider(AppType::Claude.as_str(), "p1")
         .expect("set current provider p1");
 
-    // Claude Desktop 只有供应商一个活跃维度（MCP/Skills/Prompt 对它不适用）
-    state
-        .db
-        .save_provider(
-            AppType::ClaudeDesktop.as_str(),
-            &desktop_provider("d1", "dk-1"),
-        )
-        .expect("save desktop provider d1");
-    state
-        .db
-        .save_provider(
-            AppType::ClaudeDesktop.as_str(),
-            &desktop_provider("d2", "dk-2"),
-        )
-        .expect("save desktop provider d2");
-    state
-        .db
-        .set_current_provider(AppType::ClaudeDesktop.as_str(), "d1")
-        .expect("set current desktop provider d1");
-
     // 让 live settings.json 与 p1 一致（switch_normal 回填需要）
     let claude_dir = home.join(".claude");
     fs::create_dir_all(&claude_dir).expect("create .claude dir");
@@ -191,16 +156,9 @@ fn profile_snapshot_apply_roundtrip_restores_configuration() {
         "codex side not captured when creating from the claude group"
     );
     assert_eq!(payload.mcp.codex, None, "uncaptured side stays None");
-    assert_eq!(
-        payload.providers.claude_desktop, None,
-        "claude desktop has its own profile scope"
-    );
 
     // ---- 改动全部四类配置（走真实切换路径）----
     ProviderService::switch(&state, AppType::Claude, "p2").expect("switch to p2");
-    // Desktop 现在有自己的项目分组；Claude 分组 apply 不应再影响 Desktop
-    #[cfg(any(target_os = "macos", windows))]
-    ProviderService::switch(&state, AppType::ClaudeDesktop, "d2").expect("switch desktop to d2");
     McpService::toggle_app(&state, "m1", AppType::Claude, false).expect("disable m1");
     McpService::toggle_app(&state, "m2", AppType::Claude, true).expect("enable m2");
     SkillService::toggle_app(&state.db, "local:test-skill", &AppType::Claude, false)
@@ -217,23 +175,6 @@ fn profile_snapshot_apply_roundtrip_restores_configuration() {
         .get_current_provider(AppType::Claude.as_str())
         .expect("get current provider");
     assert_eq!(current.as_deref(), Some("p1"), "provider restored to p1");
-
-    // Claude 分组不再管理 Desktop：apply 后 Desktop 保持切换前的状态不变。
-    // macOS/Windows 上上面已切到 d2；Linux（CI）不支持 Desktop 切换、那行被 cfg 门控
-    // 编译剔除，Desktop 仍是种子值 d1。两种情况都验证 claude-scope apply 不会动 Desktop。
-    let current_desktop = state
-        .db
-        .get_current_provider(AppType::ClaudeDesktop.as_str())
-        .expect("get current desktop provider");
-    #[cfg(any(target_os = "macos", windows))]
-    let expected_desktop = "d2";
-    #[cfg(not(any(target_os = "macos", windows)))]
-    let expected_desktop = "d1";
-    assert_eq!(
-        current_desktop.as_deref(),
-        Some(expected_desktop),
-        "desktop provider untouched by claude-scope apply"
-    );
 
     let servers = state.db.get_all_mcp_servers().expect("get mcp servers");
     assert!(servers.get("m1").expect("m1").apps.claude, "m1 re-enabled");
@@ -318,7 +259,6 @@ fn shared_profile_sides_are_isolated_and_mergeable() {
         "claude slot not captured by codex-side snapshot"
     );
     assert_eq!(payload.mcp.claude, None);
-    assert_eq!(payload.providers.claude_desktop, None);
     assert_eq!(payload.mcp.codex, Some(vec![]), "codex side captured");
 
     // 按 Codex 组应用：只动 codex 组的 current 标记，Claude 侧原样不动
@@ -641,223 +581,4 @@ fn switching_profile_autosaves_previous_profile_state() {
     assert_eq!(payload_b.providers.claude.as_deref(), Some("p1"));
     assert_eq!(payload_b.mcp.claude, Some(vec!["m1".to_string()]));
     assert_eq!(payload_b.prompts.claude.as_deref(), Some("pr1"));
-}
-
-#[test]
-fn profile_switch_in_routing_mode_changes_the_route_only() {
-    let _guard = test_mutex().lock().unwrap_or_else(|e| e.into_inner());
-    reset_test_fs();
-    let home = ensure_test_home();
-
-    let state = create_test_state().expect("create test state");
-
-    // 使用临时端口，避免测试机器端口冲突
-    futures::executor::block_on(async {
-        let mut proxy_config = state.db.get_proxy_config().await.expect("get proxy config");
-        proxy_config.listen_port = 0;
-        state
-            .db
-            .update_proxy_config(proxy_config)
-            .await
-            .expect("set ephemeral proxy port");
-    });
-
-    // ---- 两个 Claude 供应商：custom1 与 custom2 ----
-    let mut custom1 = claude_provider("custom1", "custom-key-1");
-    custom1.category = Some("custom".to_string());
-    state
-        .db
-        .save_provider(AppType::Claude.as_str(), &custom1)
-        .expect("save custom1 provider");
-
-    let mut custom2 = claude_provider("custom2", "custom-key-2");
-    custom2.category = Some("custom".to_string());
-    state
-        .db
-        .save_provider(AppType::Claude.as_str(), &custom2)
-        .expect("save custom2 provider");
-
-    // 初始状态：custom1 + 路由模式
-    ProviderService::switch(&state, AppType::Claude, "custom1").expect("switch to custom1");
-    let rt = tokio::runtime::Runtime::new().expect("create tokio runtime");
-    rt.block_on(cc_switch_lib::mode::controller::enter(
-        &state,
-        &AppType::Claude,
-        false,
-    ))
-    .expect("enter routing mode");
-
-    // ---- 构造一个目标为 custom2 的项目快照 ----
-    let project = ProfileService::create(&state, "Custom2 Project", ProfileScope::Claude)
-        .expect("create project");
-    let mut project = state
-        .db
-        .get_profile(&project.id)
-        .expect("get project")
-        .expect("project exists");
-    let mut payload: ProfilePayload =
-        serde_json::from_str(&project.payload).expect("parse project payload");
-    payload.providers.claude = Some("custom2".to_string());
-    project.payload = serde_json::to_string(&payload).expect("serialize payload");
-    state
-        .db
-        .save_profile(&project)
-        .expect("save updated project");
-
-    // ---- 应用项目：只把代理路由切到 custom2，不退出路由模式 ----
-    let warnings = ProfileService::apply(&state, &project.id, ProfileScope::Claude)
-        .expect("apply custom2 project");
-    assert!(
-        warnings.is_empty(),
-        "switching project should not warn: {warnings:?}"
-    );
-
-    assert!(cc_switch_lib::mode::current::is_proxy(&AppType::Claude));
-    let (proxy_enabled_after, _) = state.db.get_proxy_flags_sync("claude");
-    assert!(
-        proxy_enabled_after,
-        "routing mode is mirrored for old versions"
-    );
-    assert_eq!(
-        cc_switch_lib::mode::current::provider_for(
-            &state.db,
-            &AppType::Claude,
-            cc_switch_lib::mode::current::Purpose::InUse,
-        )
-        .expect("in-use provider")
-        .as_deref(),
-        Some("custom2"),
-        "the proxy should route to custom2"
-    );
-    assert_eq!(
-        cc_switch_lib::mode::current::provider_for(
-            &state.db,
-            &AppType::Claude,
-            cc_switch_lib::mode::current::Purpose::Direct,
-        )
-        .expect("direct provider")
-        .as_deref(),
-        Some("custom1"),
-        "the direct pointer is independent of the route"
-    );
-
-    // 应用快照里记的是 custom1 的项目：比的是正在用的那家（路由），不是直连指针。
-    let mut back = state
-        .db
-        .get_profile(&project.id)
-        .expect("get project")
-        .expect("project exists");
-    let mut back_payload: ProfilePayload =
-        serde_json::from_str(&back.payload).expect("parse project payload");
-    back_payload.providers.claude = Some("custom1".to_string());
-    back.payload = serde_json::to_string(&back_payload).expect("serialize payload");
-    state
-        .db
-        .save_profile(&back)
-        .expect("save project back to custom1");
-    let warnings = ProfileService::apply(&state, &project.id, ProfileScope::Claude)
-        .expect("apply custom1 project");
-    assert!(warnings.is_empty(), "{warnings:?}");
-    assert_eq!(
-        cc_switch_lib::mode::current::provider_for(
-            &state.db,
-            &AppType::Claude,
-            cc_switch_lib::mode::current::Purpose::InUse,
-        )
-        .expect("in-use provider")
-        .as_deref(),
-        Some("custom1"),
-        "the route follows the project even though the direct pointer already matched"
-    );
-
-    // live 仍指向本地代理；退出路由后写回直连的 custom1
-    let settings_path = home.join(".claude/settings.json");
-    let base_url = |path: &std::path::Path| {
-        let settings: serde_json::Value =
-            serde_json::from_str(&fs::read_to_string(path).expect("read settings"))
-                .expect("parse settings");
-        settings
-            .get("env")
-            .and_then(|e| e.get("ANTHROPIC_BASE_URL"))
-            .and_then(|v| v.as_str())
-            .map(str::to_string)
-    };
-    assert!(base_url(&settings_path)
-        .expect("proxy base url")
-        .starts_with("http://127.0.0.1:"));
-    rt.block_on(cc_switch_lib::mode::controller::exit(
-        &state,
-        &AppType::Claude,
-    ))
-    .expect("exit routing mode");
-    assert_eq!(
-        base_url(&settings_path).as_deref(),
-        Some("https://api.test"),
-        "leaving routing mode writes the direct provider back"
-    );
-}
-
-#[cfg(any(target_os = "macos", windows))]
-#[test]
-fn claude_desktop_profile_scope_is_independent() {
-    let _guard = test_mutex().lock().unwrap_or_else(|e| e.into_inner());
-    reset_test_fs();
-    let _home = ensure_test_home();
-
-    let state = create_test_state().expect("create test state");
-
-    state
-        .db
-        .save_provider(
-            AppType::ClaudeDesktop.as_str(),
-            &desktop_provider("d1", "dk-1"),
-        )
-        .expect("save desktop provider d1");
-    state
-        .db
-        .save_provider(
-            AppType::ClaudeDesktop.as_str(),
-            &desktop_provider("d2", "dk-2"),
-        )
-        .expect("save desktop provider d2");
-    state
-        .db
-        .set_current_provider(AppType::ClaudeDesktop.as_str(), "d1")
-        .expect("set current desktop provider d1");
-
-    // 在 Desktop 页新建项目：只拍 Desktop 供应商
-    let project = ProfileService::create(&state, "Desktop Project", ProfileScope::ClaudeDesktop)
-        .expect("create desktop profile");
-    let payload: ProfilePayload =
-        serde_json::from_str(&project.payload).expect("parse desktop payload");
-    assert_eq!(payload.providers.claude_desktop.as_deref(), Some("d1"));
-    assert_eq!(payload.providers.claude, None, "claude slot untouched");
-    assert_eq!(payload.providers.codex, None, "codex slot untouched");
-
-    // 切到 d2
-    ProviderService::switch(&state, AppType::ClaudeDesktop, "d2").expect("switch desktop to d2");
-
-    // 应用 Desktop 项目：恢复 d1
-    let warnings = ProfileService::apply(&state, &project.id, ProfileScope::ClaudeDesktop)
-        .expect("apply desktop profile");
-    assert!(warnings.is_empty(), "unexpected warnings: {warnings:?}");
-
-    assert_eq!(
-        state
-            .db
-            .get_current_provider(AppType::ClaudeDesktop.as_str())
-            .expect("get current desktop provider")
-            .as_deref(),
-        Some("d1"),
-        "desktop provider restored by desktop-scope apply"
-    );
-    assert_eq!(
-        state
-            .db
-            .get_current_profile_id(ProfileScope::ClaudeDesktop.as_str())
-            .expect("get desktop current profile id")
-            .as_deref(),
-        Some(project.id.as_str()),
-        "desktop scope marker set"
-    );
 }

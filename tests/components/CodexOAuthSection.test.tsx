@@ -26,14 +26,6 @@ vi.mock("@/components/CodexOauthAccountQuota", () => ({
   },
 }));
 
-vi.mock("@/components/providers/forms/CopilotAuthSection", () => ({
-  CopilotAuthSection: () => <div />,
-}));
-
-vi.mock("@/components/providers/forms/XaiOAuthSection", () => ({
-  XaiOAuthSection: () => <div />,
-}));
-
 describe("CodexOAuthSection", () => {
   let scrollIntoViewDescriptor: PropertyDescriptor | undefined;
 
@@ -54,26 +46,17 @@ describe("CodexOAuthSection", () => {
           id: "account-1",
           provider: "codex_oauth",
           login: "user@example.com",
-          avatar_url: null,
           authenticated_at: 0,
-          is_default: true,
-          github_domain: "",
           reauth_required: false,
-          requires_reauth: false,
         },
         {
           id: "account-2",
           provider: "codex_oauth",
           login: "second@example.com",
-          avatar_url: null,
           authenticated_at: 1,
-          is_default: false,
-          github_domain: "",
           reauth_required: false,
-          requires_reauth: false,
         },
       ],
-      defaultAccountId: "account-1",
       isStatusSuccess: true,
       isStatusError: false,
       hasAnyAccount: true,
@@ -83,12 +66,10 @@ describe("CodexOAuthSection", () => {
       isPolling: false,
       isAddingAccount: false,
       isRemovingAccount: false,
-      isSettingDefaultAccount: false,
       addAccount: vi.fn(),
       reauthAccount: vi.fn(),
       retryAuth: vi.fn(),
       removeAccount: vi.fn(),
-      setDefaultAccount: vi.fn(),
       cancelAuth: vi.fn(),
       logout: vi.fn(),
       refetchStatus: vi.fn(),
@@ -128,18 +109,8 @@ describe("CodexOAuthSection", () => {
     mocks.accountUsers.mockImplementation((ids: string[]) =>
       ids.includes("account-1")
         ? [
-            {
-              appId: "claude",
-              providerId: "p1",
-              name: "ChatGPT A",
-              viaDefault: false,
-            },
-            {
-              appId: "codex",
-              providerId: "p2",
-              name: "OpenAI Official",
-              viaDefault: false,
-            },
+            { appId: "codex", providerId: "p1", name: "OpenAI Official" },
+            { appId: "codex", providerId: "p2", name: "ChatGPT Work" },
           ]
         : [],
     );
@@ -155,18 +126,8 @@ describe("CodexOAuthSection", () => {
     mocks.accountUsers.mockImplementation((ids: string[]) =>
       ids.includes("account-1")
         ? [
-            {
-              appId: "claude",
-              providerId: "p1",
-              name: "ChatGPT A",
-              viaDefault: false,
-            },
-            {
-              appId: "claude-desktop",
-              providerId: "p3",
-              name: "ChatGPT Desktop",
-              viaDefault: true,
-            },
+            { appId: "codex", providerId: "p1", name: "OpenAI Official" },
+            { appId: "codex", providerId: "p2", name: "ChatGPT Work" },
           ]
         : [],
     );
@@ -183,15 +144,11 @@ describe("CodexOAuthSection", () => {
 
     const dialog = await screen.findByRole("alertdialog");
     expect(dialog).toHaveTextContent("删除账号「user@example.com」？");
-    // 指定了这个账号的会坏；跟着默认账号的（还有别的账号）改用新的默认账号
+    // 绑定了这个账号的官方卡会坏
     expect(dialog).toHaveTextContent(
       "这些供应商会无法使用，直到重新登录或改选别的账号：",
     );
-    expect(dialog).toHaveTextContent("Claude Code：ChatGPT A");
-    expect(dialog).toHaveTextContent(
-      "这些供应商用的是默认账号，删除后改用新的默认账号：",
-    );
-    expect(dialog).toHaveTextContent("Claude Desktop：ChatGPT Desktop");
+    expect(dialog).toHaveTextContent("Codex：OpenAI Official、ChatGPT Work");
 
     const confirm = screen.getByRole("button", { name: "删除账号" });
     expect(confirm.className).toContain("bg-danger");
@@ -271,27 +228,6 @@ describe("CodexOAuthSection", () => {
     expect(reauthAccount).toHaveBeenCalledWith("account-1");
   });
 
-  it("sets another account as default from its menu", async () => {
-    const user = userEvent.setup();
-    const authResult = mocks.useCodexOauth();
-    render(<CodexOAuthSection />);
-
-    // 默认账号的 ⋯ 里没有「设为默认」
-    await user.click(
-      screen.getByRole("button", { name: "user@example.com 的更多操作" }),
-    );
-    expect(
-      screen.queryByRole("menuitem", { name: "设为默认" }),
-    ).not.toBeInTheDocument();
-    await user.keyboard("{Escape}");
-
-    await user.click(
-      screen.getByRole("button", { name: "second@example.com 的更多操作" }),
-    );
-    await user.click(await screen.findByRole("menuitem", { name: "设为默认" }));
-    expect(authResult.setDefaultAccount).toHaveBeenCalledWith("account-2");
-  });
-
   it("shows the device code while waiting for authorization", () => {
     const authResult = mocks.useCodexOauth();
     mocks.useCodexOauth.mockReturnValue({
@@ -349,27 +285,6 @@ describe("CodexOAuthSection", () => {
     expect(screen.getByRole("combobox")).toHaveTextContent(
       "second@example.com",
     );
-  });
-
-  it("locks the native card to the current Codex login", async () => {
-    const user = userEvent.setup();
-    render(
-      <CodexOAuthSection
-        mode="select"
-        selectedAccountId={null}
-        onAccountSelect={vi.fn()}
-        noneOptionLabel="Use Codex current login"
-        nativeLoginOnly
-      />,
-    );
-
-    const selector = screen.getByRole("combobox");
-    expect(selector).toBeDisabled();
-    expect(selector).toHaveTextContent("Use Codex current login");
-    await user.click(selector);
-    expect(
-      screen.queryByRole("option", { name: /user@example\.com/ }),
-    ).not.toBeInTheDocument();
   });
 
   it("requires a managed account on managed Official cards", async () => {
@@ -588,7 +503,6 @@ describe("CodexOAuthSection", () => {
           login: longLogin,
         },
       ],
-      defaultAccountId: "long-account",
     });
 
     render(
@@ -613,7 +527,7 @@ describe("CodexOAuthSection", () => {
     );
   });
 
-  it("does not attach Codex CLI guidance to a generic unbound choice", async () => {
+  it("labels the unbound choice as following the Codex login", async () => {
     const user = userEvent.setup();
     render(
       <CodexOAuthSection
@@ -625,8 +539,9 @@ describe("CodexOAuthSection", () => {
 
     await user.click(screen.getByRole("combobox"));
     const option = await screen.findByRole("option", {
-      name: "使用默认账号",
+      name: "跟随 Codex 登录",
     });
+    // 补充说明只由调用方提供
     expect(option).not.toHaveTextContent("Codex CLI");
   });
 

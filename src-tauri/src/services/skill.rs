@@ -655,7 +655,7 @@ impl SkillService {
                     return Ok(custom.join("skills"));
                 }
             }
-            AppType::ClaudeDesktop | AppType::Mcode => {}
+            AppType::Mcode => {}
             AppType::Codex => {
                 if let Some(custom) = crate::settings::get_codex_override_dir() {
                     return Ok(custom.join("skills"));
@@ -699,7 +699,6 @@ impl SkillService {
         Ok(match app {
             AppType::Mcode => crate::mcode_config::data_dir().join("skills"),
             AppType::Claude => home.join(".claude").join("skills"),
-            AppType::ClaudeDesktop => home.join(".claude-desktop").join("skills"),
             AppType::Codex => home.join(".codex").join("skills"),
             AppType::Gemini => home.join(".gemini").join("skills"),
             AppType::GrokBuild => home.join(".grok").join("skills"),
@@ -764,9 +763,6 @@ impl SkillService {
 
     fn validate_skill_storage_destination(ssot_dir: &Path) -> Result<()> {
         for app in AppType::all() {
-            if matches!(app, AppType::ClaudeDesktop) {
-                continue;
-            }
             let app_dir = Self::get_app_skills_dir(&app)?;
             Self::ensure_distinct_skill_roots(ssot_dir, &app_dir, &app)?;
         }
@@ -2578,10 +2574,6 @@ impl SkillService {
     /// - Symlink: 仅使用 symlink
     /// - Copy: 仅使用文件复制
     pub fn sync_to_app_dir(directory: &str, app: &AppType) -> Result<()> {
-        if matches!(app, AppType::ClaudeDesktop) {
-            return Ok(());
-        }
-
         // directory 可能来自被污染的 DB 行（如同步导入的远端快照），join 前必须校验。
         let directory = Self::require_valid_directory(directory)?;
 
@@ -2766,10 +2758,6 @@ impl SkillService {
         app: &AppType,
         preserved_path: Option<&Path>,
     ) -> Result<()> {
-        if matches!(app, AppType::ClaudeDesktop) {
-            return Ok(());
-        }
-
         // directory 可能来自被污染的 DB 行（如同步导入的远端快照），
         // 这里执行的是删除操作，join 前必须校验，防止任意目录删除。
         let directory = Self::require_valid_directory(directory)?;
@@ -2801,19 +2789,16 @@ impl SkillService {
         Self::sync_to_app_unlocked(db, app).map(|_| ())
     }
 
-    /// Skills 不由 `sync_to_app` 投影的应用：Claude Desktop、OpenClaw 不支持 Skills，
+    /// Skills 不由 `sync_to_app` 投影的应用：OpenClaw 不支持 Skills，
     /// Pi 没有数据库列、按目录是否存在现算。这些应用的 skills 目录不归 CC Switch 管，
     /// 同步时一个字节都不能碰——OpenClaw 自己的 `~/.openclaw/skills` 里和受管
     /// Skill 同名的真实目录，否则会被当成「已关掉的投影」删掉。
     fn is_sync_managed_app(app: &AppType) -> bool {
-        !matches!(
-            app,
-            AppType::ClaudeDesktop | AppType::OpenClaw | AppType::Pi
-        )
+        !matches!(app, AppType::OpenClaw | AppType::Pi)
     }
 
     /// 「立即重新同步」：按数据库里的开关和当前同步方式，把 Skill 重新投影到各应用目录，
-    /// 逐应用报告结果（Claude Desktop、OpenClaw、Pi 不由这里同步，不在结果里）。
+    /// 逐应用报告结果（OpenClaw、Pi 不由这里同步，不在结果里）。
     pub fn resync_all_apps(db: &Arc<Database>) -> Vec<SkillAppSyncOutcome> {
         let _state_guard = skill_state_read_guard();
         AppType::all()
@@ -3579,7 +3564,7 @@ impl SkillService {
 
     /// 下载并解压 ZIP
     async fn download_and_extract(&self, url: &str, dest: &Path) -> Result<()> {
-        let client = crate::proxy::http_client::get();
+        let client = crate::http_client::get();
         let response = client.get(url).send().await?;
         if !response.status().is_success() {
             let status = response.status().as_u16().to_string();
@@ -4427,7 +4412,7 @@ impl SkillService {
         limit: usize,
         offset: usize,
     ) -> Result<SkillsShSearchResult> {
-        let client = crate::proxy::http_client::get();
+        let client = crate::http_client::get();
 
         let url = url::Url::parse_with_params(
             "https://skills.sh/api/search",
@@ -7420,7 +7405,7 @@ mod tests {
         let outcomes = SkillService::resync_all_apps(&db);
 
         let apps: Vec<&str> = outcomes.iter().map(|o| o.app.as_str()).collect();
-        assert!(!apps.contains(&"claude-desktop") && !apps.contains(&"pi"));
+        assert!(!apps.contains(&"openclaw") && !apps.contains(&"pi"));
         assert!(apps.contains(&"claude") && apps.contains(&"codex"));
 
         let claude = outcomes.iter().find(|o| o.app == "claude").unwrap();

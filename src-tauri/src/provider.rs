@@ -37,10 +37,6 @@ pub struct Provider {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(rename = "iconColor")]
     pub icon_color: Option<String>,
-    /// 是否加入故障转移队列
-    #[serde(default)]
-    #[serde(rename = "inFailoverQueue")]
-    pub in_failover_queue: bool,
 }
 
 impl Provider {
@@ -63,49 +59,11 @@ impl Provider {
             meta: None,
             icon: None,
             icon_color: None,
-            in_failover_queue: false,
         }
     }
 
     pub fn is_codex_oauth(&self) -> bool {
         self.provider_type() == Some("codex_oauth")
-    }
-
-    pub fn is_xai_oauth(&self) -> bool {
-        self.provider_type() == Some("xai_oauth")
-    }
-
-    pub fn is_github_copilot(&self) -> bool {
-        self.provider_type() == Some("github_copilot")
-            || self.claude_base_url_contains("githubcopilot.com")
-    }
-
-    pub fn uses_managed_account_auth(&self) -> bool {
-        self.is_github_copilot()
-            || self.is_codex_oauth()
-            || self.is_xai_oauth()
-            || self.claude_base_url_contains("chatgpt.com/backend-api/codex")
-    }
-
-    /// Third-party managed OAuth (xai_oauth, github_copilot, …): the real
-    /// credential is injected per-request by the local proxy, so the card is
-    /// keyless by design and its stored config is only an upstream snapshot.
-    /// `codex_oauth` is deliberately excluded — the official ChatGPT login
-    /// in auth.json IS its credential, so the `requires_openai_auth = true`
-    /// fallback is its correct shape, never a legacy leftover.
-    pub fn uses_proxy_injected_oauth(&self) -> bool {
-        self.is_xai_oauth() || self.is_github_copilot()
-    }
-
-    /// Whether the provider form's "auth field" was explicitly set to
-    /// ANTHROPIC_API_KEY. The form only persists `meta.apiKeyField` for the
-    /// non-default choice, so `None` means the default ANTHROPIC_AUTH_TOKEN.
-    pub fn claude_uses_api_key_field(&self) -> bool {
-        self.meta
-            .as_ref()
-            .and_then(|m| m.api_key_field.as_deref())
-            .map(|field| field.eq_ignore_ascii_case("ANTHROPIC_API_KEY"))
-            .unwrap_or(false)
     }
 
     fn provider_type(&self) -> Option<&str> {
@@ -115,21 +73,6 @@ impl Provider {
     /// The stored OpenCode source format; only native declarations record one.
     pub fn opencode_config_format(&self) -> Option<OpenCodeConfigFormat> {
         self.meta.as_ref().and_then(|m| m.opencode_config_format)
-    }
-
-    fn claude_base_url_contains(&self, needle: &str) -> bool {
-        self.settings_config
-            .pointer("/env/ANTHROPIC_BASE_URL")
-            .and_then(|value| value.as_str())
-            .map(|base_url| base_url.contains(needle))
-            .unwrap_or(false)
-    }
-
-    pub fn codex_fast_mode_enabled(&self) -> bool {
-        self.meta
-            .as_ref()
-            .map(|m| m.codex_fast_mode_enabled())
-            .unwrap_or(false)
     }
 
     pub fn has_usage_script_enabled(&self) -> bool {
@@ -235,10 +178,10 @@ impl Provider {
                     str_at(options.and_then(|o| o.get("apiKey"))),
                 )
             }
-            // Claude and Claude Desktop both use the Anthropic-style env map, keeping
-            // the OpenRouter/Google key fallbacks the JS-script path relies on.
+            // Claude uses the Anthropic-style env map, keeping the OpenRouter/Google
+            // key fallbacks the JS-script path relies on.
             // Listed explicitly (not `_`) so a new AppType fails to compile here.
-            AppType::Claude | AppType::ClaudeDesktop => {
+            AppType::Claude => {
                 let env = settings.get("env");
                 let base_url = str_at(env.and_then(|e| e.get("ANTHROPIC_BASE_URL")));
                 let api_key = first_non_empty(
@@ -363,7 +306,7 @@ pub enum AuthBindingSource {
     /// 从 provider 自身配置读取认证信息（默认）
     #[default]
     ProviderConfig,
-    /// 使用托管账号认证（如 GitHub Copilot OAuth）
+    /// 使用托管账号认证（如 ChatGPT 账号）
     ManagedAccount,
 }
 
@@ -373,75 +316,12 @@ pub struct AuthBinding {
     /// 认证来源
     #[serde(default)]
     pub source: AuthBindingSource,
-    /// 托管认证供应商标识（如 github_copilot）
+    /// 托管认证供应商标识（如 codex_oauth）
     #[serde(rename = "authProvider", skip_serializing_if = "Option::is_none")]
     pub auth_provider: Option<String>,
     /// 托管账号 ID；为空表示跟随该认证供应商的默认账号
     #[serde(rename = "accountId", skip_serializing_if = "Option::is_none")]
     pub account_id: Option<String>,
-}
-
-/// Claude Desktop 3P 写入模式。
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
-pub enum ClaudeDesktopMode {
-    Direct,
-    Proxy,
-}
-
-/// Claude Desktop 本地路由模式下暴露给 Desktop 的安全模型路由。
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct ClaudeDesktopModelRoute {
-    /// 真实上游模型名，只保存在 CC Switch 内部，不写入 Claude Desktop profile。
-    pub model: String,
-    /// Claude Desktop 模型菜单显示名；写入 profile 的 `labelOverride`。
-    #[serde(rename = "labelOverride", skip_serializing_if = "Option::is_none")]
-    pub label_override: Option<String>,
-    /// Claude Desktop 3P 识别的 1M 上下文能力标记。
-    #[serde(rename = "supports1m", skip_serializing_if = "Option::is_none")]
-    pub supports_1m: Option<bool>,
-}
-
-/// Codex Responses -> Chat Completions 的 reasoning 能力描述。
-#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
-pub struct CodexChatReasoningConfig {
-    #[serde(rename = "supportsThinking", skip_serializing_if = "Option::is_none")]
-    pub supports_thinking: Option<bool>,
-    #[serde(rename = "supportsEffort", skip_serializing_if = "Option::is_none")]
-    pub supports_effort: Option<bool>,
-    #[serde(rename = "thinkingParam", skip_serializing_if = "Option::is_none")]
-    pub thinking_param: Option<String>,
-    #[serde(rename = "effortParam", skip_serializing_if = "Option::is_none")]
-    pub effort_param: Option<String>,
-    #[serde(rename = "effortValueMode", skip_serializing_if = "Option::is_none")]
-    pub effort_value_mode: Option<String>,
-    /// 声明性字段：标注上游 reasoning 的回传位置（reasoning_content / reasoning /
-    /// reasoning_details / think_tags）。当前响应侧 `extract_reasoning_field_text`
-    /// 靠穷举字段提取、并不读取本字段；保留作文档说明与未来按格式分发（如 think_tags）的预留。
-    #[serde(rename = "outputFormat", skip_serializing_if = "Option::is_none")]
-    pub output_format: Option<String>,
-    /// 运行时字段（不持久化、不进 meta）：当前请求模型在平台侧声明的合法 effort
-    /// 档位，由 resolve 按请求模型从供应商 `settings_config.modelCatalog` 的
-    /// `reasoningLevels`（逐模型声明，见 #6228）查表填充。仅 "zen" 值映射消费：
-    /// Some → 钳到合法档；None → 不发 effort 字段（模型未收录或为 toggle 型）。
-    #[serde(skip)]
-    pub effort_levels: Option<Vec<String>>,
-}
-
-/// Local proxy request overrides applied after route/protocol transforms.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct LocalProxyRequestOverrides {
-    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
-    pub headers: HashMap<String, String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub body: Option<serde_json::Value>,
-}
-
-impl LocalProxyRequestOverrides {
-    pub fn is_empty(&self) -> bool {
-        self.headers.is_empty() && self.body.is_none()
-    }
 }
 
 /// 供应商元数据
@@ -456,16 +336,6 @@ pub struct ProviderMeta {
         skip_serializing_if = "Option::is_none"
     )]
     pub common_config_enabled: Option<bool>,
-    /// Claude Desktop 3P 写入模式：direct（直连）或 proxy（预留）
-    #[serde(rename = "claudeDesktopMode", skip_serializing_if = "Option::is_none")]
-    pub claude_desktop_mode: Option<ClaudeDesktopMode>,
-    /// Claude Desktop proxy 模式的模型路由映射：Claude-safe route -> upstream model。
-    #[serde(
-        default,
-        rename = "claudeDesktopModelRoutes",
-        skip_serializing_if = "HashMap::is_empty"
-    )]
-    pub claude_desktop_model_routes: HashMap<String, ClaudeDesktopModelRoute>,
     /// 用量查询脚本配置
     #[serde(skip_serializing_if = "Option::is_none")]
     pub usage_script: Option<UsageScript>,
@@ -494,68 +364,17 @@ pub struct ProviderMeta {
     /// 每月消费限额（USD）
     #[serde(rename = "limitMonthlyUsd", skip_serializing_if = "Option::is_none")]
     pub limit_monthly_usd: Option<String>,
-    /// Claude API 格式（仅 Claude 供应商使用）
-    /// - "anthropic": 原生 Anthropic Messages API，直接透传
-    /// - "openai_chat": OpenAI Chat Completions 格式，需要转换
-    /// - "openai_responses": OpenAI Responses API 格式，需要转换
+    /// Codex 上游 API 格式：决定写进模型目录的工具形态（见
+    /// `codex_provider::resolve_codex_catalog_tool_profile`），新存的第三方供应商一律是
+    /// "openai_responses"。
     #[serde(rename = "apiFormat", skip_serializing_if = "Option::is_none")]
     pub api_format: Option<String>,
     /// 通用认证绑定（provider_config / managed_account）
-    ///
-    /// 新代码应只写入该字段；githubAccountId 仅保留兼容读取。
     #[serde(rename = "authBinding", skip_serializing_if = "Option::is_none")]
     pub auth_binding: Option<AuthBinding>,
     /// Claude 认证字段名（"ANTHROPIC_AUTH_TOKEN" 或 "ANTHROPIC_API_KEY"）
     #[serde(rename = "apiKeyField", skip_serializing_if = "Option::is_none")]
     pub api_key_field: Option<String>,
-    /// 是否将 base_url 视为完整 API 端点（不拼接 endpoint 路径）
-    #[serde(rename = "isFullUrl", skip_serializing_if = "Option::is_none")]
-    pub is_full_url: Option<bool>,
-    /// Prompt cache key for OpenAI Responses-compatible endpoints.
-    /// When set, injected into converted Responses requests to improve cache hit rate.
-    /// If not set, Claude -> Responses conversions use a client-provided session/thread
-    /// identity when available; generated session IDs are not sent upstream.
-    #[serde(rename = "promptCacheKey", skip_serializing_if = "Option::is_none")]
-    pub prompt_cache_key: Option<String>,
-    /// Session-based prompt-cache routing for Codex Responses -> Chat conversions.
-    /// "auto" enables known-compatible upstreams; "enabled" / "disabled" are overrides.
-    #[serde(rename = "promptCacheRouting", skip_serializing_if = "Option::is_none")]
-    pub prompt_cache_routing: Option<String>,
-    /// Codex OAuth FAST mode: inject `service_tier = "priority"` for ChatGPT Codex requests.
-    #[serde(rename = "codexFastMode", skip_serializing_if = "Option::is_none")]
-    pub codex_fast_mode: Option<bool>,
-    /// Codex Responses -> Chat Completions reasoning capability metadata.
-    #[serde(rename = "codexChatReasoning", skip_serializing_if = "Option::is_none")]
-    pub codex_chat_reasoning: Option<CodexChatReasoningConfig>,
-    /// Codex → Anthropic path: whether to emulate the Claude Code client
-    /// (User-Agent / anthropic-beta / x-app + injecting the Claude Code system
-    /// prompt first line). Disabled by default; only an explicit `true` enables it.
-    #[serde(
-        rename = "impersonateClaudeCode",
-        skip_serializing_if = "Option::is_none"
-    )]
-    pub impersonate_claude_code: Option<bool>,
-    /// Codex → Anthropic path: override the Anthropic `max_tokens` (output ceiling).
-    ///
-    /// Codex does not forward its `model_max_output_tokens` in the Responses
-    /// request body, so without this the path falls back to a conservative
-    /// default (8192), which truncates long or thinking-heavy responses
-    /// (`stop_reason=max_tokens`). When set (>0), this value is injected as the
-    /// request's `max_output_tokens` before conversion, taking precedence over
-    /// both any request-supplied value and the default. Kept per-provider on
-    /// purpose: a global large default would hard-400 on low-output-ceiling
-    /// models/gateways (and that error is non-retryable).
-    #[serde(rename = "maxOutputTokens", skip_serializing_if = "Option::is_none")]
-    pub max_output_tokens: Option<u64>,
-    /// Custom User-Agent for local proxy routing.
-    #[serde(rename = "customUserAgent", skip_serializing_if = "Option::is_none")]
-    pub custom_user_agent: Option<String>,
-    /// Local proxy request overrides applied to the transformed upstream request.
-    #[serde(
-        rename = "localProxyRequestOverrides",
-        skip_serializing_if = "Option::is_none"
-    )]
-    pub local_proxy_request_overrides: Option<LocalProxyRequestOverrides>,
     /// 累加模式应用中，该 provider 是否已写入 live config。
     /// `None` 表示旧数据/未知状态，`Some(false)` 表示明确仅存在于数据库中。
     #[serde(rename = "liveConfigManaged", skip_serializing_if = "Option::is_none")]
@@ -568,52 +387,20 @@ pub struct ProviderMeta {
     )]
     pub opencode_config_format: Option<OpenCodeConfigFormat>,
     /// 供应商类型标识（用于特殊供应商检测）
-    /// - "github_copilot": GitHub Copilot 供应商
+    /// - "codex_oauth": 绑定了 ChatGPT 账号的 Codex 官方卡
     #[serde(rename = "providerType", skip_serializing_if = "Option::is_none")]
     pub provider_type: Option<String>,
-    /// GitHub Copilot 关联账号 ID（仅 github_copilot 供应商使用）
-    /// 用于多账号支持，关联到特定的 GitHub 账号
-    #[serde(rename = "githubAccountId", skip_serializing_if = "Option::is_none")]
-    pub github_account_id: Option<String>,
-    /// Stack 模式下这家 Claude Code 供应商发布的模型（`mode::stack`）。`None` 是没配列表，
-    /// 按模型映射（`ANTHROPIC_MODEL` 和各档）发布；空列表是用户清空了，什么都不发布。
-    #[serde(
-        rename = "stackModels",
-        default,
-        skip_serializing_if = "Option::is_none"
-    )]
-    pub stack_models: Option<Vec<ClaudeStackModel>>,
 }
 
-/// Stack 模式下 Claude Code 供应商发布的一个模型。
-#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct ClaudeStackModel {
-    /// 发往上游的模型名。
-    pub model: String,
-    /// 选择器里的显示名，没有时用模型名。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub display_name: Option<String>,
-    /// 上游是 1M 窗口。
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub one_m: bool,
-}
-
-/// 解析 Provider 级自定义 User-Agent 字符串（单一真理来源）。
+/// 解析获取模型列表（model_fetch）用的自定义 User-Agent 字符串。
 ///
-/// 转发（forwarder）、流式检测（stream_check）、获取模型列表（model_fetch）三条路径
-/// 共用同一口径，避免出现"某条路径用了 UA、另一条没用 / 报错"的不一致。
-///
-/// 合法性由 `http::HeaderValue::from_str` 按**字节**判定（`b >= 32 && b != 127 || b == '\t'`），
-/// 与前端 `src/lib/userAgent.ts::isValidUserAgentHeader` 严格一致：
+/// 合法性由 `http::HeaderValue::from_str` 按**字节**判定（`b >= 32 && b != 127 || b == '\t'`）：
 /// - `Ok(None)`：未设置或纯空白（trim 后为空）。
 /// - `Ok(Some(hv))`：合法。制表符、可见 ASCII（0x20–0x7E）、以及任意非 ASCII 字符
 ///   （UTF-8 字节均 ≥ 0x80）都合法。
 /// - `Err(_)`：仅含控制字符时——除 `\t` 外的 0x00–0x1F（含换行）与 0x7F（DEL）。
 ///
-/// 非法值的处理：三条运行时路径**均静默忽略**（`.ok().flatten()`，绝不让某条路径报错而
-/// 另一条放行）；前端在输入框处给出非阻断提示。当前**不在保存时阻断**——deeplink 导入等
-/// 非表单路径应宽容，运行时静默忽略即为安全网。
+/// 非法值由调用方静默忽略（`.ok().flatten()`），不阻断取模型。
 pub fn parse_custom_user_agent(
     raw: Option<&str>,
 ) -> Result<Option<HeaderValue>, InvalidHeaderValue> {
@@ -624,33 +411,14 @@ pub fn parse_custom_user_agent(
 }
 
 impl ProviderMeta {
-    /// Codex OAuth FAST mode 是否启用。默认关闭，因为 `service_tier="priority"`
-    /// 会按更高速率消耗 ChatGPT 订阅配额，用户需显式开启以换取更低延迟。
-    pub fn codex_fast_mode_enabled(&self) -> bool {
-        self.codex_fast_mode.unwrap_or(false)
-    }
-
-    /// 经校验的 Provider 级自定义 User-Agent。见 [`parse_custom_user_agent`]。
-    pub fn custom_user_agent_header(&self) -> Result<Option<HeaderValue>, InvalidHeaderValue> {
-        parse_custom_user_agent(self.custom_user_agent.as_deref())
-    }
-
-    /// 解析指定托管认证供应商绑定的账号 ID。
-    ///
-    /// 新版优先读取 authBinding，旧版继续兼容 githubAccountId。
+    /// 解析指定托管认证供应商绑定的账号 ID（读 authBinding）。
     pub fn managed_account_id_for(&self, auth_provider: &str) -> Option<String> {
-        if let Some(binding) = self.auth_binding.as_ref() {
-            if binding.source == AuthBindingSource::ManagedAccount
-                && binding.auth_provider.as_deref() == Some(auth_provider)
-            {
-                return binding.account_id.clone();
-            }
+        let binding = self.auth_binding.as_ref()?;
+        if binding.source == AuthBindingSource::ManagedAccount
+            && binding.auth_provider.as_deref() == Some(auth_provider)
+        {
+            return binding.account_id.clone();
         }
-
-        if auth_provider == "github_copilot" {
-            return self.github_account_id.clone();
-        }
-
         None
     }
 }
@@ -846,7 +614,6 @@ impl UniversalProvider {
             meta: self.meta.clone(),
             icon: self.icon.clone(),
             icon_color: self.icon_color.clone(),
-            in_failover_queue: false,
         })
     }
 
@@ -911,7 +678,6 @@ requires_openai_auth = true"#
             meta: self.meta.clone(),
             icon: self.icon.clone(),
             icon_color: self.icon_color.clone(),
-            in_failover_queue: false,
         })
     }
 
@@ -946,7 +712,6 @@ requires_openai_auth = true"#
             meta: self.meta.clone(),
             icon: self.icon.clone(),
             icon_color: self.icon_color.clone(),
-            in_failover_queue: false,
         })
     }
 }
@@ -1061,35 +826,10 @@ pub struct OpenCodeModelLimit {
 #[cfg(test)]
 mod tests {
     use super::{
-        ClaudeModelConfig, CodexModelConfig, GeminiModelConfig, LocalProxyRequestOverrides,
-        OpenCodeProviderConfig, Provider, ProviderManager, ProviderMeta, UniversalProvider,
+        ClaudeModelConfig, CodexModelConfig, GeminiModelConfig, OpenCodeProviderConfig, Provider,
+        ProviderManager, ProviderMeta, UniversalProvider,
     };
     use serde_json::json;
-    use std::collections::HashMap;
-
-    #[test]
-    fn proxy_injected_oauth_excludes_codex_oauth() {
-        let mut provider = Provider::with_id("p".to_string(), "P".to_string(), json!({}), None);
-        assert!(!provider.uses_proxy_injected_oauth());
-
-        for (provider_type, expected) in [
-            ("xai_oauth", true),
-            ("github_copilot", true),
-            // the official ChatGPT login IS this card's credential — its
-            // auth.json fallback shape must never be neutralized
-            ("codex_oauth", false),
-        ] {
-            provider.meta = Some(ProviderMeta {
-                provider_type: Some(provider_type.to_string()),
-                ..ProviderMeta::default()
-            });
-            assert_eq!(
-                provider.uses_proxy_injected_oauth(),
-                expected,
-                "{provider_type}"
-            );
-        }
-    }
 
     #[test]
     fn provider_meta_serializes_pricing_model_source() {
@@ -1118,57 +858,6 @@ mod tests {
     }
 
     #[test]
-    fn provider_meta_roundtrips_max_output_tokens() {
-        let meta = ProviderMeta {
-            max_output_tokens: Some(64000),
-            ..ProviderMeta::default()
-        };
-
-        let value = serde_json::to_value(&meta).expect("serialize ProviderMeta");
-        assert_eq!(
-            value.get("maxOutputTokens").and_then(|v| v.as_u64()),
-            Some(64000)
-        );
-        assert!(value.get("max_output_tokens").is_none());
-
-        let parsed: ProviderMeta = serde_json::from_value(value).expect("deserialize ProviderMeta");
-        assert_eq!(parsed.max_output_tokens, Some(64000));
-    }
-
-    #[test]
-    fn provider_meta_omits_max_output_tokens_when_none() {
-        let value = serde_json::to_value(ProviderMeta::default()).expect("serialize ProviderMeta");
-        assert!(value.get("maxOutputTokens").is_none());
-    }
-
-    #[test]
-    fn provider_meta_roundtrips_local_proxy_request_overrides() {
-        let meta = ProviderMeta {
-            local_proxy_request_overrides: Some(LocalProxyRequestOverrides {
-                headers: HashMap::from([("X-Test".to_string(), "yes".to_string())]),
-                body: Some(json!({ "temperature": 0.2 })),
-            }),
-            ..ProviderMeta::default()
-        };
-
-        let value = serde_json::to_value(&meta).expect("serialize ProviderMeta");
-        assert_eq!(
-            value["localProxyRequestOverrides"]["headers"]["X-Test"],
-            "yes"
-        );
-        assert_eq!(
-            value["localProxyRequestOverrides"]["body"]["temperature"],
-            0.2
-        );
-
-        let decoded: ProviderMeta =
-            serde_json::from_value(value).expect("deserialize ProviderMeta");
-        let overrides = decoded.local_proxy_request_overrides.unwrap();
-        assert_eq!(overrides.headers.get("X-Test"), Some(&"yes".to_string()));
-        assert_eq!(overrides.body.unwrap()["temperature"], 0.2);
-    }
-
-    #[test]
     fn provider_with_id_populates_defaults() {
         let settings_config = json!({
             "env": { "API_KEY": "test" }
@@ -1191,54 +880,6 @@ mod tests {
         assert!(provider.meta.is_none());
         assert!(provider.icon.is_none());
         assert!(provider.icon_color.is_none());
-        assert!(!provider.in_failover_queue);
-    }
-
-    #[test]
-    fn provider_managed_account_auth_detection_uses_type_or_known_endpoint() {
-        let mut copilot = Provider::with_id(
-            "copilot".to_string(),
-            "Copilot".to_string(),
-            json!({
-                "env": {
-                    "ANTHROPIC_BASE_URL": "https://api.githubcopilot.com"
-                }
-            }),
-            None,
-        );
-        assert!(copilot.is_github_copilot());
-        assert!(copilot.uses_managed_account_auth());
-
-        let mut codex = Provider::with_id(
-            "codex".to_string(),
-            "Codex".to_string(),
-            json!({ "env": {} }),
-            None,
-        );
-        codex.meta = Some(ProviderMeta {
-            provider_type: Some("codex_oauth".to_string()),
-            ..Default::default()
-        });
-        assert!(codex.is_codex_oauth());
-        assert!(codex.uses_managed_account_auth());
-
-        let codex_endpoint = Provider::with_id(
-            "codex-endpoint".to_string(),
-            "Codex Endpoint".to_string(),
-            json!({
-                "env": {
-                    "ANTHROPIC_BASE_URL": "https://chatgpt.com/backend-api/codex"
-                }
-            }),
-            None,
-        );
-        assert!(codex_endpoint.uses_managed_account_auth());
-
-        copilot.meta = Some(ProviderMeta {
-            provider_type: Some("github_copilot".to_string()),
-            ..Default::default()
-        });
-        assert!(copilot.is_github_copilot());
     }
 
     #[test]
@@ -1655,26 +1296,6 @@ mod tests {
             (
                 "https://api.deepseek.com/v1".to_string(),
                 "sk-opencode".to_string()
-            )
-        );
-    }
-
-    #[test]
-    fn resolve_credentials_claude_desktop_uses_env() {
-        // ClaudeDesktop persists the Anthropic env shape (ClaudeDesktopProviderForm
-        // reads env.ANTHROPIC_BASE_URL / ANTHROPIC_AUTH_TOKEN), so it resolves via
-        // the default env branch — it is NOT unsupported.
-        let p = provider_with(json!({
-            "env": {
-                "ANTHROPIC_BASE_URL": "https://api.deepseek.com/anthropic",
-                "ANTHROPIC_AUTH_TOKEN": "sk-desktop",
-            }
-        }));
-        assert_eq!(
-            p.resolve_usage_credentials(&AppType::ClaudeDesktop),
-            (
-                "https://api.deepseek.com/anthropic".to_string(),
-                "sk-desktop".to_string()
             )
         );
     }

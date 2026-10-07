@@ -6,7 +6,7 @@
 
 很多人使用 Codex 时有两个需求：
 
-1. 模型使用 DeepSeek、Kimi、GLM、MiniMax、硅基流动等第三方 API，或者在中转站使用 gpt 模型。
+1. 模型使用 DeepSeek、Kimi、GLM、MiniMax 等第三方 API，或者在中转站使用 gpt 模型。
 2. 保留 Codex 官方 App 的手机远程操作、官方插件等能力。
 
 之前切换第三方供应商时，旧行为会把第三方 API Key 写进 Codex 的 `auth.json`，从而覆盖原来的官方 ChatGPT / Codex 登录缓存。这样第三方模型能用了，但依赖官方登录态的功能会消失。
@@ -15,7 +15,7 @@ v3.16.1 新增的 **Codex 应用增强**开关就是为了解决这个矛盾：�
 
 v3.16.0 就有这个功能，并且默认开启，但是部分用户反映并不想要这个功能，所以在 v3.16.1 中把这个功能做成了开关。
 
-v3.20.1 起切换逻辑又简化了一步：第三方 API Key 一律只写进 `config.toml`，永远不会写入 `auth.json`。这个开关现在只决定一件事：直连切到第三方供应商时，`auth.json` 里的官方登录是保留还是删除。
+v3.20.1 起切换逻辑又简化了一步：第三方 API Key 一律只写进 `config.toml`，永远不会写入 `auth.json`。这个开关现在只决定一件事：切到第三方供应商时，`auth.json` 里的官方登录是保留还是删除。
 
 ## 先看结论
 
@@ -23,10 +23,9 @@ v3.20.1 起切换逻辑又简化了一步：第三方 API Key 一律只写进 `c
 
 1. 在 CC Switch 的 Codex 面板切换到 `OpenAI Official`。
 2. 启动 Codex，并用官方 ChatGPT / Codex 账号登录一次，Free 订阅也可以。
-3. 回到 CC Switch，打开 `设置 → 通用 → Codex 应用增强 → 非接管切换时保留官方登录`。
+3. 回到 CC Switch，打开 `设置 → 通用 → Codex 应用增强 → 切换时保留官方登录`。
 4. 添加或切换到第三方 Codex 供应商。
-5. 如果该供应商是 Chat Completions 协议（卡片上带 `需要路由` 徽章，例如 SiliconFlow、ModelScope），需要同时开启本地路由并启用 Codex 接管。DeepSeek、Kimi、MiniMax、智谱 GLM 等预设已是原生直连，不需要这一步。
-6. 重启 Codex，让 `config.toml` 和模型目录重新加载。
+5. 重启 Codex，让 `config.toml` 和模型目录重新加载。
 
 ![设置里的 Codex 应用增强开关](../images/codex-official-auth-preservation/01-codex-app-enhancement-setting.png)
 
@@ -37,15 +36,13 @@ v3.20.1 起切换逻辑又简化了一步：第三方 API Key 一律只写进 `c
 - CC Switch v3.20.1 或更新版本。
 - 已安装并能启动的 Codex（建议 app 和 cli 都安装）。
 - 一个可以登录 Codex 的官方 ChatGPT / Codex 账号，Free 订阅即可。
-- 一个第三方 API Key，例如 DeepSeek、Kimi、GLM、MiniMax、OpenRouter、硅基流动等。
+- 一个第三方 API Key，例如 DeepSeek、Kimi、GLM、MiniMax、OpenRouter 等。
 
 请不要手动复制或分享 `~/.codex/auth.json` 的内容。里面保存的是官方登录缓存和 Access Token，属于敏感信息。
 
 ## 第一步：先切回 OpenAI Official 并完成官方登录
 
 打开 CC Switch，切到顶部的 `Codex` 标签页。先选择 `OpenAI Official` 供应商（如果没有的话，就在预设供应商当中添加一个），并把它设为当前供应商。
-
-![Codex 供应商列表中的 OpenAI Official 与第三方供应商](../images/codex-deepseek-routing/01-codex-providers-require-routing.png)
 
 接着启动 Codex（建议启动 cli），按 Codex 的官方登录流程登录你的 ChatGPT / Codex 账号。这个账号可以是 Free 订阅；在这个方案里，它主要负责保留 Codex 官方 App 需要识别的登录身份，不负责第三方模型的计费。
 
@@ -62,47 +59,25 @@ v3.20.1 起切换逻辑又简化了一步：第三方 API Key 一律只写进 `c
 打开：
 
 ```text
-非接管切换时保留官方登录
+切换时保留官方登录
 ```
 
 这个开关默认关闭，是因为部分用户并不想要这个功能。只有在你明确需要“第三方 API + 官方远程操作 / 官方插件”同时存在时，才需要开启它。
 
-开启后，在未开启路由接管时切换到第三方供应商：
+开启后，切换到第三方供应商时：
 
 - `auth.json`：继续保留官方 ChatGPT / Codex 登录缓存。
 - `config.toml`：写入当前第三方供应商的模型、endpoint、`model_provider` 和 provider-scoped `experimental_bearer_token`。
 
-`config.toml` 这一半与开关无关，关着开关也是这样写；开关只管 `auth.json` 的去留。开启路由接管期间，官方登录始终保留，不看这个开关。
+`config.toml` 这一半与开关无关，关着开关也是这样写；开关只管 `auth.json` 的去留。
 
 ## 第三步：添加第三方 Codex 供应商
 
-回到 Codex 面板，点击右上角的加号添加供应商。推荐优先使用内置预设，例如 DeepSeek、Kimi、MiniMax、GLM、SiliconFlow 等。选择预设后只需要填 API Key，预设会自动配置 base URL、默认模型、模型目录和上游格式。
+回到 Codex 面板，点击右上角的加号添加供应商。推荐优先使用内置预设，例如 DeepSeek、Kimi、MiniMax、GLM 等。选择预设后只需要填 API Key，预设会自动配置 base URL、默认模型和模型目录。
 
-保存后看供应商卡片上的徽章：
+Codex 用 OpenAI Responses API 访问供应商，所以内置的 Codex 预设用的都是支持 Responses 的端点。自定义供应商要确认厂商的端点支持 Responses API；只提供 Chat Completions 的端点不能用于 Codex。
 
-- **没有徽章**：上游原生支持 OpenAI Responses API，可以直连，不需要本地路由。DeepSeek、Kimi、MiniMax、智谱 GLM、千问AI平台的预设，以及提供 gpt 模型的中转站，都属于这一类。
-- **带 `需要路由` 徽章**：上游格式是 `Chat Completions（需开启路由）`，例如 SiliconFlow、ModelScope。这类供应商必须启用本地路由，让 CC Switch 把 Codex 的 Responses 请求转换成 Chat Completions 请求。
-
-自定义供应商的上游格式在表单底部的 `高级选项` → `上游格式` 里选择。
-
-## 第四步：需要时开启本地路由并接管 Codex
-
-进入：
-
-```text
-设置 → 路由 → 本地路由
-```
-
-完成两件事：
-
-1. 打开 `路由总开关`，启动本地服务。默认地址通常是 `127.0.0.1:15721`。
-2. 在 `路由启用` 中打开 `Codex`。
-
-![本地路由页面中启用 Codex 接管](../images/codex-deepseek-routing/03-local-route-codex-takeover.png)
-
-接管后，Codex 的 live `config.toml` 会临时指向 CC Switch 本地路由，令牌处写的是占位符 `PROXY_MANAGED`。真实第三方 API Key 仍然存储在 CC Switch 的供应商配置中，由本地路由在转发时注入。接管期间 `auth.json` 里的官方登录始终保留。
-
-## 第五步：切换第三方供应商并重启 Codex
+## 第四步：切换第三方供应商并重启 Codex
 
 回到 Codex 供应商列表，启用你刚添加的第三方供应商。切换完成后建议重启 Codex，原因有两个：
 
@@ -113,7 +88,6 @@ v3.20.1 起切换逻辑又简化了一步：第三方 API Key 一律只写进 `c
 
 - 在 Codex App 里，账号信息仍然显示官方账号，这是预期行为。
 - 在 CC Switch 里，当前 Codex 供应商显示为第三方供应商。
-- 如果开启了本地路由，请求日志或路由统计会看到 Codex 请求经过本地路由。
 - 第三方供应商后台或余额记录会出现实际模型请求。
 
 ## 背后的原理
@@ -130,7 +104,7 @@ Codex 的配置主要分成两个文件：
 - `auth.json` 保存官方 ChatGPT / Codex 登录缓存，也就是 Codex App 识别官方账号、远程操作和官方插件所需的登录材料。
 - `config.toml` 保存当前模型供应商、base URL、模型、模型目录和 provider-scoped token 等运行配置。
 
-直连切换到第三方供应商时，CC Switch 会把第三方供应商 API Key 从供应商配置中取出，写到 `config.toml` 的当前 provider 下（这一步与开关无关）：
+切换到第三方供应商时，CC Switch 会把第三方供应商 API Key 从供应商配置中取出，写到 `config.toml` 的当前 provider 下（这一步与开关无关）：
 
 ```toml
 model_provider = "custom"
@@ -142,19 +116,7 @@ wire_api = "responses"
 experimental_bearer_token = "sk-..."
 ```
 
-开启 `非接管切换时保留官方登录` 时，`auth.json` 保持官方登录缓存不变。于是 Codex App 侧依然能识别官方账号；而模型请求会根据 `config.toml` 的当前 provider 和 base URL 走第三方 API。
-
-如果供应商是 Chat Completions 协议，CC Switch 本地路由会再做一层转换：
-
-```text
-Codex Responses 请求
-        ↓
-CC Switch 本地路由
-        ↓
-第三方 Chat Completions API
-        ↓
-转换回 Codex Responses 响应
-```
+开启 `切换时保留官方登录` 时，`auth.json` 保持官方登录缓存不变。于是 Codex App 侧依然能识别官方账号；而模型请求会根据 `config.toml` 的当前 provider 和 base URL 走第三方 API。
 
 这就是为什么你既能继续使用官方插件 / 手机远程操作，又能把模型流量切到第三方 API。
 
@@ -164,7 +126,7 @@ CC Switch 本地路由
 
 这是最容易误解的一点。开启该能力后，Codex App 看到的是 `auth.json` 里的官方登录态，所以它会继续显示官方账号信息。
 
-但这不代表模型请求还在走官方 OpenAI。实际流量以 CC Switch 当前 Codex 供应商、`config.toml` 和本地路由日志为准。
+但这不代表模型请求还在走官方 OpenAI。实际流量以 CC Switch 当前 Codex 供应商和 `config.toml` 为准。
 
 ### 不要用 Codex 账号信息判断计费方
 
@@ -174,11 +136,11 @@ CC Switch 本地路由
 
 Codex 的模型目录是启动时读取的。即使 CC Switch 已经生成了新的模型目录，正在运行的 Codex 也不一定会热加载，所以修改模型映射后请重启 Codex。
 
-### 关闭开关后，直连切换会删除官方登录
+### 关闭开关后，切换会删除官方登录
 
-如果关闭 `非接管切换时保留官方登录`，在未开启路由接管时切换到第三方供应商，CC Switch 会删除 `auth.json`，Codex App 随之失去官方登录态，官方远程操作和官方插件也就用不了。第三方 API Key 照样只写进 `config.toml`，不会写入 `auth.json`。
+如果关闭 `切换时保留官方登录`，切换到第三方供应商时，CC Switch 会删除 `auth.json`，Codex App 随之失去官方登录态，官方远程操作和官方插件也就用不了。第三方 API Key 照样只写进 `config.toml`，不会写入 `auth.json`。
 
-开启路由接管期间不受这个开关影响，官方登录始终保留。如果你的目标是长期保留官方远程操作和官方插件，建议保持该开关开启。
+如果你的目标是长期保留官方远程操作和官方插件，建议保持该开关开启。
 
 ## 常见问题
 
@@ -192,26 +154,19 @@ Codex 的模型目录是启动时读取的。即使 CC Switch 已经生成了新
 
 **开启后官方插件或手机远程操作还是不可用怎么办？**
 
-先切回 `OpenAI Official`，重新启动 Codex 并完成一次官方登录；然后确认 CC Switch 的 `设置 → 通用 → Codex 应用增强 → 非接管切换时保留官方登录` 已开启，再切回第三方供应商。
+先切回 `OpenAI Official`，重新启动 Codex 并完成一次官方登录；然后确认 CC Switch 的 `设置 → 通用 → Codex 应用增强 → 切换时保留官方登录` 已开启，再切回第三方供应商。
 
 **第三方请求 404、模型列表不对或流式响应异常怎么办？**
 
-如果该供应商是 Chat Completions 协议，请确认供应商表单 `高级选项` 里的 `上游格式` 是 `Chat Completions（需开启路由）`，并且 `设置 → 路由` 里已经启动路由总开关、启用 Codex 接管。
-
-**可以在本地路由模式下切回 OpenAI Official 吗？**
-
-不建议。CC Switch 会尽量阻止在本地路由接管模式下切到官方供应商，因为用代理访问官方 API 可能带来账号风险。建议官方登录只用于保留 `auth.json`，模型流量则切到第三方供应商。
+Codex 发出的是 OpenAI Responses API 请求，所以供应商的端点必须支持 Responses API。内置预设都支持；自定义供应商请查看厂商文档。只提供 Chat Completions 的端点不能用于 Codex。
 
 **为什么流程做的这么复杂？可以简化吗？**
 
-因为 Codex 增强开关和路由接管等一系列功能，如果用户并不需要的话，默认打开会带来不必要的麻烦，所以都做成了开关形式。
+因为保留官方登录这个功能，如果用户并不需要的话，默认打开会带来不必要的麻烦，所以做成了开关形式。
 
 ## 参考链接
 
 - [Codex 桌面应用里看不到自定义模型？（常见问题）](./codex-desktop-custom-model-visibility-zh.md)
-- [在 Codex 中使用 Chat 格式 API：本地路由攻略](./codex-deepseek-routing-guide-zh.md)
-- [添加 Codex 供应商：Chat Completions 路由与模型映射](../user-manual/zh/2-providers/2.1-add.md)
-- [本地代理服务](../user-manual/zh/4-proxy/4.1-service.md)
-- [本地路由](../user-manual/zh/4-proxy/4.2-routing.md)
+- [添加 Codex 供应商：模型映射](../user-manual/zh/2-providers/2.1-add.md)
 - [CC Switch v3.16.1 Release Note](../release-notes/v3.16.1-zh.md)
 - [CC Switch v3.20.1 Release Note](../release-notes/v3.20.1-zh.md)

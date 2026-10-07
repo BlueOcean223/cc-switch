@@ -41,7 +41,6 @@
     "enableAllForApp": "为 {{app}} 全部启用",
     "disableAllForApp": "为 {{app}} 全部停用",
     "bulkToggleFailed": "有 {{count}} 项更新失败",
-    "reset": "重置",
     "actions": "操作",
     "deleting": "删除中...",
     "auto": "自动",
@@ -106,32 +105,10 @@
     "noProvidersDescription": "如果你已有配置，请点击\"导入当前配置\"，所有数据将安全保存在 default 供应商中",
     "noProvidersDescriptionKeyFields": "切换供应商只替换 Key、请求地址和模型，插件等其他设置保留在配置文件里，对所有供应商生效",
     "importCurrent": "导入当前配置",
-    "importFromClaude": "将 Claude Code 中已有的供应商导入",
     "importCurrentDescription": "将当前正在使用的配置导入为默认供应商",
     "currentlyUsing": "当前使用",
     "enable": "启用",
     "inUse": "使用中",
-    "needsRouting": "需要路由",
-    "directProvider": "直连",
-    "directProviderHint": "退出路由后恢复为这个供应商",
-    "stackBadge": "聚合",
-    "stackBadgeHint": "在 {{client}} 的模型选择器里选择：{{models}}",
-    "stackBadgeNoModels": "这家没有配置模型，不会出现在模型选择器里",
-    "stackSaved": "已保存，重启 {{client}} 后生效",
-    "stackSavedLive": "已保存，{{client}} 里立即生效",
-    "stackReselectHint": "CC Switch 每次改写客户端配置后，如果模型选择器里选的是聚合的模型，需要重新选一次",
-    "stackPartial": "已部分写入，将在下次操作或重启 CC Switch 时补完",
-    "stackFailed": "聚合的模型保存失败：{{error}}",
-    "stackDefaultCannotRemove": "默认供应商不能移除，请先把别的供应商设为默认",
-    "stackDefaultHint": "它是默认供应商：列表里的第一个模型负责 Claude Code 启动和后台任务",
-    "officialModelsBundled": "官方模型列表暂未取到，暂用 Codex 内置列表，可能缺少账号专属模型",
-    "officialModelsUnavailable": "聚合的模型暂不可用：读取不到 Codex 模型列表",
-    "routeOwnsCatalog": "聚合的模型不会出现在 Codex 里：路由供应商使用自己的模型目录文件（model_catalog_json）",
-    "adoptCatalog": "改用 CC Switch 的模型目录",
-    "adoptCatalogDone": "已改用 CC Switch 的模型目录，重启 Codex 后生效",
-    "adoptCatalogFailed": "改用 CC Switch 的模型目录失败：{{error}}",
-    "noRoutingSupport": "不支持路由",
-    "blockedByProxyHint": "路由模式下不能切换到官方供应商",
     "editProvider": "编辑供应商",
     "editProviderHint": "更新配置后将立即应用到当前供应商。",
     "deleteProvider": "删除供应商",
@@ -200,19 +177,11 @@
     },
     "backToList": "返回供应商列表",
     "editProviderNamed": "编辑 {{name}}",
-    "formSubtitleStack": "{{app}}（聚合模式）",
     "editCurrentNoticeFile": "这是正在使用的供应商。保存后会立即写进",
     "editCurrentNoticeFileEnd": "，下一次请求生效。",
     "editCurrentNotice": "这是正在使用的供应商。保存后立即生效，下一次请求就用新的设置。"
   },
-  "claudeCode": {
-    "needsRouting": "需要路由",
-    "noRoutingSupport": "不支持路由"
-  },
   "codex": {
-    "needsRouting": "需要路由",
-    "noRoutingSupport": "不支持路由",
-    "officialRouting": "官方账号路由",
     "nativeLogin": "Codex 登录",
     "followCodexLogin": "跟随 Codex 登录",
     "followCodexLoginDescription": "账号会随 Codex CLI 当前登录变化",
@@ -223,51 +192,6 @@
     "boundAccountUnavailable": "绑定的账号不可用",
     "accountLoading": "正在加载账号…"
   },
-  "claudeDesktop": {
-    "modelConfigTitle": "模型配置",
-    "modelModeLabel": "接入方式",
-    "modelModeDirect": "直连",
-    "modelModeProxy": "模型映射",
-    "officialNotice": "Claude Desktop 官方供应商使用应用内置的 1P 登录，无需配置 API Key 和接口地址。",
-    "mode": "模型处理方式",
-    "modeDirect": "直连",
-    "modeProxy": "需要路由",
-    "modelMappingToggle": "需要模型映射",
-    "modelMappingOffHint": "仅当供应商直接接受 Claude Desktop 可识别的三档角色 ID（claude-sonnet-* / claude-opus-* / claude-haiku-*）时才适用直连；其他模型名（含 claude-3-5-sonnet-… 等旧式 ID）请选择模型映射。",
-    "modelMappingOnHint": "Claude Desktop 只接受 claude-sonnet-* / claude-opus-* / claude-haiku-* 三档角色 ID。选择模型映射后，CC Switch 会把这三档映射到供应商的实际模型，并在使用期间保持本地路由开启。",
-    "routeMapTitle": "模型映射",
-    "routeMapHint": "为 Sonnet、Opus、Haiku 三档分别填写实际请求模型；菜单显示名可写 DeepSeek、Kimi 等品牌名。留空的档会自动沿用 Sonnet（或第一个已填档）的模型，确保子 agent 调用的 Haiku 始终可用。",
-    "routeModelLabel": "模型角色",
-    "routeRoleSonnet": "Sonnet",
-    "routeRoleOpus": "Opus",
-    "routeRoleFable": "Fable",
-    "routeRoleHaiku": "Haiku",
-    "labelOverrideLabel": "菜单显示名",
-    "upstreamModelLabel": "实际请求模型",
-    "supports1mLabel": "声明支持 1M",
-    "supports1mShort": "1M",
-    "directModelListTitle": "模型列表",
-    "directModelListCollapsedHint": "原生 Claude 模型供应商通常不用填写，Claude Desktop 会自动读取 /v1/models。",
-    "directModelListHint": "配置 Claude Desktop 可用的 Sonnet、Opus、Haiku 模型。留空时 Claude Desktop 会自动读取 /v1/models；勾选 1M 会声明支持 1M 上下文。",
-    "directModelInvalid": "直连模型必须使用 Claude Desktop 可识别的 Sonnet / Opus / Haiku 模型名",
-    "addModel": "添加模型",
-    "addRoute": "添加模型",
-    "routeInvalid": "请选择模型角色并填写实际请求模型",
-    "routesRequired": "至少填写一个模型映射",
-    "statusTitle": "Claude Desktop 配置需要检查",
-    "statusUnsupported": "当前平台暂不支持 Claude Desktop 3P 配置写入。",
-    "statusStaleRawModels": "Claude Desktop profile 中存在非 Sonnet / Opus / Haiku 角色模型名，新版 Claude Desktop 可能拒绝加载；重新切换当前供应商可修复。",
-    "statusMissingRouteMappings": "当前供应商启用了模型映射，但没有有效路由；请编辑供应商并补全至少一个模型映射。",
-    "statusGatewayTokenMissing": "当前本地路由 token 尚未生成；重新切换该供应商会写入新的本地 token。",
-    "statusBaseUrlMismatch": "Claude Desktop profile 指向的地址与当前供应商不一致；当前为 {{actual}}，应为 {{expected}}。重新切换当前供应商可修复。",
-    "route": {
-      "tooltip": {
-        "active": "Claude Desktop 本地路由已开启 - {{address}}:{{port}}",
-        "inactive": "开启 Claude Desktop 本地路由，用于需要模型映射或格式转换的供应商。当前配置地址：{{address}}:{{port}}"
-      },
-      "stopBlockedByTakeover": "还有其他应用在路由模式。请先让这些应用回到直连，再停止路由服务。"
-    }
-  },
   "notifications": {
     "providerAdded": "供应商已添加",
     "providerSaved": "供应商配置已保存",
@@ -276,8 +200,6 @@
     "codexRestartRequired": "切换成功，请重启客户端以生效",
     "geminiRestartRequired": "切换成功，请重启 Gemini CLI 以生效",
     "grokBuildRestartRequired": "切换成功，请重启 Grok Build 以生效",
-    "claudeDesktopRestartRequired": "切换成功，重启 Claude Desktop 后生效",
-    "claudeDesktopProxyRestartRequired": "切换成功，请保持 CC Switch 运行，并重启 Claude Desktop 后生效",
     "addToConfigSuccess": "已添加到配置",
     "removeFromConfigSuccess": "已从配置移除",
     "removeFromConfigFailed": "无法移除供应商",
@@ -298,16 +220,6 @@
     "deleteFailed": "删除供应商失败：{{error}}",
     "settingsSaved": "设置已保存",
     "settingsSaveFailed": "保存设置失败：{{error}}",
-    "proxyRequiredForSwitch": "此供应商{{reason}}，需要路由服务才能正常使用，请先启动路由",
-    "proxyReasonCopilot": "使用 GitHub Copilot 作为 Claude 供应商",
-    "proxyReasonOpenAIChat": "使用 OpenAI Chat 接口格式",
-    "proxyReasonOpenAIResponses": "使用 OpenAI Responses 接口格式",
-    "proxyReasonAnthropicMessages": "使用 Anthropic Messages 接口格式",
-    "proxyReasonFullUrl": "开启了完整 URL 连接模式",
-    "proxyReasonManagedOAuth": "使用托管 OAuth 登录（令牌由本地路由注入）",
-    "proxyReasonRoutingRequired": "需要本地路由处理请求",
-    "openAIFormatHint": "此供应商使用 OpenAI 兼容格式，需要开启路由服务才能正常使用",
-    "copilotProxyHint": "GitHub Copilot 作为 Claude 供应商时始终需要本地路由；路由会根据当前模型自动选择 Chat Completions 或 Responses。",
     "openLinkFailed": "链接打开失败",
     "openclawModelsRegistered": "模型已注册到 /model 列表",
     "openclawDefaultModelSet": "已设为默认模型",
@@ -316,9 +228,7 @@
     "openclawModelNotFound": "所选模型已不存在，请刷新后重试",
     "backfillWarning": "切换成功，但旧供应商配置回填失败，您手动修改的配置可能未保存",
     "codexAuthCleanupFailed": "切换成功，但未能删除 auth.json，官方登录凭据仍留在磁盘上；如需彻底移除请手动删除 Codex 配置目录中的 auth.json",
-    "windowControlFailed": "窗口控制失败：{{error}}",
-    "officialBlockedByProxy": "本地路由模式下不能切换到官方供应商，使用路由访问官方 API 可能导致账号被封禁",
-    "proxyOfficialWarning": "当前供应商 {{name}} 是官方供应商，建议切换到第三方供应商后再使用本地路由"
+    "windowControlFailed": "窗口控制失败：{{error}}"
   },
   "confirm": {
     "deleteProvider": "删除供应商",
@@ -326,16 +236,6 @@
     "removeProvider": "移除供应商",
     "removeProviderMessage": "确定要从配置中移除供应商 \"{{name}}\" 吗？\n\n移除后该供应商将不再生效，但配置数据会保留在 CC Switch 中，您可以随时重新添加。",
     "piDefaultProviderWarning": "Pi 的全局默认项当前指向此供应商。继续后，Pi 会尝试其他可用模型；你可以在 Pi 中使用 /model 重新选择，或使用 /login 登录其他供应商。",
-    "proxy": {
-      "title": "启用本地路由服务",
-      "message": "本地路由是一项高级功能，启用前请确保您已了解其工作原理。\n\n建议先查阅相关文档或咨询您的供应商，以获取正确的配置方式。",
-      "confirm": "我已了解，继续启用"
-    },
-    "failover": {
-      "title": "启用故障转移功能",
-      "message": "故障转移是一项高级功能，启用前请确保您已了解其工作原理。\n\n建议先在故障转移队列中配置好供应商优先级。",
-      "confirm": "我已了解，继续启用"
-    },
     "unifyCodexHistory": {
       "title": "统一 Codex 会话历史",
       "message": "开启后，官方订阅与第三方将共用同一个会话历史列表。注意：跨供应商继续旧会话时，可能因对方后端无法解密 encrypted_content 推理内容而失败。\n\n可选择同时把现有官方会话历史迁入共享列表（迁移前自动备份到 ~/.cc-switch/backups，关闭开关时可选择恢复）。",
@@ -376,34 +276,15 @@
     "tabGeneral": "通用",
     "tabAuth": "认证",
     "tabAdvanced": "高级",
-    "tabProxy": "路由",
     "authCenter": {
-      "description": "把 GitHub Copilot、ChatGPT、xAI 订阅当作供应商用。凭据由路由服务注入，相关供应商要在路由模式下使用（Codex 官方登录绑定除外）。",
+      "description": "管理 ChatGPT 账号。Codex 官方卡绑定账号后，切换时会把这个账号的登录写进 Codex。",
       "beta": "Beta",
-      "copilotDescription": "管理 GitHub Copilot 账号",
-      "codexOauthDescription": "管理 ChatGPT 账号",
-      "xaiOauthDescription": "管理 xAI / Grok 账号"
+      "codexOauthDescription": "管理 ChatGPT 账号"
     },
     "advanced": {
       "configDir": {
         "title": "配置文件目录",
         "description": "管理 Claude、Codex 和 Gemini 的配置存储路径"
-      },
-      "proxy": {
-        "title": "本地路由",
-        "description": "控制路由服务开关、查看状态与端口信息",
-        "enableFeature": "在主页面显示本地路由开关",
-        "enableFeatureDescription": "开启后，主页面顶部将显示路由和故障转移开关",
-        "enableStackMode": "在主页面显示聚合模式开关",
-        "enableStackModeDescription": "开启后，Claude Code 和 Codex 的主页面开关换成聚合模式：像 OpenCode 一样添加多家供应商，它们的模型都会出现在客户端的模型列表里（Codex 需要重启后生效），不做故障转移。和本地路由开关二选一，切换时已开启的 Claude Code、Codex 会先退回直连",
-        "enableFailoverToggle": "在主页面显示故障转移开关",
-        "enableFailoverToggleDescription": "开启后，主页面顶部将独立显示故障转移开关",
-        "running": "运行中",
-        "stopped": "已停止"
-      },
-      "failover": {
-        "title": "自动故障转移",
-        "description": "配置故障转移队列和熔断策略"
       },
       "pricing": {
         "title": "成本定价",
@@ -424,31 +305,6 @@
       "cloudSync": {
         "title": "云同步",
         "description": "通过 WebDAV 在多设备间同步数据"
-      },
-      "rectifier": {
-        "title": "整流器",
-        "description": "自动修复 API 请求中的兼容性问题",
-        "enabled": "启用整流器",
-        "enabledDescription": "总开关，关闭后所有整流功能将被禁用",
-        "requestGroup": "请求整流",
-        "responseGroup": "响应整流",
-        "thinkingSignature": "Thinking 签名整流",
-        "thinkingSignatureDescription": "当 Anthropic 类型供应商返回 thinking 签名不兼容或非法请求等错误时，自动移除不兼容的 thinking 相关块并对同一供应商重试一次",
-        "thinkingBudget": "Thinking Budget 整流",
-        "thinkingBudgetDescription": "当 Anthropic 类型供应商返回 budget_tokens 约束错误（如至少 1024）时，自动将 thinking 规范为 enabled 并将 budget 设为 32000，同时在需要时将 max_tokens 设为 64000，然后重试一次",
-        "mediaFallback": "不支持图片降级",
-        "mediaFallbackDescription": "当供应商不支持图片输入时（已声明纯文本能力，或上游返回不支持图片的错误），自动将图片块替换为 [Unsupported Image] 标记，使对话不中断",
-        "mediaHeuristic": "纯文本模型预判",
-        "mediaHeuristicDescription": "发送前根据内置的已确认纯文本模型注册表剥离图片。关闭仅停用代理的注册表预判；已声明纯文本模型的处理和上游报错兜底仍保留，且不会改变 Codex 模型目录的能力声明"
-      },
-      "optimizer": {
-        "title": "Bedrock 请求优化器",
-        "description": "在请求发送前自动优化 Thinking 和 Cache 配置（仅 Bedrock 供应商生效）",
-        "enabled": "启用优化器",
-        "thinkingOptimizer": "Thinking 优化",
-        "thinkingOptimizerDescription": "自动为 Opus/Sonnet 启用 Adaptive Thinking，为旧模型注入 Extended Thinking",
-        "cacheInjection": "Cache 注入",
-        "cacheInjectionDescription": "自动在请求关键位置注入标准 5 分钟 Cache 断点，减少重复 token 计费"
       },
       "logConfig": {
         "title": "应用诊断日志",
@@ -807,8 +663,8 @@
     "skipClaudeOnboarding": "跳过 Claude Code 初次安装确认",
     "skipClaudeOnboardingDescription": "Claude Code 第一次启动时会先走一遍引导流程，要求选主题并登录 Anthropic 账号。如果你用的是第三方供应商，不需要登录官方账号，开启后就能跳过这一步直接使用。原理是在 ~/.claude.json 里写入 hasCompletedOnboarding: true；关闭时删除该字段，下次启动会重新出现引导。",
     "codexAuth": "Codex 应用增强",
-    "preserveCodexOfficialAuthOnSwitch": "非接管切换时保留官方登录",
-    "preserveCodexOfficialAuthOnSwitchDescription": "控制未开启路由接管时切换第三方供应商是否保留 Codex 官方登录；路由接管期间始终保留",
+    "preserveCodexOfficialAuthOnSwitch": "切换时保留官方登录",
+    "preserveCodexOfficialAuthOnSwitchDescription": "切换到第三方供应商时，保留 auth.json 里的 Codex 官方（ChatGPT）登录",
     "unifyCodexSessionHistory": "统一 Codex 会话历史",
     "unifyCodexSessionHistoryDescription": "开启后，官方订阅将以共享的 custom 供应商标识运行，官方与第三方会话出现在同一历史列表中，并可选择把现有官方会话一并迁入（迁移前自动备份）。关闭开关时可按备份恢复迁入的会话。注意：跨供应商继续旧会话时，对方后端可能无法解密会话中的 encrypted_content 推理内容，导致继续失败",
     "unifyCodexHistoryRestoreCompleted": "已按备份还原官方会话历史（{{files}} 个会话文件、{{rows}} 条索引记录）",
@@ -963,7 +819,7 @@
     "saving": "正在保存...",
     "globalProxy": {
       "label": "全局代理",
-      "hint": "代理所有请求（API、Skills 下载等）。开启本地路由时，应用的请求也会经过此代理。留空表示直连。",
+      "hint": "代理 CC Switch 发出的所有请求（API、Skills 下载等）。留空表示直连。",
       "username": "用户名（可选）",
       "password": "密码（可选）",
       "test": "测试连接",
@@ -973,32 +829,18 @@
       "saved": "代理设置已保存",
       "saveFailed": "保存失败：{{error}}",
       "testSuccess": "连接成功！延迟 {{latency}}ms",
-      "testFailed": "连接失败：{{error}}",
-      "pricingDefaultsTitle": "计费默认配置",
-      "pricingDefaultsDescription": "设置各应用按请求模型还是返回模型匹配定价，仅对经本地路由的请求生效。",
-      "pricingAppLabel": "应用",
-      "pricingModelSourceLabel": "计费模式",
-      "pricingModelSourceRequest": "请求模型",
-      "pricingModelSourceResponse": "返回模型",
-      "pricingSave": "保存计费配置",
-      "pricingSaved": "计费配置已保存",
-      "pricingSaveFailed": "保存计费配置失败：{{error}}",
-      "pricingLoadFailed": "加载计费配置失败：{{error}}"
+      "testFailed": "连接失败：{{error}}"
     },
     "saveFailedGeneric": "保存失败，请重试",
     "sections": {
       "general": "通用",
       "appConfig": "应用配置",
-      "routing": "本地路由",
       "network": "网络",
       "data": "数据",
       "about": "关于"
     },
     "appConfig": {
       "configDir": "配置目录"
-    },
-    "routing": {
-      "service": "服务"
     },
     "data": {
       "location": "存储位置"
@@ -1007,8 +849,6 @@
   "apps": {
     "claude": "Claude",
     "claudeCode": "Claude Code",
-    "claudeDesktop": "Claude Desktop",
-    "claude-desktop": "Claude Desktop",
     "codex": "Codex",
     "gemini": "Gemini",
     "grokbuild": "Grok Build",
@@ -1184,9 +1024,6 @@
     "invalidToml": "config.toml 格式错误：{{error}}",
     "defaultModelPlaceholder": "例如: grok-4.5",
     "defaultModelHint": "Grok Build 默认请求的模型，随时可改，无需等待预设更新。",
-    "advancedSectionHint": "包含上游格式、思考能力与自定义 User-Agent。使用 Chat Completions / Anthropic Messages 协议的供应商需开启路由接管才能使用。",
-    "reasoningEffortHint": "上游支持 low/high/max 等思考深度控制时启用。启用后会自动启用思考模式，并把请求中的 reasoning effort 转成上游 Chat 参数。",
-    "maxOutputTokensHint": "默认上限 8192 容易在长回答或深度思考时被截断（stop_reason=max_tokens）。此处设置会作为 Anthropic 的 max_tokens 覆盖请求值。请勿超过该模型/网关的真实输出上限，否则可能 400。留空使用默认 8192。",
     "keyFieldsHint": "默认模型（models.default）和它指向的模型表随供应商切换；其余是 Grok Build 全局设置，保存后对所有供应商生效。",
     "inactiveFieldsHint": "这个供应商还保存着 {{count}} 个不随切换生效的设置。点击复制它的 TOML，按需粘贴到上方；供应商里保存的原值不会删除。",
     "inactiveFieldCopied": "已复制"
@@ -1223,7 +1060,7 @@
     "expandContent": "展开完整内容",
     "collapseContent": "收起",
     "helpTitle": "会话从哪里来",
-    "helpBody": "CC Switch 读取各个应用保存在本机的会话记录，位置见右上角 ⋯ 里的「会话记录在哪里」。Claude Desktop 没有单独的会话记录。",
+    "helpBody": "CC Switch 读取各个应用保存在本机的会话记录，位置见右上角 ⋯ 里的「会话记录在哪里」。",
     "moreActions": "会话的更多操作",
     "refreshList": "刷新列表",
     "listRefreshed": "已刷新会话列表",
@@ -1231,7 +1068,7 @@
     "preferredTerminal": "首选终端",
     "whereMenu": "会话记录在哪里",
     "whereTitle": "会话记录在哪里",
-    "whereLead": "CC Switch 从这些位置读取会话。Claude Desktop 没有单独的会话记录。",
+    "whereLead": "CC Switch 从这些位置读取会话。",
     "whereNote": "在设置里改过配置目录的应用，按改过的目录读取。",
     "appPrefix": "应用：",
     "chooseApp": "选择应用",
@@ -1242,7 +1079,6 @@
     "groupBy": "分组方式",
     "groupByTime": "按时间",
     "groupByProject": "按项目",
-    "desktopNote": "Claude Desktop 没有单独的会话记录，这里显示 Claude Code 的会话。",
     "matchCount": "匹配 {{count}} 个会话",
     "totalCount": "共 {{count}} 个会话",
     "selectAllMatches": "全选匹配结果",
@@ -1523,8 +1359,6 @@
     "fastModelPlaceholder": "例如: GLM-4.5-Air",
     "modelHint": "💡 留空将使用供应商的默认模型",
     "apiHint": "💡 填写兼容 Claude API 的服务端点地址，不要以斜杠结尾",
-    "apiHintOAI": "💡 填写兼容 OpenAI Chat Completions 的服务端点地址，不要以斜杠结尾",
-    "apiHintGeminiNative": "💡 建议填写 Gemini Native 的 base URL，例如 https://generativelanguage.googleapis.com 或 https://generativelanguage.googleapis.com/v1beta；代理会自动补全 models/*:generateContent",
     "codexApiHint": "💡 填写兼容 OpenAI Response 格式的服务端点地址",
     "fillSupplierName": "请填写供应商名称",
     "fillConfigContent": "请填写配置内容",
@@ -1545,36 +1379,13 @@
     "visitWebsite": "访问 {{url}}",
     "anthropicModel": "主模型",
     "anthropicSmallFastModel": "快速模型",
-    "apiFormat": "上游格式",
-    "apiFormatHint": "供应商原生为 Anthropic Messages API 就选 Anthropic Messages（直连，不转换格式）；使用 Chat Completions 协议就选 Chat；使用 Responses API 就选 Responses；使用 Gemini generateContent 协议就选 Gemini Native。Chat、Responses 与 Gemini Native 均需开启路由接管才能转换为 Anthropic Messages。",
-    "customUserAgent": "自定义 User-Agent",
-    "customUserAgentHint": "只在路由模式下生效，会替换转发到供应商 API 的请求里的 User-Agent。",
-    "customUserAgentInvalid": "User-Agent 不能包含控制字符（如换行符），否则将被忽略。",
-    "customUserAgentPresets": "预设",
-    "localProxyRequestOverrides": "本地代理请求覆盖",
-    "localProxyRequestOverridesHint": "只在路由模式下生效，作用于格式转换后的上游请求。",
-    "localProxyRequestOverridesInvalid": "本地代理请求覆盖格式错误：{{error}}",
-    "localProxyHeaderOverrides": "Header 覆盖",
-    "localProxyHeaderOverridesInvalidDetail": "Header 覆盖格式错误：{{error}}",
-    "localProxyBodyOverrides": "Body 覆盖",
-    "localProxyBodyOverridesInvalidDetail": "Body 覆盖格式错误：{{error}}",
-    "fullUrlLabel": "完整 URL",
     "fullUrlEnabled": "完整 URL 模式",
     "fullUrlDisabled": "标记为完整 URL",
-    "fullUrlHint": "💡 请填写完整请求 URL，并且必须开启路由后使用；路由将直接使用此 URL，不拼接路径",
-    "fullUrlHintGeminiNative": "💡 Gemini Native 下，完整 URL 模式同时兼容两类地址：1. 官方/标准 Gemini URL，代理会按模型和流式参数自动归一化；2. 自定义 relay 的完整 URL，代理会尽量原样使用，只补查询参数，不再强行追加 models 路径",
-    "apiFormatAnthropic": "Anthropic Messages (原生)",
-    "apiFormatOpenAIChat": "OpenAI Chat Completions (需开启路由)",
-    "apiFormatOpenAIResponses": "OpenAI Responses API (需开启路由)",
-    "apiFormatGeminiNative": "Gemini Native generateContent (需开启路由)",
     "codexApiFormatResponses": "OpenAI Responses API (原生)",
-    "codexApiFormatOpenAIChat": "OpenAI Chat Completions (需开启路由)",
-    "codexApiFormatHint": "选择供应商真实支持的 Codex API 格式；配置仍保持 Responses 以兼容新版 Codex，Chat Completions 会通过本地路由自动转换。",
     "authField": "认证字段",
     "authFieldAuthToken": "ANTHROPIC_AUTH_TOKEN（默认）",
     "authFieldApiKey": "ANTHROPIC_API_KEY",
     "authFieldHint": "选择写入配置的认证环境变量名",
-    "apiHintResponses": "💡 填写兼容 OpenAI Responses API 的服务端点地址，不要以斜杠结尾",
     "anthropicDefaultHaikuModel": "Haiku 默认模型",
     "anthropicDefaultSonnetModel": "Sonnet 默认模型",
     "anthropicDefaultOpusModel": "Opus 默认模型",
@@ -1584,17 +1395,6 @@
     "modelHelper": "可选：指定默认使用的 Claude 模型，留空则使用系统默认。",
     "modelMappingLabel": "模型映射",
     "modelMappingHint": "显示名称只影响 /model 菜单；1M 只是给 Claude Code 的上下文能力声明。",
-    "stackModelsLabel": "模型列表",
-    "addStackModel": "手动添加",
-    "stackModelsHint": "这些模型会出现在 Claude Code 的 /model 里，选中后请求直达这家。第一个（★）是这家的默认模型：这家被设为默认时，Claude Code 启动和后台任务都用它。",
-    "stackModelsEmpty": "未配置模型：把这家加入聚合后，模型选择器里不会多出它的模型",
-    "stackModelPlaceholder": "例如 deepseek-v4-pro",
-    "stackModelDefault": "默认模型",
-    "stackModelMakeDefault": "设为默认模型",
-    "stackLayout": {
-      "advancedHint": "自定义 User-Agent 与请求覆盖，一般无需修改。",
-      "noModels": "模型列表为空：把这家加入聚合后，模型选择器里不会多出它的模型"
-    },
     "modelRoleLabel": "模型角色",
     "modelRoleSonnet": "Sonnet",
     "modelRoleOpus": "Opus",
@@ -1612,7 +1412,7 @@
     "quickSetModels": "一键设置",
     "quickSetSuccess": "已将模型名称应用到所有角色",
     "advancedOptionsToggle": "高级选项",
-    "advancedOptionsHint": "包含 API 格式、认证字段、模型映射等配置。大多数场景下保持默认即可。",
+    "advancedOptionsHint": "包含认证字段、模型映射等配置。大多数场景下保持默认即可。",
     "categoryOfficial": "官方",
     "categoryCnOfficial": "开源官方",
     "categoryAggregation": "聚合服务",
@@ -1641,44 +1441,6 @@
     "fetchModelsTimeout": "请求超时，请检查网络连接",
     "requiredFields": "请填写供应商名称、API 地址、API Key 和模型"
   },
-  "copilot": {
-    "authSection": "GitHub Copilot 认证",
-    "authStatus": "认证状态",
-    "authenticated": "已认证: {{username}}",
-    "notAuthenticated": "未认证",
-    "loginWithGitHub": "使用 GitHub 登录",
-    "githubAccount": "GitHub 账号",
-    "manageAccounts": "管理账号",
-    "loginRequired": "请先登录 GitHub Copilot",
-    "statusLoading": "正在加载账号状态...",
-    "statusUnavailable": "状态不可用",
-    "statusLoadFailed": "无法加载 GitHub Copilot 账号状态，请重试。",
-    "waitingForAuth": "等待授权中...",
-    "enterCode": "请在浏览器中输入验证码：",
-    "logout": "注销",
-    "authSuccess": "GitHub Copilot 认证成功",
-    "authFailed": "认证失败: {{error}}",
-    "authTimeout": "认证超时，请重试",
-    "tokenExpired": "令牌已过期，请重新认证",
-    "accountCount": "{{count}} 个账号",
-    "selectAccount": "选择账号",
-    "selectAccountPlaceholder": "选择一个 GitHub 账号",
-    "useDefaultAccount": "使用默认账号",
-    "loggedInAccounts": "已登录账号",
-    "defaultAccount": "默认",
-    "selected": "已选中",
-    "removeAccount": "移除账号",
-    "setAsDefault": "设为默认",
-    "addAnotherAccount": "添加其他账号",
-    "retry": "重试",
-    "copyCode": "复制代码",
-    "migrationFailed": "旧认证数据迁移失败：{{error}}",
-    "loadModelsFailed": "加载 Copilot 模型列表失败",
-    "deploymentType": "GitHub 部署类型",
-    "deploymentGitHubCom": "GitHub.com",
-    "deploymentEnterprise": "GitHub Enterprise Server",
-    "enterpriseDomainPlaceholder": "例如：company.ghe.com"
-  },
   "codexOauth": {
     "authStatus": "认证状态",
     "notAuthenticated": "未认证",
@@ -1699,7 +1461,6 @@
     "officialAccountPlaceholder": "请选择登录方式",
     "addOrManageAccounts": "添加或管理 ChatGPT 账号",
     "explicitSelectionRequired": "请先选择登录方式",
-    "useDefaultAccount": "使用默认账号",
     "noneOptionLabel": "跟随 Codex 登录",
     "reauthDescription": "为与浏览器登录行为保持一致，这些账号需要重新登录以补全所需的登录凭据（id_token）。重新登录后即可正常用于托管绑定。",
     "reauthBadge": "需要重新登录",
@@ -1715,35 +1476,11 @@
     "addAnotherAccount": "添加其他账号",
     "logoutAll": "注销所有账号",
     "retry": "重试",
-    "copyCode": "复制代码",
-    "fastMode": "FAST 模式",
-    "fastModeDescription": "发送 service_tier=\"priority\" 换取更低延迟。默认关闭——开启后会按更高速率消耗 ChatGPT 配额。"
-  },
-  "xaiOauth": {
-    "authStatus": "xAI OAuth 认证",
-    "accountCount": "{{count}} 个可用账号",
-    "reauthRequired": "需要重新登录",
-    "notAuthenticated": "未认证",
-    "selectAccount": "选择账号",
-    "selectAccountPlaceholder": "选择 xAI 账号",
-    "useDefaultAccount": "使用默认账号",
-    "accounts": "xAI 账号",
-    "defaultAccount": "默认",
-    "expired": "凭据已失效",
-    "setAsDefault": "设为默认",
-    "removeAccount": "移除账号",
-    "addOrReauth": "添加账号或重新登录",
-    "login": "使用 xAI 登录",
-    "waitingForAuth": "等待 xAI 授权中…",
-    "enterCode": "若浏览器未自动填入，请输入：",
-    "retry": "重试",
-    "logoutAll": "删除全部 xAI 账号",
-    "loginRequired": "请先登录 xAI 账号"
+    "copyCode": "复制代码"
   },
   "managedAuth": {
     "accountRemoved": "账号已删除",
     "selectedAccountNeedsReauth": "已绑定账号不存在或需要重新登录",
-    "selectedAccountUnavailable": "已绑定账号不存在或需要重新登录，请重新选择账号",
     "usedBy": "{{count}} 个供应商在用",
     "usedByTitle": "在用的供应商：{{names}}",
     "remove": {
@@ -1753,7 +1490,6 @@
       "leadAll": "会删除这 {{count}} 个账号保存在 CC Switch 里的登录凭据，无法撤销。",
       "brokenOne": "这些供应商会无法使用，直到重新登录或改选别的账号：",
       "brokenAll": "这些供应商会无法使用，直到重新登录：",
-      "moved": "这些供应商用的是默认账号，删除后改用新的默认账号：",
       "noneOne": "没有供应商在用这个账号。",
       "noneAll": "没有供应商在用这些账号。",
       "confirmOne": "删除账号",
@@ -1792,11 +1528,8 @@
     "authJson": "auth.json (JSON) *",
     "authJsonPlaceholder": "{\n  \"OPENAI_API_KEY\": \"sk-your-api-key-here\"\n}",
     "authJsonHint": "Codex auth.json 配置内容",
-    "authJsonStorageHint": "路由模式下显示的是存储的 auth 配置，不是实时的 auth.json",
     "configToml": "config.toml (TOML)",
     "configTomlHint": "Codex config.toml 配置内容",
-    "configTomlStorageHint": "路由模式下显示的是存储的 config 配置，不是实时的 config.toml",
-    "proxyTakeoverStorageNotice": "💡 当前应用处于路由模式。这里编辑的是存储的供应商配置，实际的 live 配置暂由路由服务接管",
     "enableRemoteCompaction": "启用远程压缩",
     "remoteCompactionHint": "开启后会将当前 model_providers 条目的 name 写为 OpenAI，使 Codex 尝试使用远程压缩。",
     "apiUrlLabel": "API 请求地址",
@@ -1804,27 +1537,7 @@
     "saveFailed": "保存失败: {{error}}",
     "modelNameHint": "指定使用的模型，将自动更新到 config.toml 中",
     "modelName": "模型名称",
-    "upstreamFormatLabel": "上游格式",
-    "upstreamFormatHint": "供应商原生为 Responses API 就选 Responses（直连，不转换格式）；使用 Chat Completions 协议就选 Chat；供应商只提供原生 Anthropic Messages 协议就选 Anthropic Messages。Chat 与 Anthropic Messages 均需开启路由接管才能转换为 Responses。",
-    "upstreamFormatChat": "Chat Completions（需开启路由）",
-    "upstreamFormatResponses": "Responses（原生）",
-    "upstreamFormatAnthropic": "Anthropic Messages（需开启路由）",
-    "anthropicAuthFieldLabel": "认证字段",
-    "anthropicAuthFieldAuthToken": "ANTHROPIC_AUTH_TOKEN（Authorization）",
-    "anthropicAuthFieldApiKey": "ANTHROPIC_API_KEY（x-api-key）",
-    "anthropicAuthFieldHint": "选择网关接收 API Key 的请求头：ANTHROPIC_AUTH_TOKEN 发送 Authorization: Bearer；ANTHROPIC_API_KEY 发送 x-api-key。两者只发其一。",
-    "impersonateClaudeCodeLabel": "模拟 Claude Code 客户端",
-    "impersonateClaudeCodeHint": "网关或其上游限制只能通过 Claude Code 使用时开启：伪装 User-Agent、anthropic-beta、x-app 请求头，并在系统提示首行注入 Claude Code 身份。",
-    "maxOutputTokensLabel": "最大输出 tokens",
-    "maxOutputTokensPlaceholder": "留空则使用默认 8192",
-    "maxOutputTokensHint": "Codex 不会把 model_max_output_tokens 写进请求体，默认上限 8192 容易在长回答或深度思考时被截断（stop_reason=max_tokens）。此处设置会作为 Anthropic 的 max_tokens 覆盖请求值。请勿超过该模型/网关的真实输出上限，否则可能 400。留空使用默认 8192。",
-    "promptCacheRoutingLabel": "提示词缓存路由",
-    "promptCacheRoutingAuto": "自动（推荐）",
-    "promptCacheRoutingEnabled": "开启",
-    "promptCacheRoutingDisabled": "关闭",
-    "promptCacheRoutingHint": "自动模式仅对已确认兼容的上游发送 prompt_cache_key；开启可用于其他兼容网关，关闭可避免严格网关因未知字段返回 400。只使用客户端提供的稳定会话 ID。",
     "upstreamModelName": "上游模型名称",
-    "upstreamModelNameHint": "Chat 格式下这里填写真实上游模型；路由会把 Codex 的 Responses 请求转换为 Chat Completions 并保持该模型。",
     "modelNamePlaceholder": "例如: gpt-5-codex",
     "contextWindow1M": "1M 上下文窗口",
     "contextWindow": "上下文窗口",
@@ -1842,12 +1555,6 @@
     "modelMappingTitle": "模型映射",
     "modelMappingHint": "生成 Codex model_catalog_json，让 /model 命令显示这些第三方模型名；表中条目按填写内容原样保存。修改后需要重启 Codex 才能刷新模型列表。",
     "addCatalogModel": "手动添加",
-    "modelListTitle": "模型列表",
-    "stackModelListHint": "这些模型会出现在 Codex 的 /model 里，选中后请求直达这家。★ 是这家的默认模型：这家被设为默认时 Codex 默认用它。修改后需要重启 Codex。",
-    "stackDefaultNotInList": "默认模型 {{model}} 不在列表里：Codex 默认仍请求它，但 /model 里没有这一项。",
-    "addToModelList": "加入列表",
-    "modelListEmpty": "未配置模型：聚合模式下只发布这家的默认模型（config.toml 的 model）。",
-    "stackAdvancedHint": "思考能力、Anthropic 专有项、自定义 User-Agent 与请求覆盖，一般无需修改。",
     "catalogDisplayName": "显示名称",
     "catalogDisplayNamePlaceholder": "例如: DeepSeek V4 Flash",
     "catalogModelId": "模型 ID",
@@ -1862,13 +1569,7 @@
     "defaultReasoningLevelLabel": "默认等级",
     "defaultReasoningLevelPlaceholder": "自动",
     "defaultReasoningLevelTip": "默认等级：{{level}}",
-    "reasoningModeToggle": "支持思考模式",
-    "reasoningModeHint": "上游 Chat Completions 接口支持开启或关闭 thinking 时启用。Kimi、GLM、Qwen 等通常属于这一类。",
-    "reasoningEffortToggle": "支持思考等级",
-    "reasoningEffortHint": "上游支持 low/high/max 等思考深度控制时启用。启用后会自动启用思考模式，并把 Codex 的 reasoning.effort 转成上游 Chat 参数。",
-    "reasoningGroupTitle": "思考能力",
-    "reasoningSectionHint": "预设供应商已自动配置；自定义供应商会按名称/地址自动推断。仅当自动识别不准时才需手动覆盖。",
-    "advancedSectionHint": "包含上游格式、模型映射、思考能力与自定义 User-Agent。使用 Chat Completions 协议的供应商需开启路由接管才能使用。",
+    "advancedSectionHint": "模型映射：为 Codex 的 /model 菜单生成模型目录，预设供应商通常无需修改。",
     "keyFieldsHint": "地址、Key、模型、推理档位、上下文窗口和兼容开关随供应商切换；其余是 Codex 全局设置，保存后对所有供应商生效。",
     "inactiveFieldsHint": "这个供应商还保存着 {{count}} 个不随切换生效的设置。点击复制它的 TOML，按需粘贴到上方；供应商里保存的原值不会删除。",
     "inactiveFieldCopied": "已复制"
@@ -1962,7 +1663,7 @@
     },
     "crossApp": "跨应用",
     "groupHint": {
-      "login": "不用 API Key，用已有账号登录。除 Claude 以外都要经过路由。",
+      "login": "不用 API Key，用已有账号登录。",
       "vendor": "厂商自己的 API 和编程套餐。同一家的国内站、海外站、套餐合成一行，下一步再选版本。",
       "thirdparty": "聚合多家模型的平台，或转售官方模型的中转服务。",
       "cloud": "用云厂商账号调用模型。",
@@ -1981,7 +1682,6 @@
     "loginWith": {
       "claude": "用 Claude 账号登录",
       "chatgpt": "用 ChatGPT 账号登录",
-      "github": "用 GitHub 账号登录",
       "xai": "用 xAI 账号登录",
       "google": "用 Google 账号登录"
     },
@@ -1993,7 +1693,6 @@
       "volcengine": "火山引擎",
       "tencent": "腾讯云"
     },
-    "version": {},
     "switchVersionTitle": "切换到 {{version}}？",
     "switchVersionMessage": "表单会按新版本重新填写，已填的 API Key 和其他修改会清空。",
     "switchVersionConfirm": "切换",
@@ -2293,9 +1992,9 @@
     "speedValue": "{{value}} tok/s",
     "speedEstimatedValue": "≈ {{value}} tok/s",
     "speedHelpTitle": "速度怎么算",
-    "speedHelp": "每秒输出多少 token，从首字算到结束。只算经路由服务、输出不少于 100 token 的请求；思考过程不外露的模型是近似值。带 ≈ 的是没开路由时按会话日志的时间戳估算的：没有首字计时，等首字的时间也算在内，所以偏低；只估输出不少于 200 token 的请求。",
+    "speedHelp": "每秒输出多少 token，从首字算到结束。旧版路由记下的请求只算输出不少于 100 token 的，思考过程不外露的模型是近似值。带 ≈ 的是按会话日志的时间戳估算的：没有首字计时，等首字的时间也算在内，所以偏低；只估输出不少于 200 token 的请求。",
     "speedSumHelpTitle": "汇总速度怎么算",
-    "speedSumHelp": "输出 token 总数除以生成时间总和，不是逐条平均，免得短请求把数字带歪。只算经路由服务、输出不少于 100 token 的请求。带 ≈ 的是按会话日志估算的（含首字等待，只估输出不少于 200 token 的请求），这一行没有路由数据时才显示。",
+    "speedSumHelp": "输出 token 总数除以生成时间总和，不是逐条平均，免得短请求把数字带歪。旧版路由记下的请求只算输出不少于 100 token 的。带 ≈ 的是按会话日志估算的（含首字等待，只估输出不少于 200 token 的请求），这一行没有路由记录时才显示。",
     "timingTip": "耗时 {{duration}}s · 首字 {{ttft}}s",
     "estimatedTimingTip": "耗时约 {{duration}}s（按会话日志的时间戳估算，含首字等待）",
     "cacheTip": "缓存命中 {{read}} · 缓存写入 {{write}}",
@@ -2310,7 +2009,7 @@
       "costTitle": "成本明细（USD）",
       "performance": "性能",
       "source": "来源",
-      "sourceProxy": "路由服务 · 状态码 {{code}}",
+      "sourceProxy": "旧版路由 · 状态码 {{code}}",
       "sourceSession": "会话日志",
       "total": "合计",
       "firstToken": "首字",
@@ -2325,22 +2024,17 @@
     "sources": {
       "scanTitle": "自动扫描会话日志",
       "scanHelpTitle": "会话日志是什么",
-      "scanHelp": "各应用写在本机的会话记录。CC Switch 从里面读取用量，不开路由也有数据。",
+      "scanHelp": "各应用写在本机的会话记录。CC Switch 从里面读取用量。",
       "coverage": "覆盖 7 个应用：{{apps}}",
       "cadenceOn": "启动时扫描一次，之后每 60 秒一次",
       "cadenceOff": "自动扫描已关闭，只在点「立即同步」时扫描",
       "unsupported": "Hermes、OpenClaw 暂不支持用量统计",
-      "loggingHelpTitle": "记录请求用量是什么",
-      "loggingHelp": "经路由服务的请求逐条记录，带状态码、耗时和首字时间。",
-      "on": "已开启",
-      "off": "已关闭",
-      "editLogging": "修改「记录请求用量」",
       "codexHelpTitle": "Codex 用量维护做什么",
       "lastSynced": "上次同步：{{time}}"
     },
     "empty": {
       "title": "还没有用量数据",
-      "body": "会话日志和经路由服务的请求都会记在这里。",
+      "body": "从会话日志读取的用量会记在这里。",
       "configurePricing": "配置模型定价"
     },
     "pricing": {
@@ -2350,11 +2044,6 @@
       "lastSync": "上次同步 {{time}}",
       "commonIncluded": "含常用模型",
       "moreActions": "更多定价操作",
-      "billingHelpTitle": "计费默认配置管什么",
-      "billingHelp": "只对经路由服务的请求生效。会话日志导入的用量按日志里的模型计价。",
-      "byResponse": "按返回模型计价",
-      "byRequest": "按请求模型计价",
-      "edit": "修改",
       "tableTitle": "模型定价 · {{count}}",
       "costHelpTitle": "成本怎么算",
       "costHelp": "每条请求按模型定价算成本：新增输入、输出、缓存命中、缓存写入各乘对应单价，再相加。",
@@ -2376,16 +2065,12 @@
     "templateCustom": "自定义",
     "templateGeneral": "通用模板",
     "templateNewAPI": "NewAPI",
-    "templateCopilot": "GitHub Copilot",
     "templateTokenPlan": "Token Plan",
     "templateBalance": "官方",
     "templateOfficialSubscription": "官方订阅",
-    "copilotAutoAuth": "自动使用 OAuth 认证，无需手动配置凭证",
     "tokenPlanHint": "自动使用供应商的 API Key 和 Base URL 查询 Token Plan 额度",
     "balanceHint": "自动使用供应商的 API Key 查询账户余额",
     "officialSubscriptionHint": "读取本机 CLI 的 OAuth 凭据，并调用官方接口查询订阅额度。默认关闭，只有启用后才会请求。",
-    "resetDate": "重置日期",
-    "premiumRequests": "Premium 请求",
     "credentialsConfig": "凭证配置",
     "credentialsHint": "留空则自动使用供应商配置",
     "optional": "可选",
@@ -2674,7 +2359,6 @@
     "disableFailed": "禁用失败",
     "importSuccess": "导入成功",
     "importFailed": "导入失败",
-    "confirm": {},
     "appSelect": "选择应用",
     "helpTitle": "提示词怎么生效",
     "helpText": "每个应用同时只启用一条，它就是目标文件的内容。在别处改了文件，下次打开本页时会收进启用中的那条；文件里有本页没有的内容，启用前先存成「原始提示词」。",
@@ -2696,7 +2380,6 @@
     "copiedPath": "已复制 {{path}}",
     "copyFailed": "没能复制到剪贴板",
     "appLabel": "应用：",
-    "appNoteDesktop": "Claude Desktop 用的是 Claude Code 的提示词。",
     "appNoteOpenclaw": "OpenClaw 在它自己页面的「工作区」里管理。",
     "targetFile": "目标文件",
     "targetDir": "目录",
@@ -2773,7 +2456,6 @@
     "switcherAriaLabel": "项目：{{name}}",
     "switcherTooltip": {
       "claude": "项目：一键切换 Claude Code 的供应商 / MCP / Skills / 记忆文件",
-      "claude-desktop": "项目：一键切换 Claude Desktop 的供应商",
       "codex": "项目：一键切换 Codex 的供应商 / MCP / Skills / 记忆文件"
     },
     "none": "不使用项目",
@@ -2782,7 +2464,6 @@
     "createFromCurrent": "新建项目",
     "createDescription": {
       "claude": "把 Claude Code 当前的供应商、MCP、Skills、记忆文件保存为一个项目，之后可一键切换。",
-      "claude-desktop": "把 Claude Desktop 当前的供应商保存为一个项目，之后可一键切换。",
       "codex": "把 Codex 当前的供应商、MCP、Skills 和记忆文件配置保存为一个项目，之后可一键切换。"
     },
     "manage": "管理项目",
@@ -3379,253 +3060,12 @@
     "skillsFailed": "自动导入技能失败",
     "skillsFailedDescription": "请打开 Skills 页面点击“导入已有”手动导入（或重启后再试）。"
   },
-  "health": {
-    "operational": "正常",
-    "degraded": "降级",
-    "failed": "失败",
-    "circuitOpen": "熔断",
-    "consecutiveFailures": "连续失败 {{count}} 次"
-  },
-  "failover": {
-    "enabled": "{{app}} 故障转移已启用",
-    "disabled": "{{app}} 故障转移已关闭",
-    "toggleFailed": "操作失败: {{detail}}",
-    "queueAddFailed": "加入队列失败：{{detail}}",
-    "queueRemoveFailed": "移出队列失败：{{detail}}",
-    "inQueue": "已加入",
-    "addQueue": "加入",
-    "priority": {
-      "tooltip": "故障转移优先级 {{priority}}"
-    },
-    "tooltip": {
-      "enabled": "{{app}} 故障转移已启用\n按队列优先级（P1→P2→...）选择供应商",
-      "disabled": "启用 {{app}} 故障转移\n将立即切换到队列 P1，并在失败时自动切换到下一个",
-      "takeoverRequired": "请先接管 {{app}}，再启用故障转移"
-    }
-  },
-  "proxy": {
-    "panel": {
-      "serviceAddress": "服务地址",
-      "addressCopied": "地址已复制",
-      "currentProvider": "当前 Provider：",
-      "waitingFirstRequest": "当前 Provider：等待首次请求…",
-      "stoppedTitle": "路由服务已停止",
-      "stoppedDescription": "使用上方开关即可启动服务",
-      "openSettings": "配置路由服务",
-      "stats": {
-        "activeConnections": "活跃连接",
-        "totalRequests": "总请求数",
-        "successRate": "成功率",
-        "uptime": "运行时间"
-      }
-    },
-    "settings": {
-      "title": "路由服务设置",
-      "description": "配置本地路由服务器的监听地址、端口和运行参数，保存后立即生效。",
-      "alert": {
-        "autoApply": "保存后将自动同步到正在运行的路由服务，无需手动重启。"
-      },
-      "basic": {
-        "title": "基础设置",
-        "description": "配置路由服务监听的地址与端口。"
-      },
-      "advanced": {
-        "title": "高级参数",
-        "description": "控制请求的稳定性和日志记录。"
-      },
-      "timeout": {
-        "title": "超时设置",
-        "description": "配置流式和非流式请求的超时时间。"
-      },
-      "fields": {
-        "listenAddress": {
-          "label": "监听地址",
-          "placeholder": "127.0.0.1",
-          "description": "路由服务器监听的 IP 地址（推荐 127.0.0.1）"
-        },
-        "listenPort": {
-          "label": "监听端口",
-          "placeholder": "15721",
-          "description": "路由服务器监听的端口号（1024 ~ 65535）"
-        },
-        "maxRetries": {
-          "label": "最大重试次数",
-          "placeholder": "3",
-          "description": "请求失败时的重试次数（0 ~ 10）"
-        },
-        "requestTimeout": {
-          "label": "请求超时（秒）",
-          "placeholder": "0（不限）或 300",
-          "description": "单个请求的最大等待时间（0 表示不限制，或设置 10 ~ 600 秒）"
-        },
-        "enableLogging": {
-          "label": "记录请求用量",
-          "description": "将路由请求的用量与状态写入本地统计数据库"
-        },
-        "streamingFirstByteTimeout": {
-          "label": "流式首字超时（秒）",
-          "description": "等待首个数据块的最大时间"
-        },
-        "streamingIdleTimeout": {
-          "label": "流式静默超时（秒）",
-          "description": "数据块之间的最大间隔"
-        },
-        "nonStreamingTimeout": {
-          "label": "非流式超时（秒）",
-          "description": "非流式请求的总超时时间"
-        }
-      },
-      "validation": {
-        "addressInvalid": "请输入有效的IP地址",
-        "portMin": "端口必须大于1024",
-        "portMax": "端口必须小于65535",
-        "retryMin": "重试次数不能为负",
-        "retryMax": "重试次数不能超过10",
-        "timeoutNonNegative": "超时时间不能为负数",
-        "timeoutMax": "超时时间最多600秒",
-        "timeoutRange": "请输入 0 或 10-600 之间的数值",
-        "streamingTimeoutMin": "超时时间至少5秒",
-        "streamingTimeoutMax": "超时时间最多300秒"
-      },
-      "actions": {
-        "save": "保存配置"
-      },
-      "toast": {
-        "saved": "路由配置已保存",
-        "saveFailed": "保存失败: {{error}}"
-      },
-      "invalidPort": "端口无效，请输入 1024-65535 之间的数字",
-      "invalidAddress": "地址无效，请输入 IPv4（如 127.0.0.1）、IPv6（如 ::1）或 localhost",
-      "configSaved": "路由配置已保存",
-      "configSaveFailed": "保存配置失败",
-      "restartRequired": "修改地址或端口后需要重启路由服务才能生效"
-    },
-    "switchFailed": "切换失败: {{error}}",
-    "takeover": {
-      "ariaLabel": "{{appLabel}} 本地路由",
-      "hint": "选择要路由的应用，启用后该应用的请求将通过本地路由转发",
-      "enabled": "{{app}} 路由已启用",
-      "disabled": "{{app}} 路由已关闭",
-      "failed": "切换路由状态失败: {{detail}}",
-      "tooltip": {
-        "active": "{{appLabel}} 路由中 - {{address}}:{{port}}\n切换供应商只改路由，直连供应商不变",
-        "broken": "{{appLabel}} 路由中，但路由服务未运行",
-        "inactive": "路由 {{appLabel}} 的请求，让该应用请求走本地路由"
-      }
-    },
-    "stackMode": {
-      "enabled": "{{app}} 已进入聚合模式",
-      "exitedToDirect": "{{apps}} 已退回直连",
-      "ariaLabel": "{{appLabel}} 聚合模式",
-      "failoverUnavailable": "{{appLabel}} 在聚合模式下不做故障转移。队列和设置保留，回到路由模式后恢复",
-      "codexStale": {
-        "title": "Codex 还在用旧的模型列表，聚合的模型不会出现",
-        "daemon": "命令行：重开 codex 不够，要重启后台的守护进程。",
-        "others": "桌面版：要彻底退出再重开（macOS 上按 ⌘Q，只关窗口不行）；编辑器插件要重开编辑器窗口。",
-        "restart": "重启 Codex 守护进程",
-        "confirmTitle": "重启 Codex 守护进程？",
-        "confirmMessage": "所有终端里的 codex 共用这个守护进程，正在运行的任务会被中断。重启之后重新打开 codex，就能看到聚合的模型。",
-        "confirm": "重启",
-        "restarted": "Codex 守护进程已重启，重新打开 codex 就能看到聚合的模型",
-        "notRunning": "Codex 守护进程没在运行，下次打开 codex 时会读到新的模型列表",
-        "failed": "重启 Codex 守护进程失败：{{error}}"
-      }
-    },
-    "failover": {
-      "proxyRequired": "需要先启动路由服务才能配置故障转移",
-      "autoSwitch": "自动故障转移",
-      "autoSwitchDescription": "开启后将立即切换到队列 P1，并在请求失败时自动切换到队列中的下一个供应商"
-    },
-    "failoverQueue": {
-      "title": "故障转移队列",
-      "description": "管理各应用的供应商故障转移顺序",
-      "info": "启用自动故障转移后，将按队列优先级选择供应商（P1 优先）。当请求失败时，系统会按队列顺序依次尝试下一个供应商。",
-      "selectProvider": "选择供应商添加到队列",
-      "noAvailableProviders": "没有可添加的供应商",
-      "empty": "故障转移队列为空。添加供应商以启用自动故障转移。",
-      "orderHint": "队列顺序与首页供应商列表顺序一致，可在首页拖拽调整顺序。",
-      "dragHint": "拖拽供应商可调整故障转移顺序，序号越小优先级越高。",
-      "toggleEnabled": "启用/禁用",
-      "addSuccess": "已添加到故障转移队列",
-      "addFailed": "添加失败",
-      "removeSuccess": "已从故障转移队列移除",
-      "removeFailed": "移除失败",
-      "reorderSuccess": "队列顺序已更新",
-      "reorderFailed": "更新顺序失败",
-      "toggleFailed": "状态更新失败"
-    },
-    "autoFailover": {
-      "info": "当故障转移队列中配置了多个供应商时，系统会在请求失败时按优先级顺序依次尝试。当某个供应商连续失败达到阈值时，熔断器会打开并在一段时间内跳过该供应商。",
-      "configSaved": "自动故障转移配置已保存",
-      "configSaveFailed": "保存失败",
-      "validationFailed": "以下字段超出有效范围: {{fields}}",
-      "retrySettings": "重试与超时设置",
-      "failureThreshold": "失败阈值",
-      "failureThresholdHint": "连续失败多少次后打开熔断器（建议: 3-10）",
-      "timeout": "恢复等待时间（秒）",
-      "timeoutHint": "熔断器打开后，等待多久后尝试恢复（建议: 30-120）",
-      "circuitBreakerSettings": "熔断器设置",
-      "successThreshold": "恢复成功阈值",
-      "successThresholdHint": "半开状态下成功多少次后关闭熔断器",
-      "errorRate": "错误率阈值 (%)",
-      "errorRateHint": "错误率超过此值时打开熔断器",
-      "minRequests": "最小请求数",
-      "minRequestsHint": "计算错误率前的最小请求数",
-      "explanationTitle": "工作原理",
-      "failureThresholdLabel": "失败阈值",
-      "failureThresholdExplain": "连续失败达到此次数时，熔断器打开，该供应商暂时不可用",
-      "timeoutLabel": "恢复等待时间",
-      "timeoutExplain": "熔断器打开后，等待此时间后尝试半开状态",
-      "successThresholdLabel": "恢复成功阈值",
-      "successThresholdExplain": "半开状态下，成功达到此次数时关闭熔断器，供应商恢复可用",
-      "errorRateLabel": "错误率阈值",
-      "errorRateExplain": "错误率超过此值时，即使未达到失败阈值也会打开熔断器",
-      "maxRetries": "最大重试次数",
-      "timeoutSettings": "超时配置",
-      "streamingFirstByte": "流式首字节超时",
-      "streamingIdle": "流式静默超时",
-      "nonStreaming": "非流式超时",
-      "maxRetriesHint": "请求失败时的重试次数（0-10）",
-      "streamingFirstByteHint": "等待首个数据块的最大时间，范围 1-120 秒，默认 60 秒",
-      "streamingIdleHint": "数据块之间的最大间隔，范围 60-600 秒，填 0 禁用（防止中途卡住）",
-      "nonStreamingHint": "非流式请求的总超时时间，范围 60-1200 秒，默认 600 秒（10 分钟）"
-    },
-    "logging": {
-      "enabled": "日志记录已启用",
-      "disabled": "日志记录已关闭",
-      "failed": "切换日志状态失败"
-    },
-    "server": {
-      "started": "路由服务已启动 - {{address}}:{{port}}",
-      "startFailed": "启动路由服务失败: {{detail}}",
-      "stopped": "路由服务已停止",
-      "stopFailed": "停止路由服务失败：{{detail}}"
-    },
-    "stoppedWithRestore": "路由服务已关闭，所有应用已退回直连",
-    "stopWithRestoreFailed": "停止失败: {{detail}}"
-  },
   "streamCheck": {
     "reachable": "{{providerName}} 连通正常 ({{responseTimeMs}}ms)",
     "reachableSlow": "{{providerName}} 连通但较慢 ({{responseTimeMs}}ms)",
     "unreachable": "{{providerName}} 无法连通: {{message}}",
     "unreachableHint": "无法建立连接（DNS / 连接 / TLS / 超时）。请检查 base_url 与网络。",
     "error": "{{providerName}} 检查出错: {{error}}"
-  },
-  "proxyConfig": {
-    "proxyEnabled": "路由总开关",
-    "appTakeover": "路由启用",
-    "perAppConfig": "应用配置",
-    "circuitBreaker": "熔断器配置",
-    "circuitBreakerSettings": "熔断器设置",
-    "failureThreshold": "失败阈值",
-    "successThreshold": "恢复阈值",
-    "recoveryTimeout": "恢复等待时间",
-    "errorRateThreshold": "错误率阈值",
-    "minRequests": "最小请求数",
-    "timeoutConfig": "超时配置",
-    "streamingFirstByte": "流式首字节超时",
-    "streamingIdle": "流式静默超时",
-    "nonStreaming": "非流式超时"
   },
   "universalProvider": {
     "duplicate": "复制",
@@ -3878,8 +3318,7 @@
       "geminiFlash": "Flash",
       "geminiFlashLite": "Lite",
       "monthly": "每月",
-      "credits": "额度",
-      "copilotPremium": "高级请求"
+      "credits": "额度"
     },
     "fiveHour": "5 小时",
     "sevenDay": "每周",
@@ -3893,7 +3332,6 @@
     "weeklyLimit": "每周",
     "monthly": "每月",
     "credits": "额度",
-    "copilotPremium": "高级请求",
     "utilization": "{{value}}%",
     "resetsIn": "{{time}}后重置",
     "extraUsage": "超额用量",
@@ -3919,13 +3357,6 @@
     "appsHasUpdate": "应用 · 有可用更新",
     "settings": "设置",
     "settingsHasUpdate": "设置 · CC Switch 有新版本",
-    "mode": {
-      "route": "路由",
-      "stack": "聚合",
-      "mapping": "映射",
-      "mappingFull": "模型映射"
-    },
-    "needsAttention": "需要处理",
     "back": "返回"
   },
   "appsPage": {
@@ -3942,10 +3373,6 @@
     "columnVersion": "版本",
     "columnVisible": "显示",
     "visibleHelp": "关掉后，这个应用不再出现在侧栏、MCP / Skills 的应用列，以及提示词和会话的应用下拉里。已有的配置不变，照常同步。",
-    "desktopHelp": "Claude Desktop 是桌面应用，不能在这里安装或升级；CC Switch 通过它的配置文件接入。",
-    "desktopUnsupported": "当前系统不支持",
-    "desktopConnected": "已接入",
-    "desktopNotConnected": "未接入",
     "newVersion": "有新版本 {{version}}",
     "notRunnable": "无法运行",
     "otherInstalls": "另有 {{count}} 处安装",
@@ -3976,192 +3403,39 @@
     "webUi": "Web UI",
     "viewUsage": "查看此应用的用量"
   },
-  "mode": {
-    "tabsLabel": "连接模式",
-    "names": {
-      "direct": "直连",
-      "route": "路由",
-      "stack": "聚合"
-    },
-    "active": "生效中",
-    "activeTitle": "{{mode}}生效中",
-    "noProvider": "（未选择）",
-    "failover": "故障转移",
-    "routeSettings": "路由设置",
-    "routeSettingsTitle": "路由设置",
-    "moreRouteSettings": "更多路由设置",
-    "queueMoved": "{{name}} 移到第 {{position}} 位。",
-    "status": {
-      "directLead": "直连生效中 · 直接连接",
-      "routeLead": "路由生效中",
-      "byQueue": "按队列",
-      "stackLead": "聚合生效中 · 默认",
-      "stackValue": "{{name}} · 另有 {{count}} 家共 {{models}} 个模型"
-    },
-    "activate": {
-      "viewing": "你在查看「{{view}}」，{{app}} 目前是{{active}}。",
-      "route": "开始路由",
-      "stack": "切换到聚合模式",
-      "direct": "回到直连"
-    },
-    "notice": {
-      "serviceDown": "{{app}} 处于{{mode}}模式，但路由服务没有运行，请求会失败。",
-      "startService": "启动服务",
-      "backToDirect": "回到直连",
-      "attachFailed": "上次的{{mode}}模式没能接上，{{app}} 已回到直连。"
-    },
-    "toast": {
-      "enteredRoute": "{{app}} 已开始路由 → {{provider}}。",
-      "enteredStack": "{{app}} 已切换到聚合模式。重启 {{app}} 后，聚合的模型出现在 /model 里。",
-      "enteredStackLive": "{{app}} 已切换到聚合模式，聚合的模型已出现在 /model 里。",
-      "exited": "已回到直连：{{app}} 现在直接连接 {{provider}}。",
-      "defaultRemembered": "切换到聚合模式后，默认供应商是 {{provider}}。",
-      "restartHint": "重启 {{app}} 后生效。",
-      "undo": "撤销",
-      "failed": "切换失败：{{detail}}"
-    },
-    "dialog": {
-      "routeTitle": "让 {{app}} 使用路由模式？",
-      "stackTitle": "让 {{app}} 使用聚合模式？",
-      "switchTitle": "把 {{app}} 从「{{from}}」切换到「{{to}}」？",
-      "routeLead": "请求会先经过本机的 CC Switch，再转给你选的供应商。",
-      "stackLead": "默认供应商承接不带前缀的请求。",
-      "routeTo": "路由到",
-      "stackDefault": "默认供应商",
-      "officialOption": "{{name}}（官方）",
-      "stackOfficialNote": "如果你在用官方订阅，请把官方账号设为默认供应商。",
-      "routeNoteFile": "会改写 {{file}} 里的地址和密钥；真实密钥留在 CC Switch 里，其他设置不动。",
-      "routeNoteSwitch": "之后在「路由」页签里换供应商，不再改写配置文件。",
-      "routeNoteKeepRunning": "CC Switch 需要保持运行；退出时自动写回直连，下次启动再接上。",
-      "stackNoteMembers": "另有 {{names}} 共 {{count}} 个模型，会以 ccs- 前缀出现在 /model 里。",
-      "stackNoteEmpty": "还没有添加其他供应商，切换后只有默认供应商；可以之后在「聚合」页签里添加。",
-      "stackNoteNoFailover": "聚合模式不做故障转移；队列和设置会保留，回到路由模式后恢复。",
-      "stackNoteRestartCodex": "需要重启 {{app}} 才能看到聚合的模型；桌面版要彻底退出后重新打开。",
-      "stackToRouteNote": "聚合的模型会从 /model 撤下（名单保留）；已选中的聚合模型需要改回普通模型。",
-      "confirmRoute": "开始路由",
-      "confirmStack": "切换到聚合模式",
-      "needsRouteTitle": "{{provider}} 需要路由",
-      "needsRouteLead": "{{provider}}：{{reason}}。直连切换过去，{{app}} 会无法使用它。",
-      "switchAnyway": "仍然直连切换",
-      "routeAndUse": "开始路由并使用它"
-    },
-    "help": {
-      "title": "连接模式的区别",
-      "direct": "直连：客户端直接连所选那家，切换即改写配置。",
-      "route": "路由：请求先过本机的 CC Switch，可开故障转移。",
-      "stack": "聚合：多家模型同列在 /model，不做故障转移。"
-    }
-  },
   "providerCard": {
     "status": {
       "inUse": "使用中",
-      "routing": "路由中",
-      "currentDefault": "当前默认",
-      "defaultAfterSwitch": "切换后默认",
       "current": "当前",
       "default": "默认"
     },
     "action": {
       "switch": "切换",
-      "routeHere": "路由到此",
-      "backToDirectAndUse": "回到直连并使用",
-      "addToQueue": "加入队列",
-      "removeFromQueue": "移出队列",
       "setDefault": "设为默认",
       "add": "添加",
       "remove": "移除",
       "enable": "启用",
       "disable": "停用",
       "edit": "编辑 {{name}}",
-      "more": "{{name}} 的更多操作",
-      "moveUp": "{{name}} 上移一位",
-      "moveDown": "{{name}} 下移一位"
+      "more": "{{name}} 的更多操作"
     },
     "chip": {
       "official": "官方",
-      "needsRoute": "需要路由",
-      "directWhenDirect": "直连时使用",
-      "default": "默认",
-      "models": "{{count}} 个模型",
-      "noModels": "没有模型",
-      "mapping": "模型映射",
-      "direct": "直连",
       "hermesManaged": "Hermes 托管",
       "defaultModel": "默认模型 {{model}}"
     },
     "reason": {
-      "noRoute": "官方订阅不经过路由，回到直连后可用。",
-      "noStack": "官方订阅不能用于聚合模式。",
-      "officialStack": "官方账号只能做默认，不能加入聚合。",
-      "defaultWhileRouting": "正在路由时，默认就是路由到的那家；切换到聚合模式时可以另选。",
-      "needsRoute": "需要路由：{{reason}}，不能直连。",
       "defaultCannotRemove": "默认那家不能移除，先把别家设为默认。",
       "currentCannotRemove": "正在用的这家不能移除，先启用别家。",
-      "inUseCannotDelete": "正在用的这家不能删除，先切到别家。",
-      "noFailover": "官方账号不进故障转移队列：它用客户端自己的登录，不能和别家轮换。"
+      "inUseCannotDelete": "正在用的这家不能删除，先切到别家。"
     },
     "section": {
-      "queue": "队列 · 按优先级（{{count}}）",
-      "queueHelpTitle": "故障转移队列",
-      "queueHelp": "请求先发给第一位；它连续失败时自动换到下一位。用上移、下移或拖动调整顺序。",
-      "queueEmpty": "队列是空的，从下面加入供应商。",
-      "notInQueue": "不在队列（{{count}}）",
-      "stackDefault": "默认供应商",
-      "stackDefaultAfterSwitch": "切换到聚合模式后的默认供应商",
-      "stackDefaultHelp": "不带前缀的请求都发给它；其他已添加的供应商以 ccs- 前缀出现在 /model 里。",
-      "stackEmpty": "还没有添加其他供应商。",
       "added": "已添加 · {{count}}",
       "addedHelpTitle": "已添加",
       "addedHelp": "已添加的供应商会同时写进 {{app}} 的配置，在 {{app}} 里选模型即可。",
       "addedEmpty": "还没有添加供应商。",
-      "available": "可添加 · {{count}}",
-      "stackNoDefault": "还没有默认供应商；切换到聚合模式时选一家。"
+      "available": "可添加 · {{count}}"
     }
-  },
-  "desktopAccess": {
-    "current": "当前：{{name}} · {{mode}}",
-    "noCurrent": "还没有选择供应商",
-    "helpTitle": "接入方式",
-    "help": "Claude Desktop 的接入方式按供应商设置：直连的供应商直接写进 Desktop 的配置；模型映射的供应商经路由服务转发，模型映射在用时路由服务自动保持运行。",
-    "service": "路由服务",
-    "running": "运行中",
-    "notRunning": "路由服务没能启动",
-    "changePort": "更改端口",
-    "notNeeded": "路由服务：当前供应商不需要"
-  },
-  "routingSettings": {
-    "service": "服务",
-    "serviceName": "路由服务",
-    "serviceHelp": "路由模式和聚合模式下，请求先经过本机的路由服务再转给供应商。进入这两种模式、或 Claude Desktop 用模型映射时会自动启动。",
-    "runningFor": "运行中 · 已运行 {{uptime}}",
-    "uptimeHours": "{{hours}} 小时 {{minutes}} 分",
-    "uptimeMinutes": "{{minutes}} 分钟",
-    "stopped": "已停止",
-    "totalRequests": "总请求数",
-    "successRate": "成功率",
-    "activeConnections": "活跃连接",
-    "start": "启动",
-    "stop": "停止",
-    "stopBlocked": "还有应用在用路由服务，先让它们回到直连。",
-    "listen": "监听地址与端口",
-    "address": "监听地址",
-    "addressHint": "推荐 127.0.0.1",
-    "port": "监听端口",
-    "saveAndRestart": "保存并重启服务",
-    "logging": "记录请求用量",
-    "loggingHelp": "关闭后，用量统计里没有经路由的请求明细。",
-    "usingApps": "正在使用路由的应用 · {{count}}",
-    "noApps": "没有应用在用路由。在应用页的「路由」或「聚合」页签里进入。",
-    "routeDetail": "路由到 {{name}}",
-    "stackDetail": "默认 {{name}}",
-    "desktopMode": "模型映射 · 自动保持运行",
-    "desktopDetail": "当前供应商 {{name}}",
-    "goTo": "前往",
-    "exitAll": "全部回到直连",
-    "exitAllTitle": "让所有应用回到直连？",
-    "exitAllMessage": "在路由和聚合模式下的应用都会写回直连配置，然后停止路由服务。路由目标、队列和聚合名单会保留。",
-    "exitAllConfirm": "全部回到直连",
-    "failoverHelp": "这里调各应用的超时、重试和熔断。队列在各应用页的「路由」页签里管理。"
   },
   "quota": {
     "tierShort": "{{label}} {{value}}%",
@@ -4231,7 +3505,7 @@
     "noun": "MCP",
     "listSeparator": "、",
     "helpTitle": "MCP 怎么同步",
-    "help": "以这里为准：写进你勾选的应用的配置文件，切换供应商时按这里重写。Claude Desktop、OpenClaw 不支持，所以表格里没有这两列；Pi 需要 1.0 及以上，且不支持 SSE。",
+    "help": "以这里为准：写进你勾选的应用的配置文件，切换供应商时按这里重写。OpenClaw 不支持，所以表格里没有这一列；Pi 需要 1.0 及以上，且不支持 SSE。",
     "importFromApps": "从应用导入",
     "add": "添加 MCP",
     "moreActions": "MCP 的更多操作",
@@ -4391,7 +3665,7 @@
   "skillsPage": {
     "noun": "Skill",
     "helpTitle": "Skills 怎么同步",
-    "help": "主副本放在 CC Switch 的目录里，再同步到你勾选的应用。Claude Desktop、OpenClaw 不支持 Skills，所以表格里没有这两列。",
+    "help": "主副本放在 CC Switch 的目录里，再同步到你勾选的应用。OpenClaw 不支持 Skills，所以表格里没有这一列。",
     "add": "添加 Skill",
     "addMenu": {
       "discover": "在发现里浏览",
@@ -4579,29 +3853,20 @@
     "helpTitle": "授权中心是什么",
     "group": {
       "helpTitle": "{{service}} 账号怎么用",
-      "copilotHelp": "用于 Claude Code、Claude Desktop 的 GitHub Copilot 预设。没指定账号的供应商用「默认」账号。",
-      "chatgptHelp": "用于 Claude Code、Claude Desktop 的 ChatGPT 预设，以及 Codex 官方登录绑定。没指定账号的供应商用「默认」账号。",
-      "xaiHelp": "用于 Claude Code、Claude Desktop、Codex 的 xAI 预设。没指定账号的供应商用「默认」账号。"
+      "chatgptHelp": "Codex 官方卡可以绑定这里的账号，切换时把账号的登录写进 Codex。"
     },
     "addAccount": "添加账号",
     "groupMenu": "{{service}} 的更多操作",
     "accountMenu": "{{login}} 的更多操作",
     "removeAll": "删除全部账号",
     "removeAccount": "删除账号",
-    "setDefault": "设为默认",
     "reauth": "重新登录",
     "busyHint": "先完成或取消正在进行的登录",
-    "default": "默认",
     "needsReauth": "需要重新登录",
     "empty": "还没有登录 {{service}} 账号。",
     "signedInOn": "{{date}}登录",
-    "enterpriseServer": "Enterprise Server",
-    "enterpriseDomain": "企业域名",
-    "enterpriseDomainRequired": "先填企业域名，例如 company.ghe.com",
     "codexReauthNote": "缺少登录凭据（id_token），不能用于 Codex 托管绑定",
-    "xaiReauthNote": "登录凭据已失效，用到它的供应商无法使用",
     "statusLoading": "正在加载账号…",
-    "xaiStatusLoadFailed": "无法加载 xAI 账号状态，请重试。",
     "retry": "重试",
     "loginFailed": "登录没有完成",
     "pending": {

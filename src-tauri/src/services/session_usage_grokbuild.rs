@@ -1,8 +1,7 @@
 //! Grok Build (Grok CLI) 会话用量追踪
 //!
 //! 从 `~/.grok/{sessions,archived_sessions}/<enc-cwd>/<session-id>/updates.jsonl`
-//! 的 `turn_completed` 事件中提取用量，写入 proxy_request_logs，实现官方
-//! OAuth 直连态（无代理数据）下的用量统计。
+//! 的 `turn_completed` 事件中提取用量，写入 proxy_request_logs。
 //!
 //! ## 数据流
 //! ```text
@@ -34,8 +33,6 @@
 
 use crate::database::{lock_conn, Database};
 use crate::error::AppError;
-use crate::proxy::usage::calculator::CostCalculator;
-use crate::proxy::usage::parser::TokenUsage;
 use crate::services::session_usage::{
     metadata_modified_nanos, update_sync_state, SessionSyncResult,
 };
@@ -43,6 +40,8 @@ use crate::services::sql_helpers::INPUT_TOKEN_SEMANTICS_TOTAL;
 use crate::services::usage_stats::{
     find_model_pricing, has_recent_grokbuild_proxy_activity, SESSION_PROXY_DEDUP_WINDOW_SECONDS,
 };
+use crate::token_usage::calculator::CostCalculator;
+use crate::token_usage::parser::TokenUsage;
 use rust_decimal::Decimal;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -424,7 +423,6 @@ fn insert_grok_session_entry(
         cache_read_tokens: clamp(turn.cached),
         cache_creation_tokens: 0,
         model: Some(model.to_string()),
-        message_id: None,
     };
 
     let pricing = find_model_pricing(&conn, model);

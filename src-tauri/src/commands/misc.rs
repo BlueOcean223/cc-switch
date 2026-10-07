@@ -1028,15 +1028,6 @@ fn probe_local_version(
     }
 }
 
-/// 本机实际安装的工具版本（和「关于」页探测的是同一个）；拿不到为 `None`。
-pub(crate) fn local_tool_version(tool: &str) -> Option<String> {
-    let (_, wsl_distro) = tool_env_type_and_wsl_distro(tool);
-    match probe_local_version(tool, wsl_distro.as_deref(), None, None) {
-        ShellProbe::Found(version) => Some(version),
-        _ => None,
-    }
-}
-
 async fn get_single_tool_version_impl(
     tool: &str,
     wsl_shell: Option<&str>,
@@ -1051,7 +1042,7 @@ async fn get_single_tool_version_impl(
     let (env_type, wsl_distro) = tool_env_type_and_wsl_distro(tool);
 
     // 使用全局 HTTP 客户端（已包含代理配置）
-    let client = crate::proxy::http_client::get();
+    let client = crate::http_client::get();
 
     // 1. 获取本地版本
     let probe = probe_local_version(tool, wsl_distro.as_deref(), wsl_shell, wsl_shell_flag);
@@ -4399,7 +4390,7 @@ fn extract_env_vars_from_config(
 
         // 处理 base_url: 根据应用类型添加对应的环境变量
         let base_url_key = match app_type {
-            AppType::Claude | AppType::ClaudeDesktop => Some("ANTHROPIC_BASE_URL"),
+            AppType::Claude => Some("ANTHROPIC_BASE_URL"),
             AppType::Gemini => Some("GOOGLE_GEMINI_BASE_URL"),
             _ => None,
         };

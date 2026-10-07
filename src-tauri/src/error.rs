@@ -59,10 +59,6 @@ pub enum AppError {
     Database(String),
     #[error("OMO 配置文件不存在")]
     OmoConfigNotFound,
-    #[error("所有供应商已熔断，无可用渠道")]
-    AllProvidersCircuitOpen,
-    #[error("未配置供应商")]
-    NoProvidersConfigured,
 }
 
 impl AppError {

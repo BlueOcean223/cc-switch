@@ -4,8 +4,8 @@
 //!   换成这个供应商的，其余部分是 live 原样。Key 显示在 API Key 输入框里（行的 `auth`），
 //!   不在 TOML 里重复。
 //! - 保存：关键字段、独有字段写回这个供应商的行（行里其余内容原样保留）；其余部分的改动
-//!   是 Codex 的全局设置，经引擎写进 live，只改用户动过的键。编辑的是直连模式下的当前
-//!   供应商时，关键字段和独有字段在同一次写入里也换进 live。
+//!   是 Codex 的全局设置，经引擎写进 live，只改用户动过的键。编辑的是当前供应商时，关键
+//!   字段和独有字段在同一次写入里也换进 live。
 //! - 三方比较：每个改动都带着打开编辑器时的原值，live 里这个键已经被别的程序改成了第三个
 //!   值就算冲突，由用户选保留哪一边。
 //!
@@ -20,6 +20,7 @@ use toml_edit::{DocumentMut, Item};
 
 use crate::app_config::AppType;
 use crate::codex_config::get_codex_config_path;
+use crate::codex_oauth_auth::CodexOAuthManager;
 use crate::database::Database;
 use crate::error::AppError;
 use crate::live::engine::{read_current, LiveFile};
@@ -31,7 +32,6 @@ use crate::live::project::codex::{
 use crate::mode::operation::{AppWrite, FileChange};
 use crate::mode::state::{op, PendingTarget};
 use crate::provider::Provider;
-use crate::proxy::providers::codex_oauth_auth::CodexOAuthManager;
 use crate::store::AppState;
 
 use super::claude_editor::{ConflictPolicy, EditorView, InactiveField};
@@ -174,19 +174,14 @@ fn with_pending_key(settings: &Value) -> Option<Value> {
 /// 还没填：行里的 `requires_openai_auth = true`（或顶层 `openai_base_url`）会被切换的
 /// 安全闸拒绝。显示不该拒：Key 本来就不在 TOML 里显示，填没填显示都一样。只对这一个错误
 /// 按占位 Key 再投影一次；再投影也不行就报原来的错。安全闸留在写 live 的地方（切换、编辑
-/// 当前供应商、重写代理契约），它们用的都是真实的行。
+/// 当前供应商），它们用的都是真实的行。
 fn plan_for_view(
     db: &Database,
     owner: &Owner<'_>,
     provider: &Provider,
 ) -> Result<codex_direct::Planned, AppError> {
     let plan = |provider: &Provider| {
-        codex_direct::plan(
-            db,
-            owner,
-            &Target::Direct(Some(provider)),
-            &Prepared::default(),
-        )
+        codex_direct::plan(db, owner, &Target(Some(provider)), &Prepared::default())
     };
     let error = match plan(provider) {
         Err(error) if is_keyless_fallback(&error) => error,
@@ -201,8 +196,8 @@ fn plan_for_view(
 }
 
 /// 保存时拆行用的投影。没填 Key 的行照样能存（和不经编辑器的新增一样，表单会先确认一次）：
-/// 存行不写 live。行要进 live 时（编辑直连的当前供应商、新增第一个供应商、它是代理路由那
-/// 家）写入按真实的行再投影一次，安全闸在那里拦，行跟着撤回。
+/// 存行不写 live。行要进 live 时（编辑当前供应商、新增第一个供应商）写入按真实的行再投影
+/// 一次，安全闸在那里拦，行跟着撤回。
 fn project_for_save(input: &RowInput<'_>) -> Result<CodexProjection, AppError> {
     let error = match CodexProjection::of(input) {
         Err(error) if is_keyless_fallback(&error) => error,
@@ -214,7 +209,6 @@ fn project_for_save(input: &RowInput<'_>) -> Result<CodexProjection, AppError> {
     let mut projection = CodexProjection::of(&RowInput {
         settings: &settings,
         official: input.official,
-        proxy_injected_oauth: input.proxy_injected_oauth,
     })
     .map_err(|_| error)?;
     if let Route::Custom { table, .. } = &mut projection.route {
@@ -243,28 +237,20 @@ pub(crate) struct CodexEditorPlan {
     pub edits: TomlEdits,
 }
 
-/// live 现在归谁：接上代理时是契约，否则是直连指针那家。
+/// live 现在归谁：当前指针那家。
 struct LiveOwner {
-    mode: crate::mode::state::ModeState,
-    direct: Option<Provider>,
+    current: Option<Provider>,
 }
 
 impl LiveOwner {
     fn read(state: &AppState) -> Result<Self, AppError> {
         Ok(Self {
-            mode: crate::mode::current::mode_state(&AppType::Codex),
-            direct: crate::mode::current::direct_provider(&state.db, &AppType::Codex)?,
+            current: crate::mode::current::provider(&state.db, &AppType::Codex)?,
         })
     }
 
     fn owner(&self) -> Owner<'_> {
-        match (&self.mode.contract, self.mode.attached) {
-            (Some(contract), true) => Owner::Contract {
-                contract,
-                route: None,
-            },
-            _ => self.direct.as_ref().map_or(Owner::None, Owner::Provider),
-        }
+        self.current.as_ref().map_or(Owner::None, Owner::Provider)
     }
 }
 
@@ -330,7 +316,6 @@ pub(crate) fn plan_save(
     base: &Value,
     origin: &Origin,
     official: bool,
-    proxy_injected_oauth: bool,
     on_conflict: ConflictPolicy,
 ) -> Result<CodexEditorPlan, AppError> {
     let edited_doc = parse_text(config_text(edited), "edited")?;
@@ -338,7 +323,6 @@ pub(crate) fn plan_save(
     let mut projection = project_for_save(&RowInput {
         settings: edited,
         official,
-        proxy_injected_oauth,
     })?;
 
     let rendered = |doc: &DocumentMut, key: &str| doc.get(key).map(render);
@@ -462,7 +446,7 @@ fn store_into_row(
 pub(crate) enum KeyFields<'a> {
     /// 只写全局改动。
     None,
-    /// 直连模式下编辑当前供应商：`prev` 是编辑前的行，`set_pointer` 为新增第一个供应商。
+    /// 编辑当前供应商：`prev` 是编辑前的行，`set_pointer` 为新增第一个供应商。
     Direct {
         prev: Option<&'a Provider>,
         target: &'a Provider,
@@ -484,7 +468,7 @@ pub(crate) fn write_live(
             set_pointer,
         } => {
             let owner = prev.map_or(Owner::None, Owner::Provider);
-            let spec = Target::Direct(Some(target));
+            let spec = Target(Some(target));
             let prepared = codex_direct::prepare(manager, &owner, &spec)?;
             let planned = codex_direct::plan(db, &owner, &spec, &prepared)?;
             codex_direct::run_with_edits(
@@ -581,7 +565,6 @@ mod tests {
             &edited,
             &edited,
             &Origin::row(&stored).unwrap(),
-            false,
             false,
             ConflictPolicy::Refuse,
         )

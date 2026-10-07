@@ -16,7 +16,7 @@
 /// style provider not added here) shows up loudly as a too-low cache hit
 /// rate, which is easier to catch than the silent over-deduction that
 /// would happen with the opposite default.
-/// 单一语义集（SSOT）：写入侧（proxy logger/calculator）、回填侧
+/// 单一语义集（SSOT）：写入侧（token_usage calculator）、回填侧
 /// （usage_stats 成本重算）与展示侧（本文件的 SQL 归一）都必须引用这里，
 /// 防止同一语义散落多处后新增 app 时漏改（grokbuild 曾在回填侧漏掉）。
 /// 前端 `src/types/usage.ts` 的同名常量是跨语言的对应物，改动须同步。

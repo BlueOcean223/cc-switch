@@ -511,12 +511,8 @@ requires_openai_auth = true
     );
 }
 
-#[tokio::test(flavor = "current_thread")]
-#[allow(
-    clippy::await_holding_lock,
-    reason = "this integration-style test must serialize global test HOME and settings mutations across async takeover calls"
-)]
-async fn codex_official_to_deepseek_then_takeover_enters_and_restores_proxy_managed_live_config() {
+#[test]
+fn codex_official_to_deepseek_keeps_the_oauth_login_and_writes_the_endpoint() {
     let _guard = test_mutex().lock().unwrap_or_else(|e| e.into_inner());
     reset_test_fs();
     enable_codex_official_auth_preservation();
@@ -585,14 +581,6 @@ wire_api = "responses"
 
     let state = create_test_state_with_config(&initial_config).expect("create test state");
 
-    let mut proxy_config = state.db.get_proxy_config().await.expect("get proxy config");
-    proxy_config.listen_port = 0;
-    state
-        .db
-        .update_proxy_config(proxy_config)
-        .await
-        .expect("use ephemeral proxy port");
-
     ProviderService::switch(&state, AppType::Codex, "deepseek-provider")
         .expect("switch from official subscription to DeepSeek");
 
@@ -607,66 +595,11 @@ wire_api = "responses"
         std::fs::read_to_string(cc_switch_lib::get_codex_config_path()).expect("read config");
     assert!(
         config_after_switch.contains("https://api.deepseek.com/v1"),
-        "normal switch should write the DeepSeek endpoint before takeover"
+        "normal switch should write the DeepSeek endpoint"
     );
     assert!(
         config_after_switch.contains("deepseek-key"),
         "normal switch should inject the DeepSeek key into config.toml"
-    );
-
-    cc_switch_lib::mode::controller::enter(&state, &AppType::Codex, false)
-        .await
-        .expect("enter Codex routing mode");
-    let proxy_status = state
-        .proxy_service
-        .get_status()
-        .await
-        .expect("read proxy status after takeover");
-    let codex_proxy_base_url = format!("http://127.0.0.1:{}/v1", proxy_status.port);
-
-    let auth_after_takeover: serde_json::Value =
-        read_json_file(&cc_switch_lib::get_codex_auth_path()).expect("read auth after takeover");
-    assert_eq!(
-        auth_after_takeover, oauth_auth,
-        "enabling takeover must not rewrite Codex OAuth auth.json"
-    );
-
-    let config_after_takeover =
-        std::fs::read_to_string(cc_switch_lib::get_codex_config_path()).expect("read config");
-    assert!(
-        config_after_takeover.contains(&codex_proxy_base_url),
-        "enabling takeover should point Codex config.toml at the local proxy"
-    );
-    assert!(
-        config_after_takeover.contains("PROXY_MANAGED"),
-        "enabling takeover should move the proxy placeholder into config.toml"
-    );
-    assert!(
-        !config_after_takeover.contains("https://api.deepseek.com/v1"),
-        "takeover live config should not keep the upstream DeepSeek endpoint"
-    );
-
-    cc_switch_lib::mode::controller::exit(&state, &AppType::Codex)
-        .await
-        .expect("leave Codex routing mode");
-
-    let restored_auth: serde_json::Value =
-        read_json_file(&cc_switch_lib::get_codex_auth_path()).expect("read restored auth");
-    assert_eq!(
-        restored_auth, oauth_auth,
-        "disabling takeover should restore without replacing OAuth auth.json"
-    );
-
-    let restored_config = std::fs::read_to_string(cc_switch_lib::get_codex_config_path())
-        .expect("read restored config");
-    assert!(
-        restored_config.contains("https://api.deepseek.com/v1")
-            && restored_config.contains("deepseek-key"),
-        "disabling takeover should restore the selected DeepSeek live config"
-    );
-    assert!(
-        !restored_config.contains("PROXY_MANAGED"),
-        "restored live config must not keep the proxy placeholder"
     );
 }
 
@@ -1893,87 +1826,6 @@ requires_openai_auth = true
 }
 
 #[test]
-fn sync_current_provider_for_app_leaves_the_proxy_contract_alone() {
-    let _guard = test_mutex().lock().unwrap_or_else(|e| e.into_inner());
-    reset_test_fs();
-    let _home = ensure_test_home();
-
-    let mut config = MultiAppConfig::default();
-    {
-        let manager = config
-            .get_manager_mut(&AppType::Claude)
-            .expect("claude manager");
-        manager.current = "current-provider".to_string();
-
-        let mut provider = Provider::with_id(
-            "current-provider".to_string(),
-            "Current".to_string(),
-            json!({
-                "env": {
-                    "ANTHROPIC_AUTH_TOKEN": "real-token",
-                    "ANTHROPIC_BASE_URL": "https://claude.example"
-                }
-            }),
-            None,
-        );
-        provider.meta = Some(ProviderMeta {
-            common_config_enabled: Some(true),
-            ..Default::default()
-        });
-
-        manager
-            .providers
-            .insert("current-provider".to_string(), provider);
-    }
-
-    let state = create_test_state_with_config(&config).expect("create test state");
-    state
-        .db
-        .set_config_snippet(
-            AppType::Claude.as_str(),
-            Some(r#"{ "includeCoAuthoredBy": false }"#.to_string()),
-        )
-        .expect("set common config snippet");
-
-    let settings_path = get_claude_settings_path();
-    std::fs::create_dir_all(settings_path.parent().expect("settings dir")).expect("create dir");
-    std::fs::write(
-        &settings_path,
-        r#"{"env":{"ANTHROPIC_BASE_URL":"https://claude.example","ANTHROPIC_AUTH_TOKEN":"real-token"}}"#,
-    )
-    .expect("seed live settings");
-
-    let rt = tokio::runtime::Runtime::new().expect("create tokio runtime");
-    rt.block_on(async {
-        let mut proxy_config = state.db.get_proxy_config().await.expect("get proxy config");
-        proxy_config.listen_port = 0;
-        state
-            .db
-            .update_proxy_config(proxy_config)
-            .await
-            .expect("use ephemeral proxy port");
-        cc_switch_lib::mode::controller::enter(&state, &AppType::Claude, false)
-            .await
-            .expect("enter routing mode");
-    });
-    let contract_bytes = std::fs::read(&settings_path).expect("read proxy contract");
-
-    ProviderService::sync_current_provider_for_app(&state, AppType::Claude)
-        .expect("sync current provider should succeed");
-
-    assert_eq!(
-        std::fs::read(&settings_path).expect("read live settings after sync"),
-        contract_bytes,
-        "routing mode: syncing the routed provider must not rewrite live with its direct projection"
-    );
-    rt.block_on(cc_switch_lib::mode::controller::exit(
-        &state,
-        &AppType::Claude,
-    ))
-    .expect("leave routing mode");
-}
-
-#[test]
 fn switch_codex_in_direct_mode_replaces_leftover_proxy_placeholders() {
     let _guard = test_mutex().lock().unwrap_or_else(|e| e.into_inner());
     reset_test_fs();
@@ -2052,7 +1904,6 @@ wire_api = "responses"
     }
 
     let state = create_test_state_with_config(&config).expect("create test state");
-    assert!(!cc_switch_lib::mode::current::is_proxy(&AppType::Codex));
 
     ProviderService::switch(&state, AppType::Codex, "new-provider")
         .expect("switch in direct mode writes the new provider");
@@ -2925,65 +2776,6 @@ fn provider_service_delete_current_provider_returns_error() {
         ),
         other => panic!("expected Config/Message error, got {other:?}"),
     }
-}
-
-#[test]
-fn recover_from_crash_without_backup_cleans_placeholder_instead_of_writing_it_back() {
-    let _guard = test_mutex().lock().unwrap_or_else(|e| e.into_inner());
-    reset_test_fs();
-    let _home = ensure_test_home();
-
-    // 接管态 Claude Live，且 DB 中无备份（模拟切换 app_config_dir 后新库首启的场景）
-    let taken_over_live = json!({
-        "env": {
-            "ANTHROPIC_BASE_URL": "http://127.0.0.1:15721",
-            "ANTHROPIC_AUTH_TOKEN": "PROXY_MANAGED"
-        }
-    });
-    let settings_path = get_claude_settings_path();
-    std::fs::create_dir_all(settings_path.parent().expect("settings dir")).expect("create dir");
-    std::fs::write(
-        &settings_path,
-        serde_json::to_string_pretty(&taken_over_live).expect("serialize taken over live"),
-    )
-    .expect("write taken over live");
-
-    let state = create_test_state().expect("create test state");
-
-    // 模拟历史异常：接管态 Live 已被导入成 current provider（SSOT 被污染）
-    let provider = Provider::with_id(
-        "default".to_string(),
-        "default".to_string(),
-        taken_over_live.clone(),
-        None,
-    );
-    state
-        .db
-        .save_provider(AppType::Claude.as_str(), &provider)
-        .expect("save placeholder provider");
-    state
-        .db
-        .set_current_provider(AppType::Claude.as_str(), "default")
-        .expect("set current provider");
-
-    // 启动时处理旧版遗留的接管态：没开代理（enabled=0），写回直连。
-    futures::executor::block_on(cc_switch_lib::mode::controller::startup(&state));
-
-    let live_after: serde_json::Value =
-        read_json_file(&settings_path).expect("read live settings after recovery");
-    let env = live_after.get("env").cloned().unwrap_or_else(|| json!({}));
-    assert_ne!(
-        env.get("ANTHROPIC_AUTH_TOKEN").and_then(|v| v.as_str()),
-        Some("PROXY_MANAGED"),
-        "recovery must not write the placeholder back to live"
-    );
-    assert!(
-        env.get("ANTHROPIC_BASE_URL")
-            .and_then(|v| v.as_str())
-            .map(|url| !url.starts_with("http://127.0.0.1"))
-            .unwrap_or(true),
-        "recovery must drop the local proxy base URL"
-    );
 }
 
 /// 切换写出的 live 文件里有 Key（Codex 的 auth.json 与 config.toml、Claude Code 的

@@ -1992,7 +1992,7 @@ function AppMenuButton({
       >
         {apps.map((app) => (
           <DropdownMenuItem key={app} onSelect={() => onPick(app)}>
-            <AppGlyph app={app} size={16} badgeClassName="bg-surface" />
+            <AppGlyph app={app} size={16} />
             {APP_DISPLAY_NAME[app]}
           </DropdownMenuItem>
         ))}

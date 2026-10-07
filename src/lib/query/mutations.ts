@@ -13,7 +13,6 @@ import {
 import { generateUUID } from "@/utils/uuid";
 import { openclawKeys } from "@/hooks/useOpenClaw";
 import { invalidateHermesProviderCaches } from "@/hooks/useHermes";
-import { proxyKeys } from "@/lib/query/proxy";
 import { usageKeys } from "@/lib/query/usage";
 import { sessionKeys } from "@/lib/query/sessions";
 import { invalidatePiProviderCaches } from "@/lib/query/pi";
@@ -28,7 +27,6 @@ export const useAddProviderMutation = (appId: AppId) => {
       providerInput: Omit<Provider, "id"> & {
         providerKey?: string;
         addToLive?: boolean;
-        ensureClaudeDesktopOfficialSeed?: boolean;
         ensureGrokBuildOfficialSeed?: boolean;
         editorSave?: ProviderEditorSave;
       },
@@ -36,21 +34,10 @@ export const useAddProviderMutation = (appId: AppId) => {
       const {
         providerKey: _providerKey,
         addToLive,
-        ensureClaudeDesktopOfficialSeed,
         ensureGrokBuildOfficialSeed,
         editorSave,
         ...rest
       } = providerInput;
-
-      if (appId === "claude-desktop" && ensureClaudeDesktopOfficialSeed) {
-        await providersApi.ensureClaudeDesktopOfficialProvider();
-        const providers = await providersApi.getAll(appId);
-        const officialProvider = providers["claude-desktop-official"];
-        if (!officialProvider) {
-          throw new Error("Claude Desktop official provider was not created");
-        }
-        return officialProvider;
-      }
 
       if (appId === "grokbuild" && ensureGrokBuildOfficialSeed) {
         await providersApi.ensureGrokBuildOfficialProvider();
@@ -321,12 +308,6 @@ export const useSwitchProviderMutation = (appId: AppId) => {
     },
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ["providers", appId] });
-      if (appId === "claude-desktop") {
-        await queryClient.invalidateQueries({ queryKey: proxyKeys.status });
-        await queryClient.invalidateQueries({
-          queryKey: ["claudeDesktopStatus"],
-        });
-      }
 
       // OpenCode/OpenClaw: also invalidate live provider IDs cache to update button state
       if (appId === "opencode") {

@@ -905,7 +905,7 @@ function InstallToPopover({
                       if (next.length) onChange(next);
                     }}
                   />
-                  <AppGlyph app={app} size={16} badgeClassName="bg-surface" />
+                  <AppGlyph app={app} size={16} />
                   <span className="truncate">{APP_DISPLAY_NAME[app]}</span>
                 </label>
               );

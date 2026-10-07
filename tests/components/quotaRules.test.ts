@@ -61,10 +61,10 @@ describe("quota lines", () => {
     expect(
       tierLine(
         t,
-        { name: "premium", utilization: 100, resetsAt: null },
-        "高级请求",
+        { name: "monthly", utilization: 100, resetsAt: null },
+        "每月",
       ),
-    ).toMatchObject({ text: "高级请求已用完", tone: "danger" });
+    ).toMatchObject({ text: "每月已用完", tone: "danger" });
     // 档名以字母结尾时隔一个空格
     expect(
       tierLine(

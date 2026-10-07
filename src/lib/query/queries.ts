@@ -39,10 +39,6 @@ export interface ProvidersQueryData {
   currentProviderId: string;
 }
 
-export interface UseProvidersQueryOptions {
-  isProxyRunning?: boolean; // 代理服务是否运行中
-}
-
 /**
  * 供应商列表的查询键与读取函数。App 启动后用它把其他应用的列表预取进缓存，
  * 第一次切过去时直接有数据，不用先画骨架。
@@ -76,18 +72,10 @@ export const providersQueryOptions = (appId: AppId) => ({
 
 export const useProvidersQuery = (
   appId: AppId,
-  options?: UseProvidersQueryOptions,
 ): UseQueryResult<ProvidersQueryData> => {
-  const { isProxyRunning = false } = options || {};
-
   // 不设 keepPreviousData：键只随应用变化，占位数据就是上一个应用的列表，
   // 切应用时会先闪一下别家的卡片
-  return useQuery({
-    ...providersQueryOptions(appId),
-    // 当代理服务运行时，每 10 秒刷新一次供应商列表
-    // 这样可以自动反映后端熔断器自动禁用代理目标的变更
-    refetchInterval: isProxyRunning ? 10000 : false,
-  });
+  return useQuery(providersQueryOptions(appId));
 };
 
 export const useSettingsQuery = (): UseQueryResult<Settings> => {

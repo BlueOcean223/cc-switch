@@ -110,13 +110,7 @@ export function SessionDeleteDialog({
               return (
                 <li key={app} className="flex items-start gap-2.5 text-caption">
                   <span className="flex h-[18px] w-4 shrink-0 items-center">
-                    {isSessionAppId(app) && (
-                      <AppGlyph
-                        app={app}
-                        size={14}
-                        badgeClassName="bg-subtle"
-                      />
-                    )}
+                    {isSessionAppId(app) && <AppGlyph app={app} size={14} />}
                   </span>
                   <span>
                     <span className="font-semibold text-fg-1">
@@ -193,8 +187,7 @@ export function SessionSourcesDialog({
             </DialogTitle>
             <DialogDescription className="text-body text-fg-2">
               {t("sessionManager.whereLead", {
-                defaultValue:
-                  "CC Switch 从这些位置读取会话。Claude Desktop 没有单独的会话记录。",
+                defaultValue: "CC Switch 从这些位置读取会话。",
               })}
             </DialogDescription>
           </div>
@@ -202,7 +195,7 @@ export function SessionSourcesDialog({
             {SESSION_APP_IDS.map((app) => (
               <li key={app} className="flex items-start gap-2.5 text-body">
                 <span className="flex h-5 w-4 shrink-0 items-center">
-                  <AppGlyph app={app} size={14} badgeClassName="bg-surface" />
+                  <AppGlyph app={app} size={14} />
                 </span>
                 <span className="w-[104px] shrink-0 font-medium text-fg-1">
                   {APP_DISPLAY_NAME[app]}

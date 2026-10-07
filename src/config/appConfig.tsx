@@ -18,7 +18,6 @@ export interface AppConfig {
 
 export const APP_IDS: AppId[] = [
   "claude",
-  "claude-desktop",
   "codex",
   "gemini",
   "grokbuild",
@@ -31,7 +30,6 @@ export const APP_IDS: AppId[] = [
 
 export const DEFAULT_VISIBLE_APPS: VisibleApps = {
   claude: true,
-  "claude-desktop": true,
   codex: true,
   gemini: true,
   grokbuild: true,
@@ -53,32 +51,6 @@ export const SKILLS_APP_IDS: AppId[] = [
   "pi",
   "mcode",
 ];
-
-export type ProxyAppId = Extract<
-  AppId,
-  "claude" | "codex" | "gemini" | "grokbuild"
->;
-
-/** Apps with a complete local gateway + failover data plane. */
-export const PROXY_APP_IDS: ProxyAppId[] = [
-  "claude",
-  "codex",
-  "gemini",
-  "grokbuild",
-];
-
-export function isProxyAppId(appId: string): appId is ProxyAppId {
-  return (PROXY_APP_IDS as string[]).includes(appId);
-}
-
-/** 支持 Stack 模式的应用（后端 `mode::stack::supports_stack` 的镜像）。 */
-export type StackAppId = Extract<ProxyAppId, "claude" | "codex">;
-
-export const STACK_APP_IDS: StackAppId[] = ["claude", "codex"];
-
-export function isStackAppId(appId: string): appId is StackAppId {
-  return (STACK_APP_IDS as string[]).includes(appId);
-}
 
 export type AdditiveAppId = Extract<
   AppId,
@@ -112,8 +84,8 @@ export function usesEditorView(appId: AppId): boolean {
   return EDITOR_VIEW_APP_IDS.includes(appId);
 }
 
-/** Claude Desktop、OpenClaw 不由 CC Switch 管理 MCP；Pi 1.0 起内置 MCP（`~/.pi/agent/mcp.json`） */
-export type McpAppId = Exclude<AppId, "claude-desktop" | "openclaw">;
+/** OpenClaw 不由 CC Switch 管理 MCP；Pi 1.0 起内置 MCP（`~/.pi/agent/mcp.json`） */
+export type McpAppId = Exclude<AppId, "openclaw">;
 export const MCP_APP_IDS: McpAppId[] = [
   "claude",
   "codex",
@@ -137,14 +109,6 @@ export const APP_ICON_MAP: Record<AppId, AppConfig> = {
       "bg-orange-500/10 ring-1 ring-orange-500/20 hover:bg-orange-500/20 text-orange-600 dark:text-orange-400",
     badgeClass:
       "bg-orange-500/10 text-orange-700 dark:text-orange-300 hover:bg-orange-500/20 border-0 gap-1.5",
-  },
-  "claude-desktop": {
-    label: "Claude Desktop",
-    icon: <ClaudeIcon size={14} />,
-    activeClass:
-      "bg-amber-500/10 ring-1 ring-amber-500/20 hover:bg-amber-500/20 text-amber-700 dark:text-amber-300",
-    badgeClass:
-      "bg-amber-500/10 text-amber-700 dark:text-amber-300 hover:bg-amber-500/20 border-0 gap-1.5",
   },
   codex: {
     label: "Codex",
@@ -231,7 +195,3 @@ export const APP_ICON_MAP: Record<AppId, AppConfig> = {
       "bg-fuchsia-500/10 text-fuchsia-700 dark:text-fuchsia-300 hover:bg-fuchsia-500/20 border-0 gap-1.5",
   },
 };
-
-export function getAppLabel(appId: string): string {
-  return APP_ICON_MAP[appId as AppId]?.label ?? appId;
-}

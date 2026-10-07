@@ -218,7 +218,7 @@ The six scenarios below are the situations where users most easily believe "sess
 |---|---|---|---|
 | **A** Didn't check migration | Old official sessions not in the unified list | All present, still carry the `openai` tag | Re-enable and check migration, or turn off the switch |
 | **B** Cross-provider resume fails | Can't resume / errors out | Files intact, the ciphertext just can't be decrypted across backends | Resume on the original provider; to only read content, read the jsonl directly |
-| **C** Routing takeover / injection refused | No migration and no restore | Migration was safely skipped, files untouched | Exit takeover -> restart and retry; or just turn off the switch |
+| **C** Injection refused | No migration and no restore | Migration was safely skipped, files untouched | Clean up the conflicting route -> restart and retry; or just turn off the switch |
 | **D** New sessions didn't return to official after restore | New sessions from the unified period aren't on the official side | They're in the `custom` drawer, untouched by design | Switch to a third-party provider to see them |
 | **E** Toast "no restorable backup" | Restore "failed" | Usually nothing was ever migrated, sessions are in the original drawer | Turn off the switch and the official sessions reappear automatically |
 | **F** Toast "switch was re-enabled, restore skipped" | Restore refused | Prevents a torn data state, nothing was changed | Fully turn off the switch first, then restore |
@@ -250,16 +250,14 @@ The six scenarios below are the situations where users most easily believe "sess
 
 **Symptom**: you enabled the switch and checked migration, but the old official sessions neither entered the unified list nor could be restored when you turned the switch off (or the restore checkbox didn't even appear in the disable dialog, see scenario E). You suspect migration lost the sessions during the process.
 
-**The truth**: migration **never ran**, so it couldn't have lost anything—not a single character of your sessions was changed. CC Switch has a safety gate before migration: it checks whether Codex's live config (`~/.codex/config.toml`) is **actually** routed to the shared `custom` drawer right now, and only migrates if the routing truly went there. The following two situations are judged "not yet unified" (internal reason code `live_not_unified`), so CC Switch **deliberately skips the migration, preserves your switch and migration intent, and migrates later once the conditions are met**:
+**The truth**: migration **never ran**, so it couldn't have lost anything—not a single character of your sessions was changed. CC Switch has a safety gate before migration: it checks whether Codex's live config (`~/.codex/config.toml`) is **actually** routed to the shared `custom` drawer right now, and only migrates if the routing truly went there. The following situation is judged "not yet unified" (internal reason code `live_not_unified`), so CC Switch **deliberately skips the migration, preserves your switch and migration intent, and migrates later once the conditions are met**:
 
-- **During routing takeover**: CC Switch's local routing has taken over the live config, and the live config during takeover doesn't carry the unified routing marker.
 - **Injection refused**: your `config.toml` already has a manually specified `model_provider`, or there's already a differently-shaped `[model_providers.custom]` table (possibly with a third-party address). To avoid incorrectly routing official traffic to a third-party backend, CC Switch would rather not inject and not migrate.
 
 Skipping migration = touching no session files. **No migration means nothing moved, so there's nothing to lose.** This is "safe deferral," not "failure with data loss."
 
 **What to do**:
-- Exit routing takeover -> **restart CC Switch**: on startup it automatically retries migration (your migration intent is preserved the whole time).
-- Check `~/.codex/config.toml`: if there's a conflicting route you wrote by hand, clean up the conflict before enabling the switch.
+- Check `~/.codex/config.toml`: if there's a conflicting route you wrote by hand, clean up the conflict, then **restart CC Switch**: on startup it automatically retries migration (your migration intent is preserved the whole time).
 - If you'd rather not bother: just turn off the switch, the official sessions still display normally on the `openai` drawer, completely intact.
 
 ### Scenario D: You turned off the switch and restored, but "the new sessions chatted during the unified period" didn't return to official -> you think "the new sessions are gone"
@@ -459,7 +457,6 @@ The reasoning ciphertext inside a session can only be decrypted by the backend t
 ## References
 
 - [Keep Codex Remote Control and Official Plugins While Using Third-Party APIs: CC Switch Setup Guide](./codex-official-auth-preservation-guide-en.md)
-- [Using Chat-Format APIs in Codex: Local Routing Guide](./codex-deepseek-routing-guide-en.md)
 - The "Codex App Enhancements" section in the CC Switch user manual
 
 ---

@@ -24,7 +24,6 @@ interface CodexAuthSectionProps {
   onChange: (value: string) => void;
   onBlur?: () => void;
   error?: string;
-  isProxyTakeover?: boolean;
 }
 
 /**
@@ -35,7 +34,6 @@ export const CodexAuthSection: React.FC<CodexAuthSectionProps> = ({
   onChange,
   onBlur,
   error,
-  isProxyTakeover = false,
 }) => {
   const { t } = useTranslation();
   const [isDarkMode, setIsDarkMode] = useState(false);
@@ -84,13 +82,7 @@ export const CodexAuthSection: React.FC<CodexAuthSectionProps> = ({
       {error && <p className="text-xs text-danger-text">{error}</p>}
 
       {!error && (
-        <p className="text-xs text-fg-2">
-          {t(
-            isProxyTakeover
-              ? "codexConfig.authJsonStorageHint"
-              : "codexConfig.authJsonHint",
-          )}
-        </p>
+        <p className="text-xs text-fg-2">{t("codexConfig.authJsonHint")}</p>
       )}
     </div>
   );
@@ -102,7 +94,6 @@ interface CodexConfigSectionProps {
   providerName?: string;
   showRemoteCompaction?: boolean;
   configError?: string;
-  isProxyTakeover?: boolean;
   /** 行里保存着、但不随切换生效的全局设置（值是可以照抄的 TOML）。 */
   inactiveFields?: ProviderEditorInactiveField[];
 }
@@ -116,7 +107,6 @@ export const CodexConfigSection: React.FC<CodexConfigSectionProps> = ({
   providerName,
   showRemoteCompaction = true,
   configError,
-  isProxyTakeover = false,
   inactiveFields = [],
 }) => {
   const { t } = useTranslation();
@@ -329,13 +319,7 @@ export const CodexConfigSection: React.FC<CodexConfigSectionProps> = ({
       {configError && <p className="text-xs text-danger-text">{configError}</p>}
 
       {!configError && (
-        <p className="text-xs text-fg-2">
-          {t(
-            isProxyTakeover
-              ? "codexConfig.configTomlStorageHint"
-              : "codexConfig.configTomlHint",
-          )}
-        </p>
+        <p className="text-xs text-fg-2">{t("codexConfig.configTomlHint")}</p>
       )}
     </div>
   );

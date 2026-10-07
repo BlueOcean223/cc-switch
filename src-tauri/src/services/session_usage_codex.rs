@@ -16,8 +16,6 @@
 use crate::codex_config::get_codex_config_dir;
 use crate::database::{lock_conn, Database};
 use crate::error::AppError;
-use crate::proxy::usage::calculator::{CostCalculator, ModelPricing};
-use crate::proxy::usage::parser::TokenUsage;
 use crate::services::session_usage::{
     estimated_latency_ms, metadata_modified_nanos, parse_timestamp_millis, update_sync_state,
     update_sync_state_on_conn, SessionSyncResult,
@@ -25,6 +23,8 @@ use crate::services::session_usage::{
 use crate::services::usage_stats::{
     find_model_pricing, has_suspected_codex_session_duplicate, should_skip_session_insert, DedupKey,
 };
+use crate::token_usage::calculator::{CostCalculator, ModelPricing};
+use crate::token_usage::parser::TokenUsage;
 use chrono::{DateTime, Utc};
 use rust_decimal::Decimal;
 use std::collections::HashMap;
@@ -1751,7 +1751,6 @@ fn insert_codex_session_entry_on_conn(
         cache_read_tokens: delta.cached_input,
         cache_creation_tokens: 0,
         model: Some(model.to_string()),
-        message_id: None,
     };
 
     let pricing = pricing_cache

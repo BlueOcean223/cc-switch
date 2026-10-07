@@ -17,13 +17,8 @@ use crate::live::patch::KeyPath;
 
 /// Google 登录（官方卡）。
 pub const SELECTED_TYPE_OAUTH: &str = "oauth-personal";
-/// API Key（第三方和代理）。
+/// API Key（第三方）。
 pub const SELECTED_TYPE_API_KEY: &str = "gemini-api-key";
-
-/// 代理契约里指向本地代理的两个变量。
-pub const BASE_URL_ENV: &str = "GOOGLE_GEMINI_BASE_URL";
-pub const API_KEY_ENV: &str = "GEMINI_API_KEY";
-const MODEL_ENV: &str = "GEMINI_MODEL";
 
 /// 一个供应商在 Gemini CLI 两个文件里拥有的键。
 #[derive(Debug, Clone, PartialEq)]
@@ -73,27 +68,6 @@ impl GeminiProjection {
             env: Vec::new(),
             selected_type: None,
             model_name: None,
-        }
-    }
-
-    /// 代理契约：本地代理地址、占位 Key 和 API Key 认证，加上路由供应商的模型名。
-    ///
-    /// 路由的其他关键字段（Vertex 选择器、项目、Key 的传法、自定义头）不写：客户端只和
-    /// 本地代理说话，上游由代理按路由供应商连接。模型名跟着路由走：换一家模型名不同的
-    /// 路由，客户端要跟着改（和 Claude Code 的契约一致）。
-    pub fn proxy_contract(route: &Self, proxy_base_url: &str, placeholder: &str) -> Self {
-        let mut env: Vec<(String, String)> = route
-            .env
-            .iter()
-            .filter(|(key, _)| key == MODEL_ENV)
-            .cloned()
-            .collect();
-        env.push((BASE_URL_ENV.to_string(), proxy_base_url.to_string()));
-        env.push((API_KEY_ENV.to_string(), placeholder.to_string()));
-        Self {
-            env,
-            selected_type: Some(SELECTED_TYPE_API_KEY),
-            model_name: route.model_name.clone(),
         }
     }
 
@@ -214,29 +188,5 @@ mod tests {
                 "mcpServers": {"x": {"command": "y"}},
             })
         );
-    }
-
-    #[test]
-    fn proxy_contract_points_the_route_at_the_local_proxy() {
-        let route = GeminiProjection::of(
-            &json!({"env": {
-                "GOOGLE_GEMINI_BASE_URL": "https://b.example",
-                "GEMINI_API_KEY": "real",
-                "GEMINI_API_KEY_AUTH_MECHANISM": "bearer",
-                "GEMINI_MODEL": "m",
-            }}),
-            false,
-        );
-        let contract =
-            GeminiProjection::proxy_contract(&route, "http://127.0.0.1:15721", "PROXY_MANAGED");
-        assert_eq!(
-            contract.env,
-            vec![
-                ("GEMINI_MODEL".into(), "m".into()),
-                (BASE_URL_ENV.into(), "http://127.0.0.1:15721".into()),
-                (API_KEY_ENV.into(), "PROXY_MANAGED".into()),
-            ]
-        );
-        assert_eq!(contract.selected_type, Some(SELECTED_TYPE_API_KEY));
     }
 }

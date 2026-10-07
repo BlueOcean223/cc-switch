@@ -279,7 +279,6 @@ describe("SessionManagerPage", () => {
     setSettings({
       visibleApps: {
         claude: true,
-        "claude-desktop": true,
         codex: true,
         gemini: false,
         grokbuild: false,
@@ -303,15 +302,6 @@ describe("SessionManagerPage", () => {
     expect(within(menu).getAllByRole("menuitemradio")[0]).toHaveTextContent(
       "全部应用4",
     );
-  });
-
-  it("shows the Claude Desktop note when coming from Claude Desktop", async () => {
-    renderPage("claude", { fromApp: "claude-desktop" });
-    expect(
-      await screen.findByText(
-        "Claude Desktop 没有单独的会话记录，这里显示 Claude Code 的会话。",
-      ),
-    ).toBeInTheDocument();
   });
 
   it("filters by search and offers to clear an empty search", async () => {

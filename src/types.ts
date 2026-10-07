@@ -26,8 +26,6 @@ export interface Provider {
   // 图标配置
   icon?: string; // 图标名称（如 "openai", "anthropic"）
   iconColor?: string; // 图标颜色（Hex 格式，如 "#00A67E"）
-  // 是否加入故障转移队列
-  inFailoverQueue?: boolean;
 }
 
 export interface AppConfig {
@@ -119,68 +117,12 @@ export interface AuthBinding {
   accountId?: string;
 }
 
-export interface ClaudeDesktopModelRoute {
-  model: string;
-  labelOverride?: string;
-  supports1m?: boolean;
-}
-
-export type CodexChatThinkingParam =
-  | "none"
-  | "thinking"
-  | "enable_thinking"
-  | "reasoning_split";
-
-export type CodexChatEffortParam =
-  | "none"
-  | "reasoning_effort"
-  // OpenRouter 原生归一化对象 reasoning:{effort}（区别于顶层 OpenAI 别名 reasoning_effort）
-  | "reasoning.effort";
-
-export type CodexChatEffortValueMode =
-  | "passthrough"
-  | "low_high"
-  | "deepseek"
-  // OpenRouter effort 枚举 xhigh|high|medium|low|minimal（无 max，max 钳到 xhigh）
-  | "openrouter"
-  // OpenCode Zen 网关：合法档位逐模型，见 modelCatalog 各条目 reasoningLevels
-  // （镜像 models.dev）；代理转换层按请求模型查表钳制，无表不发 effort 字段
-  | "zen";
-
-export type CodexChatReasoningOutputFormat =
-  | "auto"
-  | "reasoning_content"
-  | "reasoning"
-  | "reasoning_details"
-  | "think_tags";
-
-export interface CodexChatReasoning {
-  supportsThinking?: boolean;
-  supportsEffort?: boolean;
-  thinkingParam?: CodexChatThinkingParam;
-  effortParam?: CodexChatEffortParam;
-  effortValueMode?: CodexChatEffortValueMode;
-  // 声明性字段：标注上游 reasoning 回传位置。当前提取靠穷举字段，未读取此值（think_tags 尚未接线）。
-  outputFormat?: CodexChatReasoningOutputFormat;
-}
-
-export type PromptCacheRoutingMode = "auto" | "enabled" | "disabled";
-
-export interface LocalProxyRequestOverrides {
-  headers?: Record<string, string>;
-  body?: Record<string, unknown>;
-}
-
 // 供应商元数据（字段名与后端一致，保持 snake_case）
 export interface ProviderMeta {
   // 自定义端点：以 URL 为键，值为端点信息
   custom_endpoints?: Record<string, CustomEndpoint>;
   // 是否在切换/同步到 live 时应用通用配置片段
   commonConfigEnabled?: boolean;
-  // Claude Desktop 3P 配置写入模式
-  claudeDesktopMode?: "direct" | "proxy";
-  // Claude Desktop 本地路由模式：Claude-safe route -> upstream model
-  claudeDesktopModelRoutes?: Record<string, ClaudeDesktopModelRoute>;
   // 用量查询脚本配置
   usage_script?: UsageScript;
   // 请求地址管理：测速后自动选择最佳端点
@@ -189,63 +131,19 @@ export interface ProviderMeta {
   isPartner?: boolean;
   // 合作伙伴促销 key（后端靠 "google-official" 识别 Google 官方 Gemini）
   partnerPromotionKey?: string;
-  // API 格式（Claude / Codex 供应商使用）
-  // - "anthropic": 原生 Anthropic Messages API 格式，直接透传
-  // - "openai_chat": OpenAI Chat Completions 格式，需要格式转换
-  // - "openai_responses": OpenAI Responses API 格式，需要格式转换
-  // - "gemini_native": Gemini Native generateContent API 格式，需要格式转换
-  apiFormat?:
-    | "anthropic"
-    | "openai_chat"
-    | "openai_responses"
-    | "gemini_native";
+  // Codex：决定写进模型目录的工具形态，新存的第三方供应商一律是 "openai_responses"
+  //（去掉 Codex 的 freeform 自定义工具）。旧数据里可能还留着别的值。
+  apiFormat?: string;
   // 通用认证绑定
   authBinding?: AuthBinding;
   // Claude 认证字段名
   apiKeyField?: ClaudeApiKeyField;
-  // 是否将 base_url 视为完整 API 端点（代理直接使用此 URL，不拼接路径）
-  isFullUrl?: boolean;
-  // Prompt cache key for OpenAI Responses-compatible endpoints (improves cache hit rate)
-  promptCacheKey?: string;
-  // Session-based prompt-cache routing for Codex Responses -> Chat conversions.
-  // auto enables only for known-compatible upstreams; enabled/disabled are user overrides.
-  promptCacheRouting?: PromptCacheRoutingMode;
-  // Codex OAuth FAST mode: injects service_tier="priority" on ChatGPT Codex requests
-  codexFastMode?: boolean;
-  // Codex Responses -> Chat Completions reasoning capability metadata
-  codexChatReasoning?: CodexChatReasoning;
-  // Codex → Anthropic path: emulate the Claude Code client (disabled by default; only an explicit true enables it)
-  impersonateClaudeCode?: boolean;
-  // Codex → Anthropic path: override the Anthropic max_tokens (output ceiling).
-  // Codex does not forward model_max_output_tokens in the request body; without
-  // this the path falls back to a conservative 8192 default, which can truncate
-  // long/thinking-heavy responses. When set (>0) it takes precedence over the
-  // request value and the default.
-  maxOutputTokens?: number;
-  // Custom User-Agent for local proxy routing. Only applied by the local proxy.
-  customUserAgent?: string;
-  // Local proxy request overrides. Only applied by the local proxy after route transforms.
-  localProxyRequestOverrides?: LocalProxyRequestOverrides;
   // Whether this provider is currently projected into an additive app's live config.
   liveConfigManaged?: boolean;
   // Source format is needed for package-less OpenCode built-in overrides.
   opencodeConfigFormat?: "v1" | "v2";
-  // 供应商类型（用于识别 Copilot 等特殊供应商）
+  // 供应商类型（用于识别特殊供应商）
   providerType?: string;
-  // GitHub Copilot 关联账号 ID（旧字段，保留兼容读取）
-  githubAccountId?: string;
-  // Stack 模式下这家 Claude Code 供应商发布的模型；没有时按模型映射发布，空列表什么都不发布
-  stackModels?: ClaudeStackModel[];
-}
-
-// Stack 模式下 Claude Code 供应商发布的一个模型
-export interface ClaudeStackModel {
-  // 发往上游的模型名（不带 1M 标记）
-  model: string;
-  // 选择器里的显示名，没有时用模型名
-  displayName?: string;
-  // 上游是 1M 窗口
-  oneM?: boolean;
 }
 
 // Skill 同步方式
@@ -253,23 +151,6 @@ export type SkillSyncMethod = "auto" | "symlink" | "copy";
 
 // Skill 存储位置
 export type SkillStorageLocation = "cc_switch" | "unified";
-
-// Claude API 格式类型
-// - "anthropic": 原生 Anthropic Messages API 格式，直接透传
-// - "openai_chat": OpenAI Chat Completions 格式，需要格式转换
-// - "openai_responses": OpenAI Responses API 格式，需要格式转换
-// - "gemini_native": Gemini Native generateContent API 格式，需要格式转换
-export type ClaudeApiFormat =
-  | "anthropic"
-  | "openai_chat"
-  | "openai_responses"
-  | "gemini_native";
-
-// Codex API 格式类型
-// - "openai_responses": OpenAI Responses API 格式，直接透传
-// - "openai_chat": OpenAI Chat Completions 格式，需要本地路由转换
-// - "anthropic": native Anthropic Messages format, needs local routing to convert to Responses
-export type CodexApiFormat = "openai_responses" | "openai_chat" | "anthropic";
 
 export interface CodexCatalogModel {
   model: string;
@@ -300,7 +181,6 @@ export type ClaudeApiKeyField = "ANTHROPIC_AUTH_TOKEN" | "ANTHROPIC_API_KEY";
 // 主页面显示的应用配置
 export interface VisibleApps {
   claude: boolean;
-  "claude-desktop": boolean;
   codex: boolean;
   gemini: boolean;
   grokbuild: boolean;
@@ -381,19 +261,11 @@ export interface Settings {
   launchOnStartup?: boolean;
   // 静默启动（程序启动时不显示主窗口）
   silentStartup?: boolean;
-  // 是否启用主页面本地代理功能（默认关闭）
-  enableLocalProxy?: boolean;
-  // 是否在主页面显示 Stack 模式开关（默认关闭）。和 enableLocalProxy 二选一，只影响 Claude Code、Codex
-  enableStackMode?: boolean;
-  // User has confirmed the local proxy first-run notice
-  proxyConfirmed?: boolean;
   // User has confirmed the usage query first-run notice
   usageConfirmed?: boolean;
   usageDashboardRefreshIntervalMs?: number;
-  // 会话用量自动扫描开关（默认开启=自动模式；关闭后仅手动同步时扫描会话日志，代理记账不受影响）
+  // 会话用量自动扫描开关（默认开启=自动模式；关闭后仅手动同步时扫描会话日志）
   sessionAutoSyncEnabled?: boolean;
-  // Whether to show the failover toggle independently on the main page
-  enableFailoverToggle?: boolean;
   // Whether to show the project profile switcher on the main page header
   showProfileSwitcher?: boolean;
   // 启动时检查已安装的命令行应用有没有新版本（默认关）
@@ -405,8 +277,6 @@ export interface Settings {
   unifyCodexSessionHistory?: boolean;
   // User opted in (enable dialog checkbox) to migrate existing official sessions
   unifyCodexMigrateExisting?: boolean;
-  // User has confirmed the failover toggle first-run notice
-  failoverConfirmed?: boolean;
   // User has confirmed the first-run welcome notice
   firstRunNoticeConfirmed?: boolean;
   // User has confirmed the one-time "new layout" dialog shown to upgrading users
@@ -444,8 +314,6 @@ export interface Settings {
   // ===== 当前供应商 ID（设备级）=====
   // 当前 Claude 供应商 ID（优先于数据库 is_current）
   currentProviderClaude?: string;
-  // 当前 Claude Desktop 供应商 ID（优先于数据库 is_current）
-  currentProviderClaudeDesktop?: string;
   // 当前 Codex 供应商 ID（优先于数据库 is_current）
   currentProviderCodex?: string;
   // 当前 Gemini 供应商 ID（优先于数据库 is_current）
@@ -726,7 +594,6 @@ export interface McpServerSpec {
 export interface McpApps {
   mcode?: boolean;
   claude: boolean;
-  "claude-desktop"?: boolean;
   codex: boolean;
   gemini: boolean;
   grokbuild?: boolean;

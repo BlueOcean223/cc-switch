@@ -88,30 +88,17 @@ vi.mock("@/components/providers/forms/hooks", async (importOriginal) => {
     await importOriginal<typeof import("@/components/providers/forms/hooks")>();
   return {
     ...actual,
-    useCopilotAuth: () => ({
-      isAuthenticated: false,
-      isStatusSuccess: true,
-      isStatusError: false,
-      accounts: [],
-    }),
     useCodexOauth: () => ({
       isAuthenticated: true,
       isStatusSuccess: true,
       isStatusError: false,
-      defaultAccountId: "acct-managed",
       accounts: [
         {
           id: "acct-managed",
           login: "user@example.com",
-          is_default: true,
           reauth_required: authState.codexReauthRequired,
-          requires_reauth: false,
         },
       ],
-    }),
-    useXaiOauth: () => ({
-      isAuthenticated: false,
-      accounts: [],
     }),
   };
 });
@@ -135,26 +122,6 @@ function renderCodexForm(onSubmit: (values: ProviderFormValues) => void) {
         submitLabel="save-provider"
         onSubmit={onSubmit}
         onCancel={vi.fn()}
-      />
-    </QueryClientProvider>,
-  );
-}
-
-function renderClaudeCodexForm(onSubmit: (values: ProviderFormValues) => void) {
-  const queryClient = createTestQueryClient();
-  return render(
-    <QueryClientProvider client={queryClient}>
-      <ProviderForm
-        appId="claude"
-        submitLabel="save-provider"
-        onSubmit={onSubmit}
-        onCancel={vi.fn()}
-        initialData={{
-          name: "Claude via Codex OAuth",
-          category: "third_party",
-          settingsConfig: { env: {} },
-          meta: { providerType: "codex_oauth" },
-        }}
       />
     </QueryClientProvider>,
   );
@@ -472,21 +439,6 @@ describe("ProviderForm Codex Official managed account", () => {
     fireEvent.click(
       await screen.findByRole("button", { name: "select-managed-account" }),
     );
-    fireEvent.click(screen.getByRole("button", { name: "save-provider" }));
-
-    await waitFor(() =>
-      expect(toastMocks.error).toHaveBeenCalledWith(
-        "已绑定账号不存在或需要重新登录",
-      ),
-    );
-    expect(onSubmit).not.toHaveBeenCalled();
-  });
-
-  it("blocks the reauth-required default account when no account is selected", async () => {
-    authState.codexReauthRequired = true;
-    const onSubmit = vi.fn();
-    renderClaudeCodexForm(onSubmit);
-
     fireEvent.click(screen.getByRole("button", { name: "save-provider" }));
 
     await waitFor(() =>

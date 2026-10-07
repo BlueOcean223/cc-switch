@@ -19,14 +19,6 @@ pub(crate) fn validate_prompt_content(app: &AppType, content: &str) -> Result<()
 
 /// 返回指定应用所使用的提示词文件路径。
 pub fn prompt_file_path(app: &AppType) -> Result<PathBuf, AppError> {
-    if matches!(app, AppType::ClaudeDesktop) {
-        return Err(AppError::localized(
-            "app.prompts_unsupported",
-            "当前应用暂不支持 Prompts",
-            "This app does not support Prompts",
-        ));
-    }
-
     let base_dir: PathBuf = match app {
         AppType::Claude => get_base_dir_with_fallback(get_claude_settings_path(), ".claude")?,
         AppType::Codex => get_base_dir_with_fallback(get_codex_auth_path(), ".codex")?,
@@ -37,7 +29,6 @@ pub fn prompt_file_path(app: &AppType) -> Result<PathBuf, AppError> {
         AppType::Hermes => crate::hermes_config::get_hermes_dir(),
         AppType::Pi => crate::pi_config::get_pi_agent_dir()?,
         AppType::Mcode => crate::mcode_config::data_dir(),
-        AppType::ClaudeDesktop => unreachable!("handled above"),
     };
 
     let filename = match app {
@@ -47,7 +38,6 @@ pub fn prompt_file_path(app: &AppType) -> Result<PathBuf, AppError> {
         AppType::GrokBuild | AppType::OpenCode | AppType::OpenClaw => "AGENTS.md",
         AppType::Hermes => "SOUL.md",
         AppType::Pi | AppType::Mcode => "AGENTS.md",
-        AppType::ClaudeDesktop => unreachable!("handled above"),
     };
 
     Ok(base_dir.join(filename))

@@ -95,7 +95,7 @@ impl Database {
             // These applications intentionally have no MCP flag in the SSOT.
             AppType::Mcode => Some("enabled_mcode"),
             AppType::Pi => Some("enabled_pi"),
-            AppType::ClaudeDesktop | AppType::OpenClaw => None,
+            AppType::OpenClaw => None,
         };
 
         if let Some(column) = column {
@@ -263,13 +263,11 @@ mod tests {
         let original = test_server();
         db.save_mcp_server(&original).expect("seed server");
 
-        for app in [AppType::ClaudeDesktop, AppType::OpenClaw] {
-            let returned = db
-                .update_mcp_server_app_enabled("shared-server", &app, true)
-                .expect("toggle unsupported app")
-                .expect("server exists");
-            assert_eq!(returned.apps, original.apps);
-        }
+        let returned = db
+            .update_mcp_server_app_enabled("shared-server", &AppType::OpenClaw, true)
+            .expect("toggle unsupported app")
+            .expect("server exists");
+        assert_eq!(returned.apps, original.apps);
     }
 
     #[test]

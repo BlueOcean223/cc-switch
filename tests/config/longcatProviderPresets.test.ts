@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-import { claudeDesktopProviderPresets } from "@/config/claudeDesktopProviderPresets";
 import { providerPresets } from "@/config/claudeProviderPresets";
 import { codexProviderPresets } from "@/config/codexProviderPresets";
 import { hermesProviderPresets } from "@/config/hermesProviderPresets";
@@ -39,22 +38,6 @@ describe("Longcat provider presets", () => {
       ANTHROPIC_DEFAULT_OPUS_MODEL: LONGCAT_MODEL,
       CLAUDE_CODE_MAX_OUTPUT_TOKENS: "131072",
     });
-  });
-
-  it("uses the official LongCat 2.0 model for Claude Desktop routes", () => {
-    const preset = findLongcatPreset(claudeDesktopProviderPresets);
-
-    expect(
-      preset.modelRoutes?.map((route) => ({
-        upstreamModel: route.upstreamModel,
-        labelOverride: route.labelOverride,
-      })),
-    ).toEqual([
-      {
-        upstreamModel: LONGCAT_MODEL,
-        labelOverride: LONGCAT_MODEL,
-      },
-    ]);
   });
 
   it("uses the official LongCat 2.0 model for Hermes", () => {
@@ -134,7 +117,6 @@ describe("Longcat provider presets", () => {
   it("does not keep retired or preview Longcat model names", () => {
     const longcatPresets = [
       findLongcatPreset(providerPresets),
-      findLongcatPreset(claudeDesktopProviderPresets),
       findLongcatPreset(hermesProviderPresets),
       findLongcatPreset(opencodeProviderPresets),
       findLongcatPreset(openclawProviderPresets),

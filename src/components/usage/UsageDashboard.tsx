@@ -140,8 +140,6 @@ interface UsageDashboardProps {
   ) => Promise<boolean> | boolean | void;
   /** 从应用页「查看此应用的用量」进入时带上的应用筛选 */
   initialAppType?: AppTypeFilter;
-  /** 「数据来源」里的「修改记录请求用量」：打开设置 → 本地路由 */
-  onOpenRoutingSettings?: () => void;
 }
 
 /**
@@ -153,7 +151,6 @@ export function UsageDashboard({
   sessionAutoSyncEnabled = true,
   onSessionAutoSyncEnabledChange,
   initialAppType = "all",
-  onOpenRoutingSettings,
 }: UsageDashboardProps = {}) {
   const { t, i18n } = useTranslation();
   const queryClient = useQueryClient();
@@ -506,11 +503,7 @@ export function UsageDashboard({
               )}
               onClick={() => changeAppType(app)}
             >
-              <AppGlyph
-                app={app}
-                size={16}
-                badgeClassName={appType === app ? "bg-surface" : "bg-subtle"}
-              />
+              <AppGlyph app={app} size={16} />
             </button>
           </HoverTip>
         ))}
@@ -839,7 +832,6 @@ export function UsageDashboard({
         syncedLabel={drawerSyncedLabel}
         syncing={syncingSession}
         onSyncNow={() => void runManualSessionSync()}
-        onOpenRoutingSettings={onOpenRoutingSettings}
         rebuildingCodex={rebuildingCodex}
         onRebuildCodex={() => setShowRebuildConfirm(true)}
       />

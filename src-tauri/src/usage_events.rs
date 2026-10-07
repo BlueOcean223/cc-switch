@@ -1,6 +1,6 @@
 //! 使用统计实时刷新事件模块
 //!
-//! 当 `proxy_request_logs` 表写入新数据时（代理日志、会话同步、归档等），
+//! 当 `proxy_request_logs` 表写入新数据时（会话同步、归档等），
 //! 通过本模块向前端 emit `usage-log-recorded` 事件，让 UsageDashboard
 //! 立刻 invalidate 查询缓存而无需等待轮询周期。
 //!

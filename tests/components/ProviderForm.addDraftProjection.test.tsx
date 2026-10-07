@@ -146,7 +146,7 @@ describe("新增对话框的草稿投影", () => {
     );
 
     const preset = codexProviderPresets.find(
-      (item) => item.category !== "official" && item.name === "Nvidia",
+      (item) => item.category !== "official" && item.name === "OpenRouter",
     )!;
     let seen = bases.length;
     clickPreset(preset.name);
@@ -159,7 +159,7 @@ describe("新增对话框的草稿投影", () => {
     seen = bases.length;
     clickPreset("providerPreset.custom");
     base = await nextBase(bases, seen);
-    expect(String(base!.config)).not.toContain("nvidia");
+    expect(String(base!.config)).not.toContain("openrouter");
     await waitFor(() =>
       expect(editorTexts()).toContain(String(base!.config)),
     );

@@ -301,13 +301,6 @@ pub(crate) fn has_pending(app: &str) -> bool {
         .is_some()
 }
 
-/// 这个应用上一次操作留下的 pending 是否已经开始发布：`Some(true)` 表示下次操作或启动时
-/// 会前滚补完，`Some(false)` 表示会被丢弃，`None` 表示没有 pending。操作返回错误后用来
-/// 判断是「什么都没改」还是「已部分写入、待补完」。
-pub(crate) fn pending_published(store: &DeviceStore, app: &str) -> Result<Option<bool>, AppError> {
-    Ok(state::pending(store, app)?.map(|pending| pending.published))
-}
-
 /// 读指针、模式或「live 现在归谁」之前调用：先补完这个应用上一次没做完的操作，读到的
 /// 才是落定过的状态。调用方不能持有这个应用的写锁（不可重入）；要拿代理切换锁时先拿它。
 pub fn settle(db: &Database, app: &str) -> Result<Option<RecoveryOutcome>, AppError> {
@@ -404,10 +397,9 @@ pub fn recover_all(
 
 /// 落定目标状态。必须可以重复执行（崩溃恢复可能再跑一次）。
 ///
-/// - 直连指针：设备本地的 `current_provider_*` 和 DB 的 `is_current`，和现有切换用的是
+/// - 指针：设备本地的 `current_provider_*` 和 DB 的 `is_current`，和现有切换用的是
 ///   同一套机制；
-/// - 模式状态：写进 `live-state.json`，另把 `proxy_config.enabled` 镜像成
-///   「mode == proxy」。旧版只认这一列来决定启动时是否接管，降级后才能照常工作。
+/// - 写入记录：写进 `live-state.json`。
 pub fn commit_target(
     db: &crate::database::Database,
     store: &DeviceStore,
@@ -419,38 +411,12 @@ pub fn commit_target(
         crate::settings::set_current_provider(&app_type, Some(id))?;
         db.set_current_provider(app, id)?;
     }
-    // 模式、写入记录和 Stack 模型在同一次状态文件写入里落定。
-    if target.state.is_some() || target.written.is_some() || target.stack.is_some() {
+    if let Some(written) = &target.written {
         state::update(store, |live| {
-            let entry = live.apps.entry(app.to_string()).or_default();
-            if let Some(mode) = &target.state {
-                entry.set_mode_state(mode.clone());
-            }
-            if let Some(written) = &target.written {
-                entry.written = Some(written.clone());
-            }
-            if let Some(stack) = &target.stack {
-                entry.stack = stack.clone();
-            }
+            live.apps.entry(app.to_string()).or_default().written = Some(written.clone());
         })?;
     }
-    if let Some(mode) = &target.state {
-        mirror_proxy_flag(db, app, mode.is_proxy())?;
-    }
     Ok(())
-}
-
-/// `proxy_config.enabled := (mode == proxy)`。
-pub fn mirror_proxy_flag(
-    db: &crate::database::Database,
-    app: &str,
-    proxy: bool,
-) -> Result<(), AppError> {
-    let (enabled, auto_failover) = db.get_proxy_flags_sync(app);
-    if enabled == proxy {
-        return Ok(());
-    }
-    db.set_proxy_flags_sync(app, proxy, auto_failover)
 }
 
 /// 启动时调用：补完上次崩溃留下的客户端文件写入。要在任何写客户端文件的启动步骤之前。

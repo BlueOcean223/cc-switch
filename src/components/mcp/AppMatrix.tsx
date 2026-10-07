@@ -240,11 +240,7 @@ export function MatrixColumnHeader({
                 highlighted && "bg-selected text-fg-1",
               )}
             >
-              <AppGlyph
-                app={app}
-                size={16}
-                badgeClassName={highlighted ? "bg-selected" : "bg-subtle"}
-              />
+              <AppGlyph app={app} size={16} />
               <span
                 className={cn(
                   "text-badge tabular-nums",
@@ -275,7 +271,7 @@ export function MatrixColumnHeader({
           className="z-[110] flex w-[260px] flex-col gap-2.5 rounded-panel border border-border bg-surface px-3.5 pb-3.5 pt-3 text-fg-1 shadow-v7-md outline-none data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2"
         >
           <div className="flex items-center gap-2">
-            <AppGlyph app={app} size={16} badgeClassName="bg-surface" />
+            <AppGlyph app={app} size={16} />
             <span className="text-body font-semibold">{name}</span>
             {help && <HelpTip title={help.title}>{help.body}</HelpTip>}
           </div>

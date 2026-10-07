@@ -25,21 +25,6 @@ export interface OpenTerminalOptions {
   cwd?: string;
 }
 
-export interface ClaudeDesktopStatus {
-  supported: boolean;
-  configured: boolean;
-  appliedId?: string | null;
-  profilePath?: string | null;
-  configLibraryPath?: string | null;
-  mode?: "direct" | "proxy" | null;
-  expectedBaseUrl?: string | null;
-  actualBaseUrl?: string | null;
-  proxyRunning: boolean;
-  staleRawModels: boolean;
-  missingRouteMappings: boolean;
-  gatewayTokenConfigured: boolean;
-}
-
 /** 编辑器保存时，live 里的键在编辑期间被别的程序改过怎么办。 */
 export type EditorConflictPolicy = "refuse" | "keepMine" | "keepTheirs";
 
@@ -61,12 +46,6 @@ export interface ProviderEditorInactiveField {
 export interface ProviderEditorView {
   settings: Record<string, unknown>;
   inactive: ProviderEditorInactiveField[];
-}
-
-export interface ClaudeDesktopDefaultRoute {
-  routeId: string;
-  envKey: string;
-  supports1m: boolean;
 }
 
 export const providersApi = {
@@ -141,28 +120,12 @@ export const providersApi = {
     return await invoke("import_default_config", { app: appId });
   },
 
-  async importClaudeDesktopFromClaude(): Promise<number> {
-    return await invoke("import_claude_desktop_providers_from_claude");
-  },
-
-  async ensureClaudeDesktopOfficialProvider(): Promise<boolean> {
-    return await invoke("ensure_claude_desktop_official_provider");
-  },
-
   async ensureCodexOfficialProvider(): Promise<boolean> {
     return await invoke("ensure_codex_official_provider");
   },
 
   async ensureGrokBuildOfficialProvider(): Promise<boolean> {
     return await invoke("ensure_grokbuild_official_provider");
-  },
-
-  async getClaudeDesktopStatus(): Promise<ClaudeDesktopStatus> {
-    return await invoke("get_claude_desktop_status");
-  },
-
-  async getClaudeDesktopDefaultRoutes(): Promise<ClaudeDesktopDefaultRoute[]> {
-    return await invoke("get_claude_desktop_default_routes");
   },
 
   async updateTrayMenu(): Promise<boolean> {

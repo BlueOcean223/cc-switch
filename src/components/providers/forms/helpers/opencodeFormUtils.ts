@@ -1,5 +1,4 @@
 import type { OpenCodeModel, OpenCodeProviderConfig } from "@/types";
-import { isPlainObject } from "@/lib/requestOverrides";
 
 // ── Default configs ──────────────────────────────────────────────────
 
@@ -79,6 +78,10 @@ const OPENCODE_NATIVE_ONLY_KEYS = [
   "body",
   "canonical",
 ];
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
 
 function parseJson(json: string): unknown {
   try {

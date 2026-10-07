@@ -19,20 +19,17 @@ import { ProviderIconBox } from "@/components/ProviderIconBox";
 import { HoverTip } from "@/components/ui/hover-tip";
 import UsageFooter from "@/components/UsageFooter";
 import SubscriptionQuotaFooter from "@/components/SubscriptionQuotaFooter";
-import CopilotQuotaFooter from "@/components/CopilotQuotaFooter";
 import CodexOauthQuotaFooter from "@/components/CodexOauthQuotaFooter";
-import XaiOauthQuotaFooter from "@/components/XaiOauthQuotaFooter";
-import { PROVIDER_TYPES, TEMPLATE_TYPES } from "@/config/constants";
+import { TEMPLATE_TYPES } from "@/config/constants";
 import {
   extractCodexBaseUrl,
   extractCodexExperimentalBearerToken,
 } from "@/utils/providerConfigUtils";
 import { resolveManagedAccountId } from "@/lib/authBinding";
 import { resolveCodexOfficialIdentity } from "@/utils/providerCapabilities";
-import { useProviderHealth } from "@/lib/query/failover";
 import { useUsageQuery } from "@/lib/query/queries";
 import { resolveProviderIcon } from "@/utils/providerIcon";
-import { isAdditiveAppId, isProxyAppId } from "@/config/appConfig";
+import { isAdditiveAppId } from "@/config/appConfig";
 import { ProviderCardActions } from "./ProviderCardActions";
 import type { CardChip, CardPresentation, CardTone } from "./presentation";
 
@@ -45,7 +42,7 @@ interface DragHandleProps {
 interface ProviderCardProps {
   provider: Provider;
   appId: AppId;
-  /** 卡片怎么画：模式色、状态 / 按钮、徽标（由列表按模式算好） */
+  /** 卡片怎么画：强调色、状态 / 按钮、徽标（由列表算好） */
   presentation: CardPresentation;
   /** 用来决定额度是否自动查询（共存式应用看 isInConfig） */
   isCurrent: boolean;
@@ -61,19 +58,15 @@ interface ProviderCardProps {
   dragHandleProps?: DragHandleProps;
 }
 
-/** 当前那张：模式色边框 + 淡底；共存式「已添加」是中性的。 */
+/** 当前那张：强调色边框 + 淡底；共存式「已添加」是中性的。 */
 const TONE_CLASS: Record<CardTone, string> = {
   direct: "border-direct-border bg-direct-soft",
-  route: "border-route-border bg-route-soft",
-  stack: "border-stack-border bg-stack-soft",
   neutral: "border-border-strong bg-subtle",
 };
 
 const CHIP_CLASS: Record<CardChip["tone"], string> = {
   outline: "border border-border-strong text-fg-2",
   direct: "bg-direct-soft text-direct-text",
-  route: "bg-route-soft text-route-text",
-  stack: "bg-stack-soft text-stack-text",
   success: "bg-success-soft text-success-text",
   warning: "bg-warning-soft text-warning-text",
   danger: "bg-danger-soft text-danger-text",
@@ -92,23 +85,6 @@ export function CardChipBadge({ chip }: { chip: CardChip }) {
       {chip.label}
     </span>
   );
-}
-
-function HealthChip({
-  consecutiveFailures,
-  isHealthy,
-}: {
-  consecutiveFailures: number;
-  isHealthy?: boolean;
-}) {
-  const { t } = useTranslation();
-  const chip: CardChip =
-    consecutiveFailures === 0
-      ? { key: "health", label: t("health.operational"), tone: "success" }
-      : isHealthy !== false
-        ? { key: "health", label: t("health.degraded"), tone: "warning" }
-        : { key: "health", label: t("health.circuitOpen"), tone: "danger" };
-  return <CardChipBadge chip={chip} />;
 }
 
 /** 判断是否为官方供应商（无自定义 base URL / API key，直连官方 API） */
@@ -239,12 +215,6 @@ export function ProviderCard({
           `OpenAI Official (${managedCodexAccount.login})`),
   );
 
-  const { data: health } = useProviderHealth(
-    provider.id,
-    appId,
-    Boolean(presentation.showHealth) && isProxyAppId(appId),
-  );
-
   const fallbackUrlText = t("provider.notConfigured", {
     defaultValue: "未配置接口地址",
   });
@@ -275,15 +245,6 @@ export function ProviderCard({
   const officialSubscriptionEnabled =
     supportsOfficialSubscription && usageEnabled && isOfficialSubscriptionUsage;
 
-  const isCopilot =
-    provider.meta?.providerType === PROVIDER_TYPES.GITHUB_COPILOT ||
-    provider.meta?.usage_script?.templateType === "github_copilot";
-  const isCodexOauth =
-    appId === "codex"
-      ? isBoundCodexOfficial
-      : provider.meta?.providerType === PROVIDER_TYPES.CODEX_OAUTH;
-  // xAI OAuth (SuperGrok 反代)：额度经自管 OAuth token 自动显示，与 codex_oauth 同构
-  const isXaiOauth = provider.meta?.providerType === PROVIDER_TYPES.XAI_OAUTH;
   // 获取用量数据以判断是否有多套餐
   // 累加模式应用：使用 isInConfig 代替 isCurrent
   const shouldAutoQuery = isAdditiveAppId(appId) ? isInConfig : isCurrent;
@@ -382,12 +343,6 @@ export function ProviderCard({
             {presentation.chips.map((chip) => (
               <CardChipBadge key={chip.key} chip={chip} />
             ))}
-            {presentation.showHealth && health && (
-              <HealthChip
-                consecutiveFailures={health.consecutive_failures}
-                isHealthy={health.is_healthy}
-              />
-            )}
           </div>
 
           {codexOfficialIdentity && codexOfficialIdentity !== "api_key" ? (
@@ -478,31 +433,17 @@ export function ProviderCard({
           {/* 额度列 136 宽，带重置倒计时时 194 宽（见 QuotaLines） */}
           <div className="max-w-[208px] text-end">
             <div className="flex items-center justify-end gap-1">
-              {isCopilot ? (
-                <CopilotQuotaFooter
-                  meta={provider.meta}
-                  inline={true}
-                  isCurrent={isCurrent}
-                />
-              ) : isCodexOauth ? (
-                !isBoundCodexOfficial || usageEnabled ? (
+              {isBoundCodexOfficial ? (
+                usageEnabled ? (
                   <CodexOauthQuotaFooter
                     meta={provider.meta}
                     inline={true}
                     isCurrent={isCurrent}
                     autoQueryInterval={
-                      isBoundCodexOfficial
-                        ? (provider.meta?.usage_script?.autoQueryInterval ?? 5)
-                        : undefined
+                      provider.meta?.usage_script?.autoQueryInterval ?? 5
                     }
                   />
                 ) : null
-              ) : isXaiOauth ? (
-                <XaiOauthQuotaFooter
-                  meta={provider.meta}
-                  inline={true}
-                  isCurrent={isCurrent}
-                />
               ) : isOfficial ? (
                 officialSubscriptionEnabled ? (
                   <SubscriptionQuotaFooter
@@ -560,7 +501,7 @@ export function ProviderCard({
             onDelete={() => onDelete(provider)}
             onDuplicate={onDuplicate ? () => onDuplicate(provider) : undefined}
             onTest={
-              // 连通检测对第三方/自定义/Copilot/Codex-OAuth 供应商开放。官方供应商一律不给：
+              // 连通检测只对第三方/自定义供应商开放。官方供应商一律不给：
               // 它们 base_url 故意留空、走客户端默认/OAuth 端点，没有可靠的探测目标。
               onTest && appId !== "mcode" && provider.category !== "official"
                 ? () => onTest(provider)
@@ -568,10 +509,7 @@ export function ProviderCard({
             }
             isTesting={isTesting}
             onConfigureUsage={
-              (isOfficial && !supportsOfficialSubscription) ||
-              isCopilot ||
-              (isCodexOauth && !isBoundCodexOfficial) ||
-              isXaiOauth
+              isOfficial && !supportsOfficialSubscription
                 ? undefined
                 : () => onConfigureUsage(provider)
             }

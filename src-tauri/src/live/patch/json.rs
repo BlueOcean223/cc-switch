@@ -1,4 +1,4 @@
-//! JSON 补丁器（Claude Code `settings.json`、Claude Desktop 的 profile 等）。
+//! JSON 补丁器（Claude Code `settings.json` 等）。
 //!
 //! `serde_json` 开了 `preserve_order`，键保持文件里的顺序。但 `Map::remove` 在
 //! `preserve_order` 下等于 `swap_remove`，会把最后一个键挪到被删键的位置，所以这里

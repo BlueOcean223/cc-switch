@@ -9,7 +9,6 @@ exports[`ProviderForm 预设新增行金标 > claude > AWS Bedrock (API Key) 1`]
     "icon": "aws",
     "iconColor": "#FF9900",
     "meta": {
-      "apiFormat": "anthropic",
       "endpointAutoSelect": true,
     },
     "name": "AWS Bedrock (API Key)",
@@ -42,7 +41,6 @@ exports[`ProviderForm 预设新增行金标 > claude > AtlasCloud 1`] = `
     "icon": "atlascloud",
     "iconColor": "",
     "meta": {
-      "apiFormat": "anthropic",
       "endpointAutoSelect": true,
     },
     "name": "AtlasCloud",
@@ -96,7 +94,6 @@ exports[`ProviderForm 预设新增行金标 > claude > Kimi For Coding 1`] = `
     "icon": "kimi",
     "iconColor": "#6366F1",
     "meta": {
-      "apiFormat": "anthropic",
       "endpointAutoSelect": true,
     },
     "name": "Kimi For Coding",
@@ -121,38 +118,6 @@ exports[`ProviderForm 预设新增行金标 > claude > Kimi For Coding 1`] = `
 }
 `;
 
-exports[`ProviderForm 预设新增行金标 > claude > Nvidia 1`] = `
-{
-  "apiKeyLocations": [
-    "settingsConfig.env.ANTHROPIC_AUTH_TOKEN",
-  ],
-  "row": {
-    "icon": "nvidia",
-    "iconColor": "#000000",
-    "meta": {
-      "apiFormat": "openai_chat",
-      "endpointAutoSelect": true,
-    },
-    "name": "Nvidia",
-    "notes": "",
-    "presetCategory": "aggregator",
-    "presetId": "claude-<index>",
-    "settingsConfig": {
-      "env": {
-        "ANTHROPIC_AUTH_TOKEN": "sk-golden-test",
-        "ANTHROPIC_BASE_URL": "https://integrate.api.nvidia.com",
-        "ANTHROPIC_DEFAULT_HAIKU_MODEL": "moonshotai/kimi-k3",
-        "ANTHROPIC_DEFAULT_OPUS_MODEL": "moonshotai/kimi-k3",
-        "ANTHROPIC_DEFAULT_SONNET_MODEL": "moonshotai/kimi-k3",
-        "ANTHROPIC_MODEL": "moonshotai/kimi-k3",
-        "CLAUDE_CODE_AUTO_MODE_SERVER": "0",
-      },
-    },
-    "websiteUrl": "https://build.nvidia.com",
-  },
-}
-`;
-
 exports[`ProviderForm 预设新增行金标 > claude > OpenRouter 1`] = `
 {
   "apiKeyLocations": [
@@ -162,7 +127,6 @@ exports[`ProviderForm 预设新增行金标 > claude > OpenRouter 1`] = `
     "icon": "openrouter",
     "iconColor": "#6566F1",
     "meta": {
-      "apiFormat": "anthropic",
       "endpointAutoSelect": true,
     },
     "name": "OpenRouter",
@@ -217,69 +181,6 @@ wire_api = "responses"
 requires_openai_auth = true",
     },
     "websiteUrl": "https://open.cherryin.ai",
-  },
-}
-`;
-
-exports[`ProviderForm 预设新增行金标 > codex > Nvidia 1`] = `
-{
-  "apiKeyLocations": [
-    "settingsConfig.auth.OPENAI_API_KEY",
-  ],
-  "row": {
-    "icon": "nvidia",
-    "iconColor": "#000000",
-    "meta": {
-      "apiFormat": "openai_chat",
-      "codexChatReasoning": {
-        "effortParam": "reasoning_effort",
-        "effortValueMode": "passthrough",
-        "outputFormat": "reasoning_content",
-        "supportsEffort": true,
-        "supportsThinking": true,
-        "thinkingParam": "none",
-      },
-      "endpointAutoSelect": true,
-    },
-    "name": "Nvidia",
-    "notes": "",
-    "presetCategory": "aggregator",
-    "presetId": "codex-<index>",
-    "settingsConfig": {
-      "auth": {
-        "OPENAI_API_KEY": "sk-golden-test",
-      },
-      "config": "model_provider = "custom"
-model = "moonshotai/kimi-k3"
-model_reasoning_effort = "high"
-disable_response_storage = true
-
-[model_providers.custom]
-name = "nvidia"
-base_url = "https://integrate.api.nvidia.com/v1"
-wire_api = "responses"
-requires_openai_auth = true",
-      "modelCatalog": {
-        "models": [
-          {
-            "contextWindow": 1048576,
-            "defaultReasoningLevel": "high",
-            "displayName": "Kimi K3",
-            "inputModalities": [
-              "text",
-              "image",
-            ],
-            "model": "moonshotai/kimi-k3",
-            "reasoningLevels": [
-              "low",
-              "high",
-              "max",
-            ],
-          },
-        ],
-      },
-    },
-    "websiteUrl": "https://build.nvidia.com",
   },
 }
 `;

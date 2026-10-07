@@ -1,35 +1,29 @@
 import { describe, expect, it } from "vitest";
 import {
-  codexApiFormatFromWireApi,
-  isCodexAnthropicWireApi,
   extractCodexExperimentalBearerToken,
   extractCodexModelName,
   isCodexRemoteCompactionEnabled,
   setCodexModelName,
   setCodexRemoteCompaction,
+  setCodexWireApi,
 } from "./providerConfigUtils";
 
-describe("Codex wire API helpers", () => {
-  it("recognizes Anthropic Messages aliases", () => {
-    expect(isCodexAnthropicWireApi("anthropic")).toBe(true);
-    expect(isCodexAnthropicWireApi("anthropic_messages")).toBe(true);
-    expect(isCodexAnthropicWireApi("messages")).toBe(true);
-    expect(isCodexAnthropicWireApi("claude")).toBe(true);
-    expect(isCodexAnthropicWireApi("responses")).toBe(false);
+// 直连只讲 Responses：保存第三方供应商时把 wire_api 统一写成 responses
+describe("setCodexWireApi", () => {
+  const section = (wireApiLine: string) =>
+    `model_provider = "custom"\n\n[model_providers.custom]\nbase_url = "https://x.example/v1"\n${wireApiLine}`;
+
+  it("rewrites an old chat wire_api in the active provider section", () => {
+    const next = setCodexWireApi(section('wire_api = "chat"\n'), "responses");
+    expect(next).toContain('wire_api = "responses"');
+    expect(next).not.toContain('wire_api = "chat"');
   });
 
-  it("maps every backend-supported Anthropic alias to the form format", () => {
-    for (const wireApi of [
-      "anthropic",
-      "anthropic_messages",
-      "anthropic-messages",
-      "messages",
-      "claude",
-    ]) {
-      expect(codexApiFormatFromWireApi(wireApi)).toBe("anthropic");
-    }
-    expect(codexApiFormatFromWireApi("responses")).toBe("openai_responses");
-    expect(codexApiFormatFromWireApi("chat_completions")).toBe("openai_chat");
+  it("adds wire_api to the active provider section when it is missing", () => {
+    const next = setCodexWireApi(section(""), "responses");
+    const header = next.indexOf("[model_providers.custom]");
+    expect(header).toBeGreaterThan(-1);
+    expect(next.indexOf('wire_api = "responses"')).toBeGreaterThan(header);
   });
 });
 

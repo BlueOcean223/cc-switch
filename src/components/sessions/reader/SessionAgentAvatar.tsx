@@ -22,7 +22,7 @@ export const SessionAgentAvatar = memo(function SessionAgentAvatar() {
       className="inline-flex h-7 w-7 shrink-0 select-none items-center justify-center rounded-full border border-border bg-surface"
     >
       {known ? (
-        <AppGlyph app={known} size={16} badgeClassName="bg-surface" />
+        <AppGlyph app={known} size={16} />
       ) : (
         <span className="font-mono text-caption font-semibold leading-none text-[var(--reader-accent)]">
           {fallback}

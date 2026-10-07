@@ -91,18 +91,6 @@ fn oauth_identity(auth: &Value) -> Option<String> {
     codex_auth_has_credential_login_material(auth).then(|| identity(auth))
 }
 
-/// 官方卡要 `auth.json` 里是谁：行里 OAuth 登录的身份，或 API Key 的摘要；行里没存登录
-/// （跟随 Codex 当前的登录）时为空。算进代理契约：两张官方卡要的账号不同，契约就不同，
-/// 代理模式下换路由才会像直连一样换登录。
-pub(crate) fn official_login_requirement(row_auth: &Value) -> Option<String> {
-    if is_api_key_credential(row_auth) {
-        return extract_codex_auth_api_key(row_auth)
-            .and_then(|key| crate::live::engine::digest(Some(key.as_bytes())))
-            .map(|key| format!("api-key:{key}"));
-    }
-    oauth_identity(row_auth)
-}
-
 /// 官方卡的行里存的是 API Key（直连 OpenAI API）：静态凭据，不会过期，照写。
 fn is_api_key_credential(auth: &Value) -> bool {
     extract_codex_auth_api_key(auth).is_some() && !codex_auth_has_credential_login_material(auth)
@@ -121,9 +109,9 @@ fn is_residue(auth: &Value, third_party_keys: &[String]) -> bool {
 pub(crate) enum AuthTarget<'a> {
     /// 直连的第三方：保留登录开关关闭时删掉 `auth.json`。
     ThirdParty { preserve: bool },
-    /// 代理的第三方路由：不动用户的原生登录（请求凭据由代理注入）。
-    ProxyThirdParty,
-    /// 没绑托管账号的官方卡（直连，或代理的官方路由）。
+    /// 没有当前供应商：不动用户的原生登录，只清托管账号的登录。
+    KeepNative,
+    /// 没绑托管账号的官方卡。
     Official { row_auth: &'a Value },
     /// 托管账号：整份写它的登录。
     Managed { auth: &'a Value },
@@ -189,7 +177,7 @@ pub(crate) fn plan(input: AuthInput<'_>) -> AuthPlan {
             // 保留登录关闭时第三方路由旁边不留任何 auth.json（写 `{}` 不等于登出）。
             (managed || residue || (!preserve && input.live.is_some())).then_some(None)
         }
-        AuthTarget::ProxyThirdParty => managed.then_some(None),
+        AuthTarget::KeepNative => managed.then_some(None),
         AuthTarget::Managed { auth } => {
             if let Some(live) = native {
                 stash.put(live);
@@ -467,7 +455,7 @@ mod tests {
         let empty = json!({});
         for target in [
             AuthTarget::ThirdParty { preserve: true },
-            AuthTarget::ProxyThirdParty,
+            AuthTarget::KeepNative,
             AuthTarget::Official { row_auth: &empty },
         ] {
             let plan = plan(AuthInput {
@@ -480,9 +468,9 @@ mod tests {
     }
 
     #[test]
-    fn the_proxy_never_touches_the_native_login() {
+    fn keep_native_never_touches_the_native_login() {
         let alice = login("alice");
-        let plan = plan(input(Some(&alice), AuthTarget::ProxyThirdParty, ready()));
+        let plan = plan(input(Some(&alice), AuthTarget::KeepNative, ready()));
         assert_eq!(plan.auth, None);
         assert!(plan.login_on_disk);
     }

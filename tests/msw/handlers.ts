@@ -362,110 +362,10 @@ export const handlers = [
     }),
   ),
 
-  // Proxy status (for SettingsPage / ProxyPanel hooks)
-  http.post(`${TAURI_ENDPOINT}/get_proxy_status`, () =>
-    success({
-      running: false,
-      address: "127.0.0.1",
-      port: 0,
-      active_connections: 0,
-      total_requests: 0,
-      success_requests: 0,
-      failed_requests: 0,
-      success_rate: 0,
-      uptime_seconds: 0,
-      current_provider: null,
-      current_provider_id: null,
-      last_request_at: null,
-      last_error: null,
-      failover_count: 0,
-      active_targets: [],
-    }),
-  ),
-
-  http.post(`${TAURI_ENDPOINT}/get_direct_provider`, () => success(null)),
-
-  http.post(`${TAURI_ENDPOINT}/get_proxy_stack`, () =>
-    success({ active: false, members: [] }),
-  ),
-
-  http.post(`${TAURI_ENDPOINT}/set_proxy_stack_member`, () => success(null)),
-
-  http.post(`${TAURI_ENDPOINT}/restart_codex_app_server_daemon`, () =>
-    success("restarted"),
-  ),
-
-  http.post(`${TAURI_ENDPOINT}/get_proxy_takeover_status`, () =>
-    success({
-      claude: false,
-      codex: false,
-      gemini: false,
-      grokbuild: false,
-    }),
-  ),
-
-  http.post(`${TAURI_ENDPOINT}/is_live_takeover_active`, () => success(false)),
-
-  // Failover / circuit breaker defaults
-  http.post(`${TAURI_ENDPOINT}/get_auto_failover_enabled`, () =>
-    success(false),
-  ),
-  http.post(`${TAURI_ENDPOINT}/get_failover_queue`, () => success([])),
-
-  // 模式行：默认都在直连，直连那家就是当前供应商
-  http.post(`${TAURI_ENDPOINT}/get_app_mode`, async ({ request }) => {
-    const { appType } = await withJson<{ appType: AppId }>(request);
-    return success({
-      mode: "direct",
-      attached: false,
-      routeProviderId: null,
-      directProviderId: getCurrentProviderId(appType) || null,
-    });
-  }),
-  http.post(`${TAURI_ENDPOINT}/set_proxy_route`, () => success(null)),
-  http.post(`${TAURI_ENDPOINT}/take_startup_attach_failures`, () =>
-    success([]),
-  ),
   http.post(`${TAURI_ENDPOINT}/take_tray_navigation`, () => success(null)),
   http.post(`${TAURI_ENDPOINT}/tray_app_page_seen`, () => success(null)),
-  http.post(`${TAURI_ENDPOINT}/get_available_providers_for_failover`, () =>
-    success([]),
-  ),
-  http.post(`${TAURI_ENDPOINT}/add_to_failover_queue`, () => success(true)),
-  http.post(`${TAURI_ENDPOINT}/remove_from_failover_queue`, () =>
-    success(true),
-  ),
-  http.post(`${TAURI_ENDPOINT}/reorder_failover_queue`, () => success(true)),
-  http.post(`${TAURI_ENDPOINT}/set_failover_item_enabled`, () => success(true)),
 
-  http.post(`${TAURI_ENDPOINT}/get_circuit_breaker_config`, () =>
-    success({
-      failureThreshold: 3,
-      successThreshold: 2,
-      timeoutSeconds: 60,
-      errorRateThreshold: 50,
-      minRequests: 5,
-    }),
-  ),
-  http.post(`${TAURI_ENDPOINT}/update_circuit_breaker_config`, () =>
-    success(true),
-  ),
-  http.post(`${TAURI_ENDPOINT}/get_provider_health`, () =>
-    success({
-      provider_id: "mock-provider",
-      app_type: "claude",
-      is_healthy: true,
-      consecutive_failures: 0,
-      last_success_at: null,
-      last_failure_at: null,
-      last_error: null,
-      updated_at: new Date().toISOString(),
-    }),
-  ),
-  http.post(`${TAURI_ENDPOINT}/reset_circuit_breaker`, () => success(true)),
-  http.post(`${TAURI_ENDPOINT}/get_circuit_breaker_stats`, () => success(null)),
-
-  // 侧栏：今日花费、授权中心提醒；「应用」页：Claude Desktop 接入状态
+  // 侧栏：今日花费、授权中心提醒
   http.post(`${TAURI_ENDPOINT}/get_usage_summary`, () =>
     success({
       totalRequests: 0,
@@ -498,7 +398,6 @@ export const handlers = [
     return success({
       provider: authProvider,
       authenticated: false,
-      default_account_id: null,
       accounts: [],
     });
   }),
@@ -521,16 +420,6 @@ export const handlers = [
         displayPath: `~/.${app}/${file}`,
       });
     },
-  ),
-  http.post(`${TAURI_ENDPOINT}/get_claude_desktop_status`, () =>
-    success({
-      supported: true,
-      configured: false,
-      proxyRunning: false,
-      staleRawModels: false,
-      missingRouteMappings: false,
-      gatewayTokenConfigured: false,
-    }),
   ),
   http.post(`${TAURI_ENDPOINT}/get_hermes_memory`, async ({ request }) => {
     const { kind } = await withJson<{ kind: string }>(request);

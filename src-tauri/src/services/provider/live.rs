@@ -1,7 +1,7 @@
 //! Live 配置的读取、首次导入和按模式分发的写入。
 //!
 //! 切换式应用（Claude Code、Codex、Gemini CLI、Grok Build）的客户端文件只经写入引擎写
-//! （`*_direct.rs`），这里只负责分发；Claude Desktop 和累加式应用仍在这里写。
+//! （`*_direct.rs`），这里只负责分发；累加式应用仍在这里写。
 
 use std::sync::Arc;
 
@@ -9,10 +9,10 @@ use serde_json::{json, Value};
 use toml_edit::{DocumentMut, Item, TableLike};
 
 use crate::app_config::AppType;
+use crate::codex_oauth_auth::{CodexLiveAuthSwitchGuard, CodexOAuthManager};
 use crate::config::{get_claude_settings_path, read_json_file};
 use crate::error::AppError;
 use crate::provider::Provider;
-use crate::proxy::providers::codex_oauth_auth::{CodexLiveAuthSwitchGuard, CodexOAuthManager};
 use crate::services::mcp::McpService;
 use crate::store::AppState;
 
@@ -300,8 +300,7 @@ fn settings_contain_common_config(app_type: &AppType, settings: &Value, snippet:
         | AppType::OpenClaw
         | AppType::Hermes
         | AppType::Pi
-        | AppType::Mcode
-        | AppType::ClaudeDesktop => false,
+        | AppType::Mcode => false,
     }
 }
 
@@ -376,12 +375,11 @@ pub(crate) fn remove_common_config_from_settings(
         | AppType::OpenClaw
         | AppType::Hermes
         | AppType::Pi
-        | AppType::Mcode
-        | AppType::ClaudeDesktop => Ok(settings.clone()),
+        | AppType::Mcode => Ok(settings.clone()),
     }
 }
 
-/// 把 `provider` 写进 live（live 当前对应的就是它：同步、退出代理写回）。切换式应用只
+/// 把 `provider` 写进 live（live 当前对应的就是它：同步、编辑当前供应商）。切换式应用只
 /// 替换关键字段；通用配置片段冻结在库里只给旧版读，这里不再合并。
 pub(crate) fn write_live_for_state(
     state: &AppState,
@@ -391,7 +389,7 @@ pub(crate) fn write_live_for_state(
     let db = state.db.as_ref();
     if matches!(app_type, AppType::Claude) {
         // Claude 不再整份写，也不合并片段：只替换关键字段和独有字段。live 当前对应的
-        // 就是这个供应商（同步、退出代理写回），它带进来的独有字段按同一行比对。
+        // 就是这个供应商，它带进来的独有字段按同一行比对。
         super::claude_direct::reapply(db, Some(provider), provider)?;
         return Ok(());
     }
@@ -414,16 +412,6 @@ pub(crate) fn write_live_for_state(
     }
     if matches!(app_type, AppType::GrokBuild) {
         super::grok_direct::reapply(db, Some(provider), provider)?;
-        return Ok(());
-    }
-
-    if matches!(app_type, AppType::ClaudeDesktop) {
-        crate::claude_desktop_config::apply_provider(db, provider)?;
-        log::info!(
-            "Claude Desktop 3P profile '{}' written for provider '{}'",
-            crate::claude_desktop_config::PROFILE_ID,
-            provider.id
-        );
         return Ok(());
     }
 
@@ -529,13 +517,6 @@ pub(crate) fn write_live_snapshot(app_type: &AppType, provider: &Provider) -> Re
                 "claude.live.requires_engine",
                 "Claude Code 配置只能经关键字段写入流程写入",
                 "Claude Code configuration must be written through the key-field write flow",
-            ));
-        }
-        AppType::ClaudeDesktop => {
-            return Err(AppError::localized(
-                "claude_desktop.live.requires_db_context",
-                "Claude Desktop 配置写入需要通过供应商切换流程执行",
-                "Claude Desktop configuration must be written through the provider switch flow",
             ));
         }
         AppType::Codex => {
@@ -748,37 +729,17 @@ pub(crate) fn sync_additive_app_to_live(
     Ok(())
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum LiveSyncOutcome {
-    /// 按直连投影写了 live。
-    WroteLive,
-    /// 应用在代理模式：live 是代理契约，没有按直连写。
-    ProxyMode,
-}
-
-/// 把 `provider` 同步到 live，按应用的模式处理：
-/// - 直连模式：按直连投影写 live；
-/// - 代理模式：live 是代理契约。`provider` 是代理路由的那家、或在 Stack 名单里时按新契约
-///   重写（契约没变就不动）；其余供应商（包括直连指针那家）只在退出代理时写回，这里不碰
-///   live。
+/// 把 `provider` 同步到 live。
 ///
 /// `prev` 是 live 现在对应的那一版供应商行（编辑前的行），Claude 按它删上一版带进来的
-/// 独有字段；`None` 表示 live 对应的就是 `provider` 自己。调用方持有这个应用的代理切换锁
-/// （`controller::lock_settled_blocking`），并且在拿锁之后才读谁是当前供应商：不拿锁的
-/// 话，读完模式到写完 live 之间进入代理，直连的关键字段会盖掉刚写的代理契约。
-pub(crate) fn sync_live_for_provider_respecting_mode(
+/// 独有字段；`None` 表示 live 对应的就是 `provider` 自己。调用方持有这个应用的切换锁
+/// （`mode::lock_settled_blocking`），并且在拿锁之后才读谁是当前供应商。
+pub(crate) fn sync_live_for_provider(
     state: &AppState,
     app_type: &AppType,
     provider: &Provider,
     prev: Option<&Provider>,
-) -> Result<LiveSyncOutcome, AppError> {
-    if crate::mode::current::is_proxy(app_type) {
-        futures::executor::block_on(crate::mode::controller::resync_saved_row_locked(
-            state, app_type, provider,
-        ))
-        .map_err(AppError::Message)?;
-        return Ok(LiveSyncOutcome::ProxyMode);
-    }
+) -> Result<(), AppError> {
     if matches!(app_type, AppType::Claude) {
         super::claude_direct::reapply(state.db.as_ref(), prev.or(Some(provider)), provider)?;
     } else if matches!(app_type, AppType::GrokBuild) {
@@ -787,31 +748,20 @@ pub(crate) fn sync_live_for_provider_respecting_mode(
     } else {
         write_live_for_state(state, app_type, provider)?;
     }
-    Ok(LiveSyncOutcome::WroteLive)
+    Ok(())
 }
 
-/// 把正在用的那家（代理模式下是代理路由）同步到 live；没有正在用的那家时返回 `None`。
-/// 返回时已经放开切换锁。
-pub(crate) fn sync_current_provider_for_app_respecting_mode(
+/// 把当前供应商同步到 live；没有当前供应商时返回 `false`。返回时已经放开切换锁。
+pub(crate) fn sync_current_provider_for_app_live(
     state: &AppState,
     app_type: &AppType,
-) -> Result<Option<LiveSyncOutcome>, AppError> {
-    let _switch_guard = crate::mode::controller::lock_settled_blocking(state, app_type)?;
-    let current_id = match crate::mode::current::provider_for(
-        &state.db,
-        app_type,
-        crate::mode::current::Purpose::InUse,
-    )? {
-        Some(id) => id,
-        None => return Ok(None),
+) -> Result<bool, AppError> {
+    let _switch_guard = crate::mode::lock_settled_blocking(state, app_type)?;
+    let Some(provider) = crate::mode::current::provider(&state.db, app_type)? else {
+        return Ok(false);
     };
-
-    let providers = state.db.get_all_providers(app_type.as_str())?;
-    let Some(provider) = providers.get(&current_id) else {
-        return Ok(None);
-    };
-
-    sync_live_for_provider_respecting_mode(state, app_type, provider, None).map(Some)
+    sync_live_for_provider(state, app_type, &provider, None)?;
+    Ok(true)
 }
 
 /// Sync current provider to live configuration
@@ -833,10 +783,8 @@ pub fn sync_current_to_live(state: &AppState) -> Result<(), AppError> {
             // Additive mode: sync ALL providers
             sync_all_providers_to_live(state, &app_type)
         } else {
-            // Switch mode: sync only current provider. During proxy takeover,
-            // update the restore backup instead of rewriting the taken-over
-            // live file.
-            sync_current_provider_for_app_respecting_mode(state, &app_type).map(|_| ())
+            // Switch mode: sync only current provider.
+            sync_current_provider_for_app_live(state, &app_type).map(|_| ())
         };
 
         if let Err(error) = result {
@@ -899,11 +847,6 @@ pub fn read_live_settings(app_type: AppType) -> Result<Value, AppError> {
             }
             read_json_file(&path)
         }
-        AppType::ClaudeDesktop => Err(AppError::localized(
-            "claude_desktop.live.read_unsupported",
-            "Claude Desktop 3P 配置不支持作为通用 live 配置导入，请使用“从 Claude 导入兼容供应商”。",
-            "Claude Desktop 3P configuration cannot be imported as a generic live config. Use 'Import compatible providers from Claude' instead.",
-        )),
         AppType::Gemini => {
             use crate::gemini_config::{
                 env_to_json, get_gemini_env_path, get_gemini_settings_path, read_gemini_env,
@@ -938,10 +881,15 @@ pub fn read_live_settings(app_type: AppType) -> Result<Value, AppError> {
             }))
         }
         AppType::OpenCode => {
-            use crate::opencode_config::{get_opencode_config_path, read_opencode_config_from_path};
+            use crate::opencode_config::{
+                get_opencode_config_path, read_opencode_config_from_path,
+            };
 
             let config_path = get_opencode_config_path()?;
-            if !config_path.try_exists().map_err(|e| AppError::io(&config_path, e))? {
+            if !config_path
+                .try_exists()
+                .map_err(|e| AppError::io(&config_path, e))?
+            {
                 return Err(AppError::localized(
                     "opencode.config.missing",
                     "OpenCode 配置文件不存在",
@@ -1007,18 +955,6 @@ pub fn import_default_config(state: &AppState, app_type: AppType) -> Result<bool
         return Ok(false);
     }
 
-    // 拒绝把"代理模式下的 Live"导入为供应商：代理模式下 Live 里只有
-    // PROXY_MANAGED 占位符和本地代理地址，不是用户的真实配置。一旦导入，
-    // 它会成为直连指针（SSOT），退出代理时会把占位符当真实配置写回 Live。
-    // 典型触发场景：代理模式下切换 app_config_dir 并重启，新数据库首启导入。
-    if state.proxy_service.live_has_proxy_placeholder(&app_type) {
-        return Err(AppError::localized(
-            "provider.import.live_taken_over",
-            "Live 配置当前处于代理接管状态（包含占位符），不能导入为供应商。请先关闭代理接管或恢复 Live 配置后重试。",
-            "The live config is currently taken over by the proxy (contains placeholders) and cannot be imported as a provider. Disable proxy takeover or restore the live config first.",
-        ));
-    }
-
     let settings_config = match app_type {
         AppType::Codex => crate::codex_config::read_codex_live_settings()?,
         AppType::GrokBuild => {
@@ -1048,13 +984,6 @@ pub fn import_default_config(state: &AppState, app_type: AppType) -> Result<bool
             let mut v = read_json_file::<Value>(&settings_path)?;
             let _ = normalize_claude_models_in_value(&mut v);
             v
-        }
-        AppType::ClaudeDesktop => {
-            return Err(AppError::localized(
-                "claude_desktop.import_unsupported",
-                "Claude Desktop 3P 配置不能通过通用导入读取，请使用“从 Claude 导入兼容供应商”。",
-                "Claude Desktop 3P config cannot be imported through the generic import flow. Use 'Import compatible providers from Claude' instead.",
-            ));
         }
         AppType::Gemini => {
             use crate::gemini_config::{

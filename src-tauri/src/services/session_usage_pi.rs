@@ -5,13 +5,13 @@
 
 use crate::database::{lock_conn, Database};
 use crate::error::AppError;
-use crate::proxy::usage::calculator::CostCalculator;
-use crate::proxy::usage::parser::TokenUsage;
 use crate::services::session_usage::{
     metadata_modified_nanos, update_sync_state_on_conn, SessionSyncResult,
 };
 use crate::services::sql_helpers::INPUT_TOKEN_SEMANTICS_FRESH;
 use crate::services::usage_stats::find_model_pricing;
+use crate::token_usage::calculator::CostCalculator;
+use crate::token_usage::parser::TokenUsage;
 use rust_decimal::Decimal;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -800,7 +800,6 @@ fn insert_pi_record(conn: &rusqlite::Connection, record: &PiUsageRecord) -> Resu
         cache_read_tokens: record.cache_read_tokens,
         cache_creation_tokens: record.cache_write_tokens,
         model: Some(record.model.clone()),
-        message_id: None,
     };
     let costs = record.costs.reported().or_else(|| {
         find_model_pricing(conn, &record.model).map(|pricing| {

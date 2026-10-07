@@ -9,7 +9,7 @@ use serde_json::Value;
 const PI_APP: &str = "pi";
 
 pub(super) fn list(state: &AppState) -> Result<IndexMap<String, Provider>, AppError> {
-    let _guard = futures::executor::block_on(state.proxy_service.lock_switch_for_app(PI_APP));
+    let _guard = futures::executor::block_on(state.switch_locks.lock_for_app(PI_APP));
     match crate::pi_config::read_pi_native_providers() {
         Ok(native) => {
             if let Err(error) = sync_native_locked(state, &native) {
@@ -24,7 +24,7 @@ pub(super) fn list(state: &AppState) -> Result<IndexMap<String, Provider>, AppEr
 }
 
 pub(super) fn import_from_live(state: &AppState) -> Result<usize, AppError> {
-    let _guard = futures::executor::block_on(state.proxy_service.lock_switch_for_app(PI_APP));
+    let _guard = futures::executor::block_on(state.switch_locks.lock_for_app(PI_APP));
     let native = crate::pi_config::read_pi_native_providers()?;
     sync_native_locked(state, &native)
 }
@@ -35,8 +35,7 @@ pub(super) fn add(
     add_to_live: bool,
 ) -> Result<bool, AppError> {
     let app_type = AppType::Pi;
-    let _guard =
-        futures::executor::block_on(state.proxy_service.lock_switch_for_app(app_type.as_str()));
+    let _guard = futures::executor::block_on(state.switch_locks.lock_for_app(app_type.as_str()));
     strip_unsupported_pi_metadata(&mut provider);
     ProviderService::validate_provider_settings(&app_type, &provider)?;
     align_native_display_name(&mut provider);
@@ -88,8 +87,7 @@ pub(super) fn update_usage_script(
     script: UsageScript,
 ) -> Result<bool, AppError> {
     let app_type = AppType::Pi;
-    let _guard =
-        futures::executor::block_on(state.proxy_service.lock_switch_for_app(app_type.as_str()));
+    let _guard = futures::executor::block_on(state.switch_locks.lock_for_app(app_type.as_str()));
     super::validate_usage_script(&script)?;
 
     let mut provider = state
@@ -112,8 +110,7 @@ pub(super) fn update(
     mut provider: Provider,
 ) -> Result<bool, AppError> {
     let app_type = AppType::Pi;
-    let _guard =
-        futures::executor::block_on(state.proxy_service.lock_switch_for_app(app_type.as_str()));
+    let _guard = futures::executor::block_on(state.switch_locks.lock_for_app(app_type.as_str()));
     let original_id = original_id.unwrap_or(&provider.id).to_string();
     if original_id != provider.id {
         return Err(AppError::InvalidInput(
@@ -150,8 +147,7 @@ pub(super) fn update(
 
 pub(super) fn delete(state: &AppState, id: &str) -> Result<(), AppError> {
     let app_type = AppType::Pi;
-    let _guard =
-        futures::executor::block_on(state.proxy_service.lock_switch_for_app(app_type.as_str()));
+    let _guard = futures::executor::block_on(state.switch_locks.lock_for_app(app_type.as_str()));
     let Some(_) = state.db.get_provider_by_id(id, app_type.as_str())? else {
         return Ok(());
     };
@@ -175,8 +171,7 @@ pub(super) fn delete(state: &AppState, id: &str) -> Result<(), AppError> {
 
 pub(super) fn remove(state: &AppState, id: &str) -> Result<(), AppError> {
     let app_type = AppType::Pi;
-    let _guard =
-        futures::executor::block_on(state.proxy_service.lock_switch_for_app(app_type.as_str()));
+    let _guard = futures::executor::block_on(state.switch_locks.lock_for_app(app_type.as_str()));
     let provider = state
         .db
         .get_provider_by_id(id, app_type.as_str())?
@@ -199,8 +194,7 @@ pub(super) fn remove(state: &AppState, id: &str) -> Result<(), AppError> {
 
 pub(super) fn enable(state: &AppState, id: &str) -> Result<SwitchResult, AppError> {
     let app_type = AppType::Pi;
-    let _guard =
-        futures::executor::block_on(state.proxy_service.lock_switch_for_app(app_type.as_str()));
+    let _guard = futures::executor::block_on(state.switch_locks.lock_for_app(app_type.as_str()));
     let provider = state
         .db
         .get_provider_by_id(id, app_type.as_str())?
@@ -273,7 +267,6 @@ fn align_native_display_name(provider: &mut Provider) {
 }
 
 fn strip_unsupported_pi_metadata(provider: &mut Provider) {
-    provider.in_failover_queue = false;
     let Some(meta) = provider.meta.take() else {
         return;
     };
@@ -323,13 +316,11 @@ mod tests {
                 endpoint_auto_select: Some(true),
                 live_config_managed: Some(false),
                 api_format: Some("openai_chat".to_string()),
-                custom_user_agent: Some("legacy-route-agent".to_string()),
                 is_partner: Some(true),
                 ..ProviderMeta::default()
             }),
             icon: None,
             icon_color: None,
-            in_failover_queue: false,
         }
     }
 
@@ -373,7 +364,6 @@ mod tests {
         assert_eq!(meta.live_config_managed, None);
         assert_eq!(meta.endpoint_auto_select, None);
         assert_eq!(meta.api_format, None);
-        assert_eq!(meta.custom_user_agent, None);
         assert_eq!(meta.is_partner, Some(true));
 
         ProviderService::switch(&state, AppType::Pi, "cc-switch-test").expect("enable provider");

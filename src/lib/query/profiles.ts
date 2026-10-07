@@ -123,9 +123,6 @@ export const useApplyProfileMutation = () => {
       await queryClient.invalidateQueries({
         queryKey: ["providers", "claude"],
       });
-      await queryClient.invalidateQueries({
-        queryKey: ["providers", "claude-desktop"],
-      });
       await queryClient.invalidateQueries({ queryKey: ["providers", "codex"] });
       await queryClient.invalidateQueries({ queryKey: ["mcp", "all"] });
       await queryClient.invalidateQueries({ queryKey: ["skills"] });

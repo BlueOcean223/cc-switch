@@ -47,25 +47,6 @@ export interface ProviderPreset extends PresetFamilyFields {
   icon?: string; // 图标名称
   iconColor?: string; // 图标颜色
 
-  // Claude API 格式（仅 Claude 供应商使用）
-  // - "anthropic" (默认): Anthropic Messages API 格式，直接透传
-  // - "openai_chat": OpenAI Chat Completions 格式，需要格式转换
-  // - "openai_responses": OpenAI Responses API 格式，需要格式转换
-  // - "gemini_native": Gemini Native generateContent API 格式，需要格式转换
-  apiFormat?:
-    | "anthropic"
-    | "openai_chat"
-    | "openai_responses"
-    | "gemini_native";
-
-  // 供应商类型标识（用于特殊供应商检测）
-  // - "github_copilot": GitHub Copilot 供应商（需要 OAuth 认证）
-  // - "codex_oauth": OpenAI Codex via ChatGPT Plus/Pro 反代（需要 OAuth 认证）
-  providerType?: "github_copilot" | "codex_oauth" | "xai_oauth";
-
-  // 是否需要 OAuth 认证（而非 API Key）
-  requiresOAuth?: boolean;
-
   // 是否在 UI 中隐藏该预设（预设仍存在，仅不在列表中显示）
   hidden?: boolean;
 
@@ -391,27 +372,6 @@ export const providerPresets: ProviderPreset[] = [
     endpointCandidates: ["https://api.atlascloud.ai"],
     category: "aggregator",
     icon: "atlascloud",
-  },
-  {
-    name: "Gemini Native",
-    websiteUrl: "https://ai.google.dev/gemini-api",
-    apiKeyUrl: "https://aistudio.google.com/app/apikey",
-    apiKeyField: "ANTHROPIC_API_KEY",
-    settingsConfig: {
-      env: {
-        ANTHROPIC_BASE_URL: "https://generativelanguage.googleapis.com",
-        ANTHROPIC_API_KEY: "",
-        ANTHROPIC_MODEL: "gemini-3.6-flash",
-        ANTHROPIC_DEFAULT_HAIKU_MODEL: "gemini-3.6-flash",
-        ANTHROPIC_DEFAULT_SONNET_MODEL: "gemini-3.6-flash",
-        ANTHROPIC_DEFAULT_OPUS_MODEL: "gemini-3.6-flash",
-      },
-    },
-    category: "third_party",
-    apiFormat: "gemini_native",
-    endpointCandidates: ["https://generativelanguage.googleapis.com"],
-    icon: "gemini",
-    iconColor: "#4285F4",
   },
   {
     name: "DeepSeek",
@@ -1118,94 +1078,6 @@ export const providerPresets: ProviderPreset[] = [
     iconColor: "#000000",
   },
   {
-    name: "GitHub Copilot",
-    websiteUrl: "https://github.com/features/copilot",
-    settingsConfig: {
-      env: {
-        ANTHROPIC_BASE_URL: "https://api.githubcopilot.com",
-        ANTHROPIC_MODEL: "claude-sonnet-5",
-        ANTHROPIC_DEFAULT_HAIKU_MODEL: "claude-haiku-4.5",
-        ANTHROPIC_DEFAULT_SONNET_MODEL: "claude-sonnet-5",
-        ANTHROPIC_DEFAULT_OPUS_MODEL: "claude-sonnet-5",
-      },
-    },
-    category: "third_party",
-    apiFormat: "openai_chat",
-    providerType: "github_copilot",
-    requiresOAuth: true,
-    icon: "github",
-    iconColor: "#000000",
-  },
-  {
-    name: "Codex",
-    websiteUrl: "https://openai.com/chatgpt/pricing",
-    settingsConfig: {
-      env: {
-        // base_url 由代理后端强制重写为 chatgpt.com/backend-api/codex
-        // 用户无需配置
-        ANTHROPIC_BASE_URL: "https://chatgpt.com/backend-api/codex",
-        ANTHROPIC_MODEL: "gpt-5.6-sol",
-        ANTHROPIC_DEFAULT_HAIKU_MODEL: "gpt-5.6-luna",
-        ANTHROPIC_DEFAULT_SONNET_MODEL: "gpt-5.6-sol",
-        ANTHROPIC_DEFAULT_OPUS_MODEL: "gpt-5.6-sol",
-        // Claude Code falls back to a 200K context window for unrecognized
-        // non-Claude model ids. The ChatGPT Codex backend catalogs gpt-5.6-sol
-        // at a 372K window with a ~353K effective budget (openai/codex#31860),
-        // not the 1.05M API window. Pin both knobs: the compact window equals
-        // min(model window, value), so matching the window is behavior-neutral
-        // today but shields the compact trigger from remote-config experiments.
-        // Tweak these directly in the JSON editor; no form fields on purpose.
-        CLAUDE_CODE_MAX_CONTEXT_TOKENS: "372000",
-        CLAUDE_CODE_AUTO_COMPACT_WINDOW: "372000",
-      },
-    },
-    category: "third_party",
-    apiFormat: "openai_responses",
-    providerType: "codex_oauth",
-    requiresOAuth: true,
-    icon: "openai",
-    iconColor: "#000000",
-  },
-  {
-    name: "xAI (Grok)",
-    websiteUrl: "https://x.ai/grok",
-    settingsConfig: {
-      env: {
-        // The proxy enforces both this origin and the Responses wire format.
-        ANTHROPIC_BASE_URL: "https://api.x.ai/v1",
-        ANTHROPIC_MODEL: "grok-4.5",
-        ANTHROPIC_DEFAULT_HAIKU_MODEL: "grok-4.5",
-        ANTHROPIC_DEFAULT_SONNET_MODEL: "grok-4.5",
-        ANTHROPIC_DEFAULT_OPUS_MODEL: "grok-4.5",
-      },
-    },
-    category: "third_party",
-    apiFormat: "openai_responses",
-    providerType: "xai_oauth",
-    requiresOAuth: true,
-    icon: "xai",
-    iconColor: "#000000",
-  },
-  {
-    name: "Nvidia",
-    websiteUrl: "https://build.nvidia.com",
-    apiKeyUrl: "https://build.nvidia.com/settings/api-keys",
-    settingsConfig: {
-      env: {
-        ANTHROPIC_BASE_URL: "https://integrate.api.nvidia.com",
-        ANTHROPIC_AUTH_TOKEN: "",
-        ANTHROPIC_MODEL: "moonshotai/kimi-k3",
-        ANTHROPIC_DEFAULT_HAIKU_MODEL: "moonshotai/kimi-k3",
-        ANTHROPIC_DEFAULT_SONNET_MODEL: "moonshotai/kimi-k3",
-        ANTHROPIC_DEFAULT_OPUS_MODEL: "moonshotai/kimi-k3",
-      },
-    },
-    category: "aggregator",
-    apiFormat: "openai_chat",
-    icon: "nvidia",
-    iconColor: "#000000",
-  },
-  {
     name: "Xiaomi MiMo",
     family: "xiaomi-mimo",
     planKey: "payg",
@@ -1316,26 +1188,6 @@ export const providerPresets: ProviderPreset[] = [
     },
     icon: "aws",
     iconColor: "#FF9900",
-  },
-  {
-    name: "Command Code",
-    websiteUrl: "https://commandcode.ai",
-    apiKeyUrl: "https://commandcode.ai/settings/keys",
-    settingsConfig: {
-      env: {
-        ANTHROPIC_BASE_URL: "https://api.commandcode.ai/provider",
-        ANTHROPIC_AUTH_TOKEN: "",
-        ANTHROPIC_MODEL: "deepseek/deepseek-v4.1-flash",
-        ANTHROPIC_DEFAULT_HAIKU_MODEL: "deepseek/deepseek-v4.1-flash",
-        ANTHROPIC_DEFAULT_SONNET_MODEL: "deepseek/deepseek-v4.1-flash",
-        ANTHROPIC_DEFAULT_OPUS_MODEL: "deepseek/deepseek-v4.1-flash",
-      },
-    },
-    category: "third_party",
-    apiFormat: "openai_chat",
-    endpointCandidates: ["https://api.commandcode.ai/provider"],
-    modelsUrl: "https://api.commandcode.ai/provider/v1/models",
-    icon: "commandcode",
   },
   {
     name: "模力方舟",

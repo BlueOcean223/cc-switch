@@ -23,7 +23,7 @@ impl Database {
     ) -> Result<IndexMap<String, Provider>, AppError> {
         let conn = lock_conn!(self.conn);
         let mut stmt = conn.prepare(
-            "SELECT id, name, settings_config, website_url, category, created_at, sort_index, notes, icon, icon_color, meta, in_failover_queue
+            "SELECT id, name, settings_config, website_url, category, created_at, sort_index, notes, icon, icon_color, meta
              FROM providers WHERE app_type = ?1
              ORDER BY COALESCE(sort_index, 999999), created_at ASC, id ASC"
         ).map_err(|e| AppError::Database(e.to_string()))?;
@@ -41,7 +41,6 @@ impl Database {
                 let icon: Option<String> = row.get(8)?;
                 let icon_color: Option<String> = row.get(9)?;
                 let meta_str: String = row.get(10)?;
-                let in_failover_queue: bool = row.get(11)?;
 
                 let settings_config =
                     serde_json::from_str(&settings_config_str).unwrap_or(serde_json::Value::Null);
@@ -61,7 +60,6 @@ impl Database {
                         meta: Some(meta),
                         icon,
                         icon_color,
-                        in_failover_queue,
                     },
                 ))
             })
@@ -134,7 +132,7 @@ impl Database {
     ) -> Result<Option<Provider>, AppError> {
         let conn = lock_conn!(self.conn);
         let result = conn.query_row(
-            "SELECT name, settings_config, website_url, category, created_at, sort_index, notes, icon, icon_color, meta, in_failover_queue
+            "SELECT name, settings_config, website_url, category, created_at, sort_index, notes, icon, icon_color, meta
              FROM providers WHERE id = ?1 AND app_type = ?2",
             params![id, app_type],
             |row| {
@@ -148,7 +146,6 @@ impl Database {
                 let icon: Option<String> = row.get(7)?;
                 let icon_color: Option<String> = row.get(8)?;
                 let meta_str: String = row.get(9)?;
-                let in_failover_queue: bool = row.get(10)?;
 
                 let settings_config = serde_json::from_str(&settings_config_str).unwrap_or(serde_json::Value::Null);
                 let meta: ProviderMeta = serde_json::from_str(&meta_str).unwrap_or_default();
@@ -165,7 +162,6 @@ impl Database {
                     meta: Some(meta),
                     icon,
                     icon_color,
-                    in_failover_queue,
                 })
             },
         );
@@ -186,17 +182,16 @@ impl Database {
         let mut meta_clone = provider.meta.clone().unwrap_or_default();
         let endpoints = std::mem::take(&mut meta_clone.custom_endpoints);
 
-        let existing: Option<(bool, bool)> = tx
+        let existing: Option<bool> = tx
             .query_row(
-                "SELECT is_current, in_failover_queue FROM providers WHERE id = ?1 AND app_type = ?2",
+                "SELECT is_current FROM providers WHERE id = ?1 AND app_type = ?2",
                 params![provider.id, app_type],
-                |row| Ok((row.get(0)?, row.get(1)?)),
+                |row| row.get(0),
             )
             .ok();
 
         let is_update = existing.is_some();
-        let (is_current, in_failover_queue) =
-            existing.unwrap_or((false, provider.in_failover_queue));
+        let is_current = existing.unwrap_or(false);
 
         if is_update {
             tx.execute(
@@ -211,9 +206,8 @@ impl Database {
                     icon = ?8,
                     icon_color = ?9,
                     meta = ?10,
-                    is_current = ?11,
-                    in_failover_queue = ?12
-                WHERE id = ?13 AND app_type = ?14",
+                    is_current = ?11
+                WHERE id = ?12 AND app_type = ?13",
                 params![
                     provider.name,
                     serde_json::to_string(&provider.settings_config).map_err(|e| {
@@ -230,7 +224,6 @@ impl Database {
                         "Failed to serialize meta: {e}"
                     )))?,
                     is_current,
-                    in_failover_queue,
                     provider.id,
                     app_type,
                 ],
@@ -240,14 +233,15 @@ impl Database {
             tx.execute(
                 "INSERT INTO providers (
                     id, app_type, name, settings_config, website_url, category,
-                    created_at, sort_index, notes, icon, icon_color, meta, is_current, in_failover_queue
-                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+                    created_at, sort_index, notes, icon, icon_color, meta, is_current
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
                 params![
                     provider.id,
                     app_type,
                     provider.name,
-                    serde_json::to_string(&provider.settings_config)
-                        .map_err(|e| AppError::Database(format!("Failed to serialize settings_config: {e}")))?,
+                    serde_json::to_string(&provider.settings_config).map_err(|e| {
+                        AppError::Database(format!("Failed to serialize settings_config: {e}"))
+                    })?,
                     provider.website_url,
                     provider.category,
                     provider.created_at,
@@ -255,10 +249,10 @@ impl Database {
                     provider.notes,
                     provider.icon,
                     provider.icon_color,
-                    serde_json::to_string(&meta_clone)
-                        .map_err(|e| AppError::Database(format!("Failed to serialize meta: {e}")))?,
+                    serde_json::to_string(&meta_clone).map_err(|e| AppError::Database(format!(
+                        "Failed to serialize meta: {e}"
+                    )))?,
                     is_current,
-                    in_failover_queue,
                 ],
             )
             .map_err(|e| AppError::Database(e.to_string()))?;
@@ -278,8 +272,8 @@ impl Database {
     }
 
     /// Replace a provider row under a new ID without exposing an intermediate
-    /// duplicate or missing row. Existing endpoint and health references move
-    /// with the provider, while its current-state bit is preserved.
+    /// duplicate or missing row. Existing endpoint references move with the
+    /// provider, while its current-state bit is preserved.
     pub fn replace_provider_id(
         &self,
         app_type: &str,
@@ -295,11 +289,11 @@ impl Database {
             .transaction()
             .map_err(|e| AppError::Database(e.to_string()))?;
 
-        let (is_current, in_failover_queue) = tx
+        let is_current = tx
             .query_row(
-                "SELECT is_current, in_failover_queue FROM providers WHERE id = ?1 AND app_type = ?2",
+                "SELECT is_current FROM providers WHERE id = ?1 AND app_type = ?2",
                 params![original_id, app_type],
-                |row| Ok((row.get::<_, bool>(0)?, row.get::<_, bool>(1)?)),
+                |row| row.get::<_, bool>(0),
             )
             .optional()
             .map_err(|e| AppError::Database(e.to_string()))?
@@ -331,8 +325,8 @@ impl Database {
             "INSERT INTO providers (
                 id, app_type, name, settings_config, website_url, category,
                 created_at, sort_index, notes, icon, icon_color, meta,
-                is_current, in_failover_queue
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+                is_current
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
             params![
                 provider.id,
                 app_type,
@@ -351,18 +345,12 @@ impl Database {
                     AppError::Database(format!("Failed to serialize meta: {e}"))
                 })?,
                 is_current,
-                in_failover_queue,
             ],
         )
         .map_err(|e| AppError::Database(e.to_string()))?;
 
         tx.execute(
             "UPDATE provider_endpoints SET provider_id = ?1 WHERE provider_id = ?2 AND app_type = ?3",
-            params![provider.id, original_id, app_type],
-        )
-        .map_err(|e| AppError::Database(e.to_string()))?;
-        tx.execute(
-            "UPDATE provider_health SET provider_id = ?1 WHERE provider_id = ?2 AND app_type = ?3",
             params![provider.id, original_id, app_type],
         )
         .map_err(|e| AppError::Database(e.to_string()))?;
@@ -597,7 +585,6 @@ impl Database {
             meta: Some(meta),
             icon: None,
             icon_color: None,
-            in_failover_queue: false,
         }))
     }
 
@@ -809,32 +796,26 @@ impl Database {
 #[cfg(test)]
 mod ensure_official_seed_tests {
     use crate::app_config::AppType;
-    use crate::database::{
-        Database, CLAUDE_DESKTOP_OFFICIAL_PROVIDER_ID, CODEX_OFFICIAL_PROVIDER_ID,
-        GROKBUILD_OFFICIAL_PROVIDER_ID,
-    };
+    use crate::database::{Database, CODEX_OFFICIAL_PROVIDER_ID, GROKBUILD_OFFICIAL_PROVIDER_ID};
 
     #[test]
     fn ensure_inserts_when_missing() {
         let db = Database::memory().expect("memory db");
         let inserted = db
-            .ensure_official_seed_by_id(CLAUDE_DESKTOP_OFFICIAL_PROVIDER_ID, AppType::ClaudeDesktop)
+            .ensure_official_seed_by_id(CODEX_OFFICIAL_PROVIDER_ID, AppType::Codex)
             .expect("ensure ok");
         assert!(inserted, "should insert when missing");
 
         let provider = db
-            .get_provider_by_id(
-                CLAUDE_DESKTOP_OFFICIAL_PROVIDER_ID,
-                AppType::ClaudeDesktop.as_str(),
-            )
+            .get_provider_by_id(CODEX_OFFICIAL_PROVIDER_ID, AppType::Codex.as_str())
             .expect("query ok")
             .expect("provider exists after ensure");
 
-        assert_eq!(provider.id, CLAUDE_DESKTOP_OFFICIAL_PROVIDER_ID);
-        assert_eq!(provider.name, "Claude Desktop Official");
+        assert_eq!(provider.id, CODEX_OFFICIAL_PROVIDER_ID);
+        assert_eq!(provider.name, "OpenAI Official");
         assert_eq!(provider.category.as_deref(), Some("official"));
-        assert_eq!(provider.icon.as_deref(), Some("anthropic"));
-        assert_eq!(provider.icon_color.as_deref(), Some("#D4915D"));
+        assert_eq!(provider.icon.as_deref(), Some("openai"));
+        assert_eq!(provider.icon_color.as_deref(), Some("#00A67E"));
     }
 
     #[test]
@@ -843,26 +824,20 @@ mod ensure_official_seed_tests {
         db.init_default_official_providers().expect("seed");
 
         let mut renamed = db
-            .get_provider_by_id(
-                CLAUDE_DESKTOP_OFFICIAL_PROVIDER_ID,
-                AppType::ClaudeDesktop.as_str(),
-            )
+            .get_provider_by_id(CODEX_OFFICIAL_PROVIDER_ID, AppType::Codex.as_str())
             .expect("query ok")
             .expect("seed present");
         renamed.name = "My Custom Backup".to_string();
-        db.save_provider(AppType::ClaudeDesktop.as_str(), &renamed)
+        db.save_provider(AppType::Codex.as_str(), &renamed)
             .expect("save customization");
 
         let inserted = db
-            .ensure_official_seed_by_id(CLAUDE_DESKTOP_OFFICIAL_PROVIDER_ID, AppType::ClaudeDesktop)
+            .ensure_official_seed_by_id(CODEX_OFFICIAL_PROVIDER_ID, AppType::Codex)
             .expect("ensure ok");
         assert!(!inserted, "should skip when present");
 
         let after = db
-            .get_provider_by_id(
-                CLAUDE_DESKTOP_OFFICIAL_PROVIDER_ID,
-                AppType::ClaudeDesktop.as_str(),
-            )
+            .get_provider_by_id(CODEX_OFFICIAL_PROVIDER_ID, AppType::Codex.as_str())
             .expect("query ok")
             .expect("still present");
         assert_eq!(
@@ -913,15 +888,14 @@ mod ensure_official_seed_tests {
     #[test]
     fn ensure_rejects_unknown_seed() {
         let db = Database::memory().expect("memory db");
-        let result = db.ensure_official_seed_by_id("nonexistent-id", AppType::ClaudeDesktop);
+        let result = db.ensure_official_seed_by_id("nonexistent-id", AppType::Claude);
         assert!(result.is_err(), "unknown seed id should be Err");
     }
 
     #[test]
     fn ensure_rejects_seed_app_type_mismatch() {
         let db = Database::memory().expect("memory db");
-        let result =
-            db.ensure_official_seed_by_id(CLAUDE_DESKTOP_OFFICIAL_PROVIDER_ID, AppType::Claude);
+        let result = db.ensure_official_seed_by_id(CODEX_OFFICIAL_PROVIDER_ID, AppType::Claude);
         assert!(result.is_err(), "(id, app_type) mismatch should be Err");
     }
 }

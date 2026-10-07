@@ -18,11 +18,10 @@
  *   OpenRouter 系命名空间的路由站用 "x-ai/grok-4.5"。
  *
  * config 字段沿用 Codex 风格 TOML 作为载体：Grok 表单只从中提取
- * base_url / model / wire_api 三个字段（extractCodex* 工具），再重建
+ * base_url / model 两个字段（extractCodex* 工具），再重建
  * Grok CLI 自己的 config.toml。
  */
 import type { ProviderCategory } from "../types";
-import type { CodexApiFormat } from "../types";
 import { GROK_BUILD_DEFAULT_MODEL } from "../utils/grokBuildConfig";
 import type { PresetFamilyFields } from "./presetFamilies";
 
@@ -32,7 +31,7 @@ export interface GrokBuildProviderPreset extends PresetFamilyFields {
   websiteUrl: string;
   apiKeyUrl?: string;
   auth: Record<string, any>;
-  config: string; // Codex 风格 TOML 载体（只消费 base_url / model / wire_api）
+  config: string; // Codex 风格 TOML 载体（只消费 base_url / model）
   isOfficial?: boolean;
   isPartner?: boolean;
   partnerPromotionKey?: string;
@@ -40,7 +39,6 @@ export interface GrokBuildProviderPreset extends PresetFamilyFields {
   endpointCandidates?: string[];
   icon?: string;
   iconColor?: string;
-  apiFormat?: CodexApiFormat;
 }
 
 // 官方条目与后端 seed（providers_seed.rs 的 "Grok Official"）对应：
@@ -135,7 +133,6 @@ export const grokBuildProviderPresets: GrokBuildProviderPreset[] = [
     auth: grokAuth(),
     config: grokPresetConfig("xAI (Grok)", "https://api.x.ai/v1"),
     endpointCandidates: ["https://api.x.ai/v1"],
-    apiFormat: "openai_responses",
     category: "third_party",
     icon: "xai",
     iconColor: "#000000",

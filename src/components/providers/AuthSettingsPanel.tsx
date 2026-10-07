@@ -19,7 +19,7 @@ export function AuthSettingsPanel({ target, onClose }: AuthSettingsPanelProps) {
       onClose={onClose}
       motionPreset="slide-from-right"
     >
-      {target ? <AuthCenterPanel authScrollTarget={target} /> : null}
+      {target ? <AuthCenterPanel /> : null}
     </FullScreenPanel>
   );
 }

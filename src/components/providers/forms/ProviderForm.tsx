@@ -8,10 +8,6 @@ import { Button } from "@/components/ui/button";
 import { Form, FormField, FormItem, FormMessage } from "@/components/ui/form";
 import { ImeSafeInput } from "@/components/ui/ime-safe-input";
 import { providerSchema, type ProviderFormData } from "@/lib/schemas/provider";
-import {
-  buildLocalProxyRequestOverrides,
-  formatRequestOverrideObject,
-} from "@/lib/requestOverrides";
 import { providersApi, type AppId, type ManagedAuthProvider } from "@/lib/api";
 import type { ProviderEditorInactiveField } from "@/lib/api/providers";
 import {
@@ -22,12 +18,7 @@ import { useDarkMode } from "@/hooks/useDarkMode";
 import type {
   ProviderCategory,
   ProviderMeta,
-  ClaudeApiFormat,
-  ClaudeStackModel,
-  CodexApiFormat,
   CodexCatalogModel,
-  CodexChatReasoning,
-  PromptCacheRoutingMode,
   ClaudeApiKeyField,
 } from "@/types";
 import {
@@ -66,8 +57,6 @@ import {
 } from "@/utils/providerConfigUtils";
 import { mergeProviderMeta } from "@/utils/providerMetaUtils";
 import {
-  codexApiFormatFromWireApi,
-  extractCodexWireApi,
   setCodexWireApi,
   extractCodexModelName,
   setCodexModelName as setCodexModelNameInConfig,
@@ -81,15 +70,6 @@ import { Label } from "@/components/ui/label";
 import { ProviderPresetSelector } from "./ProviderPresetSelector";
 import { BasicFormFields } from "./BasicFormFields";
 import { ClaudeFormFields } from "./ClaudeFormFields";
-import {
-  claudeStackModelsFromEnv,
-  createClaudeStackModelRow,
-  normalizeClaudeStackModels,
-  type ClaudeStackModelRow,
-} from "./ClaudeStackModelsField";
-import { setClaudeOneMMarker } from "./hooks/useModelState";
-import { useAppMode } from "@/lib/query/proxy";
-import { ClaudeDesktopProviderForm } from "./ClaudeDesktopProviderForm";
 import { GrokBuildProviderForm } from "./GrokBuildProviderForm";
 import { CodexFormFields } from "./CodexFormFields";
 import { GeminiFormFields } from "./GeminiFormFields";
@@ -97,7 +77,6 @@ import { McodeProviderForm } from "./McodeProviderForm";
 import { PiProviderForm } from "./PiProviderForm";
 import { OmoFormFields } from "./OmoFormFields";
 import { parseOmoOtherFieldsObject } from "@/types/omo";
-import type { AppMode } from "@/types/proxy";
 import {
   useProviderCategory,
   useDraftEditorProjection,
@@ -116,9 +95,7 @@ import {
   useOmoDraftState,
   useOpenclawFormState,
   useHermesFormState,
-  useCopilotAuth,
   useCodexOauth,
-  useXaiOauth,
 } from "./hooks";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import {
@@ -149,13 +126,9 @@ type PresetEntry = {
 
 function getPresetProviderType(
   preset: PresetEntry["preset"] | null | undefined,
-): "github_copilot" | "codex_oauth" | "xai_oauth" | undefined {
+): "codex_oauth" | undefined {
   if (!preset || !("providerType" in preset)) return undefined;
-  return preset.providerType === "github_copilot" ||
-    preset.providerType === "codex_oauth" ||
-    preset.providerType === "xai_oauth"
-    ? preset.providerType
-    : undefined;
+  return preset.providerType === "codex_oauth" ? "codex_oauth" : undefined;
 }
 
 export const normalizeCodexCatalogModelsForSave = (
@@ -192,7 +165,7 @@ export const normalizeCodexCatalogModelsForSave = (
       model,
       ...(displayName ? { displayName } : {}),
       ...(contextWindow && contextWindow > 0 ? { contextWindow } : {}),
-      // Native Responses profile overrides (ignored by the chat/proxy profile).
+      // Native Responses profile overrides.
       ...(typeof item.supportsParallelToolCalls === "boolean"
         ? { supportsParallelToolCalls: item.supportsParallelToolCalls }
         : {}),
@@ -210,69 +183,13 @@ export const normalizeCodexCatalogModelsForSave = (
   return normalized;
 };
 
-const normalizeCodexChatReasoningForSave = (
-  value?: CodexChatReasoning,
-): CodexChatReasoning | undefined => {
-  const supportsEffort = value?.supportsEffort === true;
-  const supportsThinking = value?.supportsThinking === true || supportsEffort;
-  const hasExplicitConfig = value && Object.keys(value).length > 0;
-
-  if (!supportsThinking && !supportsEffort) {
-    return hasExplicitConfig
-      ? {
-          supportsThinking: false,
-          supportsEffort: false,
-          thinkingParam: "none",
-          effortParam: "none",
-          outputFormat: value?.outputFormat ?? "auto",
-        }
-      : undefined;
-  }
-
-  return {
-    supportsThinking,
-    supportsEffort,
-    thinkingParam: supportsThinking
-      ? (value?.thinkingParam ?? "thinking")
-      : "none",
-    effortParam: supportsEffort
-      ? (value?.effortParam ?? "reasoning_effort")
-      : "none",
-    effortValueMode: supportsEffort
-      ? (value?.effortValueMode ?? "passthrough")
-      : undefined,
-    outputFormat: value?.outputFormat ?? "auto",
-  };
-};
-
 const normalizeProviderKey = (value: string) =>
   value.toLowerCase().replace(/[^a-z0-9-]/g, "");
-
-/**
- * 表单里的 Stack 模型列表：行里配了就用它（空列表是用户清空了），没配是 `null`（跟着模型
- * 映射）。
- */
-const initialClaudeStackRows = (
-  models: ClaudeStackModel[] | undefined,
-): ClaudeStackModelRow[] | null =>
-  models ? models.map((model) => createClaudeStackModelRow(model)) : null;
-
-/** 列表的第一个模型（默认模型）写进 `ANTHROPIC_MODEL` 的样子：1M 模型带标记。 */
-const claudeStackDefaultModel = (
-  rows: ClaudeStackModel[],
-): string | undefined => {
-  const first = normalizeClaudeStackModels(rows)[0];
-  return first && setClaudeOneMMarker(first.model, first.oneM === true);
-};
 
 const asRecord = (value: unknown): Record<string, unknown> =>
   value && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : {};
-
-type LocalProxyRequestOverridesBuildResult = ReturnType<
-  typeof buildLocalProxyRequestOverrides
->;
 
 export interface ProviderFormProps {
   appId: AppId;
@@ -296,7 +213,6 @@ export interface ProviderFormProps {
     iconColor?: string;
   };
   showButtons?: boolean;
-  isProxyTakeover?: boolean;
   /** 编辑器里行保存着、但不随切换生效的字段（Claude Code、Codex、Gemini CLI、Grok Build）。 */
   inactiveFields?: ProviderEditorInactiveField[];
   /**
@@ -309,22 +225,12 @@ export interface ProviderFormProps {
    * 作为三方比较的底；投影进行中或失败时为 `null`。
    */
   onEditorBaseChange?: EditorBaseChange;
-  /**
-   * 从供应商页哪一格（直连 / 路由 / 聚合）打开的：Claude Code、Codex 按它选布局，在聚合那格
-   * 打开就用聚合的简化表单。不传时按应用实际生效的模式。
-   */
-  modeView?: AppMode;
-  /** 用不用聚合的简化表单：页头据此在应用名后标「聚合模式」。卸载时报 false */
-  onStackLayoutChange?: (stackLayout: boolean) => void;
 }
 
 export function ProviderForm(props: ProviderFormProps) {
   if (props.appId === "mcode") return <McodeProviderForm {...props} />;
   if (props.appId === "pi") {
     return <PiProviderForm {...props} />;
-  }
-  if (props.appId === "claude-desktop") {
-    return <ClaudeDesktopProviderForm {...props} />;
   }
   if (props.appId === "grokbuild") {
     return <GrokBuildProviderForm {...props} />;
@@ -345,17 +251,10 @@ function ProviderFormFull({
   onSubmittingChange,
   initialData,
   showButtons = true,
-  isProxyTakeover = false,
   inactiveFields,
   claudeLiveBase,
   onEditorBaseChange,
-  modeView,
-  onStackLayoutChange,
 }: ProviderFormProps) {
-  if (appId === "claude-desktop") {
-    throw new Error("ProviderFormFull should not receive claude-desktop");
-  }
-
   const { t } = useTranslation();
   const isEditMode = Boolean(initialData);
   const initialCodexOfficialIdentity =
@@ -395,11 +294,6 @@ function ProviderFormFull({
   const [endpointAutoSelect, setEndpointAutoSelect] = useState<boolean>(
     () => initialData?.meta?.endpointAutoSelect ?? true,
   );
-  const supportsFullUrl = appId === "claude" || appId === "codex";
-  const [localIsFullUrl, setLocalIsFullUrl] = useState<boolean>(() => {
-    if (!supportsFullUrl) return false;
-    return initialData?.meta?.isFullUrl ?? false;
-  });
 
   const { category } = useProviderCategory({
     appId,
@@ -421,32 +315,11 @@ function ProviderFormFull({
       setDraftCustomEndpoints([]);
     }
     setEndpointAutoSelect(initialData?.meta?.endpointAutoSelect ?? true);
-    setLocalIsFullUrl(
-      supportsFullUrl ? (initialData?.meta?.isFullUrl ?? false) : false,
-    );
-    setSelectedGitHubAccountId(
-      resolveManagedAccountId(initialData?.meta, "github_copilot"),
-    );
     setSelectedCodexAccountId(
       resolveManagedAccountId(initialData?.meta, "codex_oauth"),
     );
     setHasValidCodexOfficialSelection(true);
-    setCodexFastMode(initialData?.meta?.codexFastMode ?? false);
-    setCodexChatReasoning(initialData?.meta?.codexChatReasoning ?? {});
-    setPromptCacheRouting(initialData?.meta?.promptCacheRouting ?? "auto");
-    setCustomUserAgent(initialData?.meta?.customUserAgent ?? "");
-    setLocalProxyHeadersOverride(
-      formatRequestOverrideObject(
-        initialData?.meta?.localProxyRequestOverrides?.headers,
-      ),
-    );
-    setLocalProxyBodyOverride(
-      formatRequestOverrideObject(
-        initialData?.meta?.localProxyRequestOverrides?.body,
-      ),
-    );
-    setClaudeStackRows(initialClaudeStackRows(initialData?.meta?.stackModels));
-  }, [appId, initialData, supportsFullUrl]);
+  }, [appId, initialData]);
 
   const defaultValues: ProviderFormData = useMemo(
     () => ({
@@ -514,10 +387,6 @@ function ProviderFormFull({
   const [softIssues, setSoftIssues] = useState<string[] | null>(null);
   const [pendingFormValues, setPendingFormValues] =
     useState<ProviderFormData | null>(null);
-  const [
-    pendingLocalProxyRequestOverridesResult,
-    setPendingLocalProxyRequestOverridesResult,
-  ] = useState<LocalProxyRequestOverridesBuildResult | null>(null);
   // 确认框走的提交路径绕过了 react-hook-form 的 isSubmitting，单独追踪
   const [isConfirmSubmitting, setIsConfirmSubmitting] = useState(false);
 
@@ -564,15 +433,6 @@ function ProviderFormFull({
     onConfigChange: handleSettingsConfigChange,
   });
 
-  const [localApiFormat, setLocalApiFormat] = useState<ClaudeApiFormat>(() => {
-    if (appId !== "claude") return "anthropic";
-    return initialData?.meta?.apiFormat ?? "anthropic";
-  });
-
-  const handleApiFormatChange = useCallback((format: ClaudeApiFormat) => {
-    setLocalApiFormat(format);
-  }, []);
-
   const handleApiKeyFieldChange = useCallback(
     (field: ClaudeApiKeyField) => {
       const prev = localApiKeyField;
@@ -597,104 +457,20 @@ function ProviderFormFull({
     [localApiKeyField, form, handleSettingsConfigChange],
   );
 
-  // Copilot OAuth 认证状态（仅 Claude 应用需要）
-  const {
-    isAuthenticated: isCopilotAuthenticated,
-    isStatusSuccess: isCopilotStatusSuccess,
-    isStatusError: isCopilotStatusError,
-    accounts: copilotAccounts,
-  } = useCopilotAuth();
-
-  // Codex OAuth 认证状态（ChatGPT Plus/Pro 反代）
+  // ChatGPT 账号状态（Codex 官方卡绑定账号时用）
   const {
     isAuthenticated: isCodexOauthAuthenticated,
     isStatusSuccess: isCodexOauthStatusSuccess,
     isStatusError: isCodexOauthStatusError,
-    defaultAccountId: codexOauthDefaultAccountId,
     accounts: codexOauthAccounts,
   } = useCodexOauth();
 
-  const {
-    isAuthenticated: isXaiOauthAuthenticated,
-    accounts: xaiOauthAccounts,
-  } = useXaiOauth();
-
-  // 选中的 GitHub 账号 ID（多账号支持）
-  const [selectedGitHubAccountId, setSelectedGitHubAccountId] = useState<
-    string | null
-  >(() => resolveManagedAccountId(initialData?.meta, "github_copilot"));
-
-  // 选中的 ChatGPT 账号 ID（Codex OAuth 多账号支持）
+  // 选中的 ChatGPT 账号 ID（Codex 官方卡多账号支持）
   const [selectedCodexAccountId, setSelectedCodexAccountId] = useState<
     string | null
   >(() => resolveManagedAccountId(initialData?.meta, "codex_oauth"));
   const [hasValidCodexOfficialSelection, setHasValidCodexOfficialSelection] =
     useState(true);
-  const [selectedXaiAccountId, setSelectedXaiAccountId] = useState<
-    string | null
-  >(() => resolveManagedAccountId(initialData?.meta, "xai_oauth"));
-  const [codexFastMode, setCodexFastMode] = useState<boolean>(
-    () => initialData?.meta?.codexFastMode ?? false,
-  );
-  const [codexChatReasoning, setCodexChatReasoning] =
-    useState<CodexChatReasoning>(
-      () => initialData?.meta?.codexChatReasoning ?? {},
-    );
-  const [promptCacheRouting, setPromptCacheRouting] =
-    useState<PromptCacheRoutingMode>(
-      () => initialData?.meta?.promptCacheRouting ?? "auto",
-    );
-  const [customUserAgent, setCustomUserAgent] = useState<string>(
-    () => initialData?.meta?.customUserAgent ?? "",
-  );
-  const [localProxyHeadersOverride, setLocalProxyHeadersOverride] =
-    useState<string>(() =>
-      formatRequestOverrideObject(
-        initialData?.meta?.localProxyRequestOverrides?.headers,
-      ),
-    );
-  const [localProxyBodyOverride, setLocalProxyBodyOverride] = useState<string>(
-    () =>
-      formatRequestOverrideObject(
-        initialData?.meta?.localProxyRequestOverrides?.body,
-      ),
-  );
-  // Stack 模式：Claude Code 的模型列表存在 meta.stackModels；Codex 复用模型目录。`null` 表示
-  // 没配列表，显示（后端也按它发布）模型映射里的模型，跟着映射变；动过列表才存。
-  const [claudeStackRows, setClaudeStackRows] = useState<
-    ClaudeStackModelRow[] | null
-  >(() => initialClaudeStackRows(initialData?.meta?.stackModels));
-  // 按行里实际写的映射算（和后端一样），不用 useModelState 回填过的值。
-  const claudeSettingsConfig =
-    appId === "claude" ? form.watch("settingsConfig") : "";
-  const mappedClaudeStackRows = useMemo(() => {
-    let env: Record<string, unknown> | undefined;
-    try {
-      env = asRecord(JSON.parse(claudeSettingsConfig || "{}").env);
-    } catch {
-      env = undefined;
-    }
-    return claudeStackModelsFromEnv(env).map((model) =>
-      createClaudeStackModelRow(model),
-    );
-  }, [claudeSettingsConfig]);
-  const shownClaudeStackRows = claudeStackRows ?? mappedClaudeStackRows;
-  // 列表的第一个就是默认模型：它一变（设为默认、删掉、改名），`ANTHROPIC_MODEL` 当场跟着变；
-  // 没动第一个就不碰。删光了也不碰。
-  const handleClaudeStackRowsChange = (rows: ClaudeStackModelRow[]) => {
-    setClaudeStackRows(rows);
-    const next = claudeStackDefaultModel(rows);
-    if (next && next !== claudeStackDefaultModel(shownClaudeStackRows)) {
-      handleModelChange("ANTHROPIC_MODEL", next);
-    }
-  };
-
-  // 聚合模式下 Claude Code / Codex 的第三方供应商用简化面板（连接 + 模型列表 + 高级）；
-  // 两种布局共用同一份表单状态，完整表单从直连 / 路由那格打开。
-  const { data: appModeView } = useAppMode(
-    appId,
-    appId === "claude" || appId === "codex",
-  );
 
   const {
     codexAuth,
@@ -714,46 +490,6 @@ function ProviderFormFull({
     resetCodexConfig,
   } = useCodexConfigState({ initialData });
 
-  const initialCodexApiFormat: CodexApiFormat =
-    initialData?.meta?.apiFormat === "openai_chat"
-      ? "openai_chat"
-      : initialData?.meta?.apiFormat === "anthropic"
-        ? "anthropic"
-        : initialData?.meta?.apiFormat === "openai_responses"
-          ? "openai_responses"
-          : (codexApiFormatFromWireApi(
-              extractCodexWireApi(
-                typeof initialData?.settingsConfig?.config === "string"
-                  ? initialData.settingsConfig.config
-                  : "",
-              ),
-            ) ?? "openai_responses");
-
-  const [localCodexApiFormat, setLocalCodexApiFormat] =
-    useState<CodexApiFormat>(initialCodexApiFormat);
-
-  // Auth-field choice for the Anthropic Messages upstream (defaults to the Bearer form)
-  const initialCodexAnthropicAuthField: ClaudeApiKeyField =
-    initialData?.meta?.apiKeyField === "ANTHROPIC_API_KEY"
-      ? "ANTHROPIC_API_KEY"
-      : "ANTHROPIC_AUTH_TOKEN";
-  const [localCodexAnthropicAuthField, setLocalCodexAnthropicAuthField] =
-    useState<ClaudeApiKeyField>(initialCodexAnthropicAuthField);
-
-  // Emulate the Claude Code client: off by default, enabled only when the user explicitly turns it on (true)
-  const [localCodexImpersonateClaudeCode, setLocalCodexImpersonateClaudeCode] =
-    useState<boolean>(initialData?.meta?.impersonateClaudeCode === true);
-
-  // Codex → Anthropic output ceiling override (empty string = use the 8192 default).
-  // Kept as a string so the numeric input can be cleared; parsed on save.
-  const [localCodexMaxOutputTokens, setLocalCodexMaxOutputTokens] =
-    useState<string>(
-      typeof initialData?.meta?.maxOutputTokens === "number" &&
-        initialData.meta.maxOutputTokens > 0
-        ? String(initialData.meta.maxOutputTokens)
-        : "",
-    );
-
   const { configError: codexConfigError, debouncedValidate } =
     useCodexTomlValidation();
 
@@ -763,19 +499,6 @@ function ProviderFormFull({
       debouncedValidate(value);
     },
     [originalHandleCodexConfigChange, debouncedValidate],
-  );
-
-  const handleCodexApiFormatChange = useCallback(
-    (format: CodexApiFormat) => {
-      setLocalCodexApiFormat(format);
-      // wire_api is always "responses" for Codex; format controls proxy-layer conversion
-      setCodexConfig((prev) => {
-        const updated = setCodexWireApi(prev, "responses");
-        debouncedValidate(updated);
-        return updated;
-      });
-    },
-    [setCodexConfig, debouncedValidate],
   );
 
   // 新增：预设或模板投影到当前配置文件上显示。每次重置显示内容都要重新投影，否则保存时
@@ -793,8 +516,6 @@ function ProviderFormFull({
     if (appId === "codex" && !initialData && selectedPresetId === "custom") {
       const template = getCodexCustomTemplate();
       resetCodexConfig(template.auth, template.config);
-      setCodexChatReasoning({});
-      setPromptCacheRouting("auto");
       projectCodexDraft(template.auth, template.config);
     }
   }, [
@@ -871,19 +592,6 @@ function ProviderFormFull({
     [presetEntries, selectedPresetId],
   );
   const presetProviderType = getPresetProviderType(selectedPresetEntry?.preset);
-  const initialProviderType = initialData?.meta?.providerType;
-  const isCopilotProvider =
-    appId === "claude" &&
-    (presetProviderType === "github_copilot" ||
-      initialProviderType === "github_copilot" ||
-      baseUrl.includes("githubcopilot.com"));
-  const isClaudeCodexOauthProvider =
-    appId === "claude" &&
-    (presetProviderType === "codex_oauth" ||
-      initialProviderType === "codex_oauth");
-  const isXaiOauthProvider =
-    (appId === "claude" || appId === "codex") &&
-    (presetProviderType === "xai_oauth" || initialProviderType === "xai_oauth");
   const wasCodexOfficialManagedOauthBound =
     appId === "codex" &&
     Boolean(resolveManagedAccountId(initialData?.meta, "codex_oauth"));
@@ -895,20 +603,8 @@ function ProviderFormFull({
         selectedPresetEntry?.preset.category === "official"));
   const isCodexOfficialManagedOauthBound =
     isCodexOfficialProvider && Boolean(selectedCodexAccountId);
-  // 在聚合那格打开（没给就看应用实际是否在聚合模式）时，新增 / 编辑用聚合的简化表单
-  const useStackLayout =
-    (modeView ?? appModeView?.mode) === "stack" &&
-    (appId === "claude" || appId === "codex") &&
-    category !== "official" &&
-    !isCodexOfficialProvider;
-  useEffect(() => {
-    onStackLayoutChange?.(useStackLayout);
-    return () => onStackLayoutChange?.(false);
-  }, [useStackLayout, onStackLayoutChange]);
   const requiresExplicitCodexOfficialSelection =
     isCodexOfficialProvider && !hasValidCodexOfficialSelection;
-  const requiresCodexOauthLogin =
-    isClaudeCodexOauthProvider || isCodexOfficialManagedOauthBound;
 
   const {
     templateValues,
@@ -1192,26 +888,7 @@ function ProviderFormFull({
     providerId,
   ]);
 
-  const shouldApplyLocalProxyRequestOverrides =
-    (appId === "claude" || appId === "codex") && category !== "official";
-
   const handleSubmit = async (values: ProviderFormData) => {
-    const overridesResult = shouldApplyLocalProxyRequestOverrides
-      ? buildLocalProxyRequestOverrides(
-          localProxyHeadersOverride,
-          localProxyBodyOverride,
-        )
-      : {};
-    if (overridesResult.error) {
-      toast.error(
-        t("providerForm.localProxyRequestOverridesInvalid", {
-          defaultValue: `本地代理请求覆盖格式错误：${overridesResult.error}`,
-          error: overridesResult.error,
-        }),
-      );
-      return;
-    }
-
     // 软性问题（业务约束，用户可选择仍要保存）
     const issues: string[] = [];
 
@@ -1342,31 +1019,7 @@ function ProviderFormFull({
       }
     }
 
-    // OAuth 未登录：B 类（token 根本不存在，保存了也没法建立）
-    if (isCopilotProvider && isCopilotStatusError) {
-      toast.error(
-        t("copilot.statusLoadFailed", {
-          defaultValue: "无法加载 GitHub Copilot 账号状态，请重试。",
-        }),
-      );
-      return;
-    }
-    if (isCopilotProvider && !isCopilotStatusSuccess) {
-      toast.error(
-        t("copilot.statusLoading", {
-          defaultValue: "正在加载 GitHub Copilot 账号状态，请稍后再试。",
-        }),
-      );
-      return;
-    }
-    if (isCopilotProvider && !isCopilotAuthenticated) {
-      toast.error(
-        t("copilot.loginRequired", {
-          defaultValue: "请先登录 GitHub Copilot",
-        }),
-      );
-      return;
-    }
+    // ChatGPT 账号未登录：B 类（token 根本不存在，保存了也没法建立）
     if (requiresExplicitCodexOfficialSelection) {
       toast.error(
         t("codexOauth.explicitSelectionRequired", {
@@ -1375,7 +1028,7 @@ function ProviderFormFull({
       );
       return;
     }
-    if (requiresCodexOauthLogin && isCodexOauthStatusError) {
+    if (isCodexOfficialManagedOauthBound && isCodexOauthStatusError) {
       toast.error(
         t("codexOauth.statusLoadFailed", {
           defaultValue: "无法加载 ChatGPT 账号状态，请重试。",
@@ -1383,7 +1036,7 @@ function ProviderFormFull({
       );
       return;
     }
-    if (requiresCodexOauthLogin && !isCodexOauthStatusSuccess) {
+    if (isCodexOfficialManagedOauthBound && !isCodexOauthStatusSuccess) {
       toast.error(
         t("codexOauth.statusLoading", {
           defaultValue: "正在加载 ChatGPT 账号状态，请稍后再试。",
@@ -1391,7 +1044,7 @@ function ProviderFormFull({
       );
       return;
     }
-    if (requiresCodexOauthLogin && !isCodexOauthAuthenticated) {
+    if (isCodexOfficialManagedOauthBound && !isCodexOauthAuthenticated) {
       toast.error(
         t("codexOauth.loginRequired", {
           defaultValue: "请先登录 ChatGPT 账号",
@@ -1399,69 +1052,16 @@ function ProviderFormFull({
       );
       return;
     }
-    if (isXaiOauthProvider && !isXaiOauthAuthenticated) {
-      toast.error(
-        t("xaiOauth.loginRequired", {
-          defaultValue: "请先登录 xAI 账号",
-        }),
-      );
-      return;
-    }
-
-    const selectedAccountExists = (
-      accountId: string | null,
-      accounts: Array<{ id: string }>,
-    ) =>
-      accountId === null ||
-      accounts.some((account) => account.id === accountId);
-    const selectedCodexAccountIsUsable = (accountId: string | null) => {
-      const effectiveAccountId =
-        accountId ??
-        codexOauthDefaultAccountId ??
-        codexOauthAccounts.find((account) => account.is_default)?.id ??
-        codexOauthAccounts[0]?.id;
-      return (
-        !!effectiveAccountId &&
-        codexOauthAccounts.some(
-          (account) =>
-            account.id === effectiveAccountId && !account.reauth_required,
-        )
-      );
-    };
-    const selectedXaiAccountIsUsable = (accountId: string | null) =>
-      accountId === null ||
-      xaiOauthAccounts.some(
-        (account) => account.id === accountId && !account.requires_reauth,
-      );
     if (
-      isCopilotProvider &&
-      !selectedAccountExists(selectedGitHubAccountId, copilotAccounts)
-    ) {
-      toast.error(
-        t("managedAuth.selectedAccountUnavailable", {
-          defaultValue: "已绑定账号不存在，请重新选择账号",
-        }),
-      );
-      return;
-    }
-    if (
-      requiresCodexOauthLogin &&
-      !selectedCodexAccountIsUsable(selectedCodexAccountId)
+      isCodexOfficialManagedOauthBound &&
+      !codexOauthAccounts.some(
+        (account) =>
+          account.id === selectedCodexAccountId && !account.reauth_required,
+      )
     ) {
       toast.error(
         t("managedAuth.selectedAccountNeedsReauth", {
           defaultValue: "已绑定账号不存在或需要重新登录",
-        }),
-      );
-      return;
-    }
-    if (
-      isXaiOauthProvider &&
-      !selectedXaiAccountIsUsable(selectedXaiAccountId)
-    ) {
-      toast.error(
-        t("managedAuth.selectedAccountNeedsReauth", {
-          defaultValue: "已绑定 xAI 账号不存在或需要重新登录",
         }),
       );
       return;
@@ -1502,23 +1102,14 @@ function ProviderFormFull({
     // cloud_provider（如 Bedrock）通过模板变量处理认证，跳过通用校验
     if (category !== "official" && category !== "cloud_provider") {
       if (appId === "claude") {
-        if (
-          !isClaudeCodexOauthProvider &&
-          !isXaiOauthProvider &&
-          !baseUrl.trim()
-        ) {
+        if (!baseUrl.trim()) {
           issues.push(
             t("providerForm.endpointRequired", {
               defaultValue: "非官方供应商请填写 API 端点",
             }),
           );
         }
-        if (
-          !isCopilotProvider &&
-          !isClaudeCodexOauthProvider &&
-          !isXaiOauthProvider &&
-          !apiKey.trim()
-        ) {
+        if (!apiKey.trim()) {
           issues.push(
             t("providerForm.apiKeyRequired", {
               defaultValue: "非官方供应商请填写 API Key",
@@ -1526,35 +1117,17 @@ function ProviderFormFull({
           );
         }
       } else if (appId === "codex") {
-        // 托管 OAuth 预设（xAI）：端点由 adapter 硬定向、token 由代理注入，
-        // 两项都不需要用户填写
-        if (!isXaiOauthProvider && !codexBaseUrl.trim()) {
+        if (!codexBaseUrl.trim()) {
           issues.push(
             t("providerForm.endpointRequired", {
               defaultValue: "非官方供应商请填写 API 端点",
             }),
           );
         }
-        if (!isXaiOauthProvider && !codexApiKey.trim()) {
+        if (!codexApiKey.trim()) {
           issues.push(
             t("providerForm.apiKeyRequired", {
               defaultValue: "非官方供应商请填写 API Key",
-            }),
-          );
-        }
-      }
-      // Stack 布局：一个模型都没有的供应商加进 Stack 后不会出现在模型选择器里。
-      if (useStackLayout) {
-        const hasNoModels =
-          appId === "claude"
-            ? normalizeClaudeStackModels(shownClaudeStackRows).length === 0
-            : normalizeCodexCatalogModelsForSave(codexCatalogModels).length ===
-                0 && !extractCodexModelName(codexConfig ?? "");
-        if (hasNoModels) {
-          issues.push(
-            t("providerForm.stackLayout.noModels", {
-              defaultValue:
-                "模型列表为空：把这家加入聚合后，模型选择器里不会多出它的模型",
             }),
           );
         }
@@ -1581,27 +1154,13 @@ function ProviderFormFull({
       // 弹确认框让用户决定是否仍要保存
       setSoftIssues(issues);
       setPendingFormValues(values);
-      setPendingLocalProxyRequestOverridesResult(overridesResult);
       return;
     }
 
-    await performSubmit(values, overridesResult);
+    await performSubmit(values);
   };
 
-  const performSubmit = async (
-    values: ProviderFormData,
-    overridesResult: LocalProxyRequestOverridesBuildResult,
-  ) => {
-    if (overridesResult.error) {
-      toast.error(
-        t("providerForm.localProxyRequestOverridesInvalid", {
-          defaultValue: `本地代理请求覆盖格式错误：${overridesResult.error}`,
-          error: overridesResult.error,
-        }),
-      );
-      return;
-    }
-
+  const performSubmit = async (values: ProviderFormData) => {
     let settingsConfig: string;
 
     if (appId === "codex") {
@@ -1616,8 +1175,7 @@ function ProviderFormFull({
           category !== "official" && codexConfigForSave.trim()
             ? setCodexWireApi(codexConfigForSave, "responses")
             : codexConfigForSave;
-        // 模型映射与「路由接管」解耦：对所有非官方供应商，填了就持久化
-        //（Chat 生成兼容路由、原生 Responses 生成 model-catalogs.json），
+        // 模型映射：对所有非官方供应商，填了就持久化（生成 model-catalogs.json），
         // 留空归一化为 [] 即不写。后端只看 modelCatalog.models 是否非空。
         const normalizedCatalogModels =
           category !== "official"
@@ -1626,7 +1184,6 @@ function ProviderFormFull({
         // The default-model field writes the top-level `model` into the TOML
         // as the user types; only when it was left empty fall back to the
         // first catalog row so "fill mapping only" keeps its old behavior.
-        // Stack 布局的 ★ 也是当场写 `model`，这里一样只补空的。
         if (
           normalizedCatalogModels.length > 0 &&
           !extractCodexModelName(normalizedCodexConfig)
@@ -1809,20 +1366,6 @@ function ProviderFormFull({
       delete baseMeta.custom_endpoints;
     }
 
-    const providerType = isCopilotProvider
-      ? "github_copilot"
-      : isClaudeCodexOauthProvider || isCodexOfficialManagedOauthBound
-        ? "codex_oauth"
-        : isXaiOauthProvider
-          ? "xai_oauth"
-          : undefined;
-
-    // 动过列表才存；清空了存空列表（什么都不发布），和没配（跟着映射）区分开。
-    const stackModels =
-      appId === "claude" && category !== "official" && claudeStackRows
-        ? normalizeClaudeStackModels(claudeStackRows)
-        : undefined;
-
     const nextMeta: ProviderMeta = {
       ...(baseMeta ?? {}),
       opencodeConfigFormat: isNativeOpencode ? "v2" : undefined,
@@ -1833,119 +1376,35 @@ function ProviderFormFull({
           ? initialData?.meta?.commonConfigEnabled
           : undefined,
       endpointAutoSelect,
-      claudeDesktopMode: undefined,
-      // 保存 providerType（用于识别 Copilot / Codex OAuth 等特殊供应商）
-      providerType,
-      authBinding: isCopilotProvider
+      // Codex 官方卡绑定了 ChatGPT 账号：切换时把这个账号的登录写进 auth.json
+      providerType: isCodexOfficialManagedOauthBound
+        ? "codex_oauth"
+        : undefined,
+      authBinding: isCodexOfficialManagedOauthBound
         ? {
             source: "managed_account",
-            authProvider: "github_copilot",
-            accountId: selectedGitHubAccountId ?? undefined,
+            authProvider: "codex_oauth",
+            accountId: selectedCodexAccountId ?? undefined,
           }
-        : isClaudeCodexOauthProvider
-          ? {
-              source: "managed_account",
-              authProvider: "codex_oauth",
-              accountId: selectedCodexAccountId ?? undefined,
-            }
-          : isCodexOfficialManagedOauthBound
-            ? {
-                source: "managed_account",
-                authProvider: "codex_oauth",
-                accountId: selectedCodexAccountId ?? undefined,
-              }
-            : isXaiOauthProvider
-              ? {
-                  source: "managed_account",
-                  authProvider: "xai_oauth",
-                  accountId: selectedXaiAccountId ?? undefined,
-                }
-              : undefined,
-      // GitHub Copilot 多账号：保存关联的账号 ID
-      githubAccountId:
-        isCopilotProvider && selectedGitHubAccountId
-          ? selectedGitHubAccountId
-          : undefined,
-      codexFastMode: isClaudeCodexOauthProvider ? codexFastMode : undefined,
-      codexChatReasoning:
-        appId === "codex" &&
-        category !== "official" &&
-        localCodexApiFormat === "openai_chat"
-          ? normalizeCodexChatReasoningForSave(codexChatReasoning)
-          : undefined,
-      promptCacheRouting:
-        appId === "codex" &&
-        category !== "official" &&
-        localCodexApiFormat === "openai_chat" &&
-        promptCacheRouting !== "auto"
-          ? promptCacheRouting
-          : undefined,
-      customUserAgent:
-        (appId === "claude" || appId === "codex") && category !== "official"
-          ? customUserAgent.trim() || undefined
-          : undefined,
-      localProxyRequestOverrides: shouldApplyLocalProxyRequestOverrides
-        ? overridesResult.overrides
         : undefined,
+      // Codex 直连只讲 Responses：模型目录按原生 Responses 生成
       apiFormat:
-        appId === "claude" && category !== "official"
-          ? isXaiOauthProvider
-            ? "openai_responses"
-            : localApiFormat
-          : appId === "codex" && category !== "official"
-            ? isXaiOauthProvider
-              ? "openai_responses"
-              : localCodexApiFormat
-            : undefined,
+        appId === "codex" && category !== "official"
+          ? "openai_responses"
+          : undefined,
       apiKeyField:
         appId === "claude" &&
         category !== "official" &&
         localApiKeyField !== "ANTHROPIC_AUTH_TOKEN"
           ? localApiKeyField
-          : appId === "codex" &&
-              category !== "official" &&
-              localCodexApiFormat === "anthropic" &&
-              localCodexAnthropicAuthField !== "ANTHROPIC_AUTH_TOKEN"
-            ? localCodexAnthropicAuthField
-            : undefined,
-      // Off by default; persist true only for codex+anthropic when the user explicitly enables it
-      impersonateClaudeCode:
-        appId === "codex" &&
-        category !== "official" &&
-        localCodexApiFormat === "anthropic" &&
-        localCodexImpersonateClaudeCode
-          ? true
           : undefined,
-      // Persist only for codex+anthropic when a positive value was entered
-      maxOutputTokens:
-        appId === "codex" &&
-        category !== "official" &&
-        localCodexApiFormat === "anthropic" &&
-        localCodexMaxOutputTokens.trim() !== "" &&
-        Number(localCodexMaxOutputTokens) > 0
-          ? Number(localCodexMaxOutputTokens)
-          : undefined,
-      isFullUrl:
-        supportsFullUrl &&
-        category !== "official" &&
-        !isXaiOauthProvider &&
-        localIsFullUrl
-          ? true
-          : undefined,
-      stackModels,
     };
 
-    if (!isClaudeCodexOauthProvider && "codexFastMode" in nextMeta) {
-      delete nextMeta.codexFastMode;
-    }
-    if (!providerType && "providerType" in nextMeta) {
+    if (!nextMeta.providerType && "providerType" in nextMeta) {
       delete nextMeta.providerType;
     }
     if (!nextMeta.authBinding && "authBinding" in nextMeta) {
       delete nextMeta.authBinding;
-    }
-    if (!nextMeta.githubAccountId && "githubAccountId" in nextMeta) {
-      delete nextMeta.githubAccountId;
     }
 
     payload.meta = nextMeta;
@@ -2048,8 +1507,6 @@ function ProviderFormFull({
 
   const handlePresetChange = (value: string) => {
     setSelectedPresetId(value);
-    // Stack 模型是这家自己的：换预设后回到跟着新预设的模型映射。
-    setClaudeStackRows(null);
     if (value === "custom") {
       setActivePreset(null);
       form.reset(defaultValues);
@@ -2057,12 +1514,6 @@ function ProviderFormFull({
       if (appId === "codex") {
         const template = getCodexCustomTemplate();
         resetCodexConfig(template.auth, template.config);
-        setCodexChatReasoning({});
-        setPromptCacheRouting("auto");
-        setLocalCodexApiFormat(
-          codexApiFormatFromWireApi(extractCodexWireApi(template.config)) ??
-            "openai_responses",
-        );
         projectCodexDraft(template.auth, template.config);
       }
       if (appId === "gemini") {
@@ -2101,13 +1552,6 @@ function ProviderFormFull({
       const config = preset.config ?? "";
 
       resetCodexConfig(auth, config, preset.modelCatalog ?? []);
-      setCodexChatReasoning(preset.codexChatReasoning ?? {});
-      setPromptCacheRouting(preset.promptCacheRouting ?? "auto");
-      setLocalCodexApiFormat(
-        preset.apiFormat ??
-          codexApiFormatFromWireApi(extractCodexWireApi(config)) ??
-          "openai_responses",
-      );
 
       form.reset({
         name: preset.nameKey ? t(preset.nameKey) : preset.name,
@@ -2227,14 +1671,7 @@ function ProviderFormFull({
           )
         : templated;
 
-    if (preset.apiFormat) {
-      setLocalApiFormat(preset.apiFormat);
-    } else {
-      setLocalApiFormat("anthropic");
-    }
-
     setLocalApiKeyField(preset.apiKeyField ?? "ANTHROPIC_AUTH_TOKEN");
-    setLocalIsFullUrl(false);
 
     form.reset({
       name: preset.nameKey ? t(preset.nameKey) : preset.name,
@@ -2486,27 +1923,6 @@ function ProviderFormFull({
               websiteUrl={claudeWebsiteUrl}
               isPartner={isClaudePartner}
               partnerPromotionKey={claudePartnerPromotionKey}
-              isCopilotPreset={isCopilotProvider}
-              isCodexOauthPreset={isClaudeCodexOauthProvider}
-              isXaiOauthPreset={isXaiOauthProvider}
-              usesOAuth={
-                templatePreset?.requiresOAuth === true ||
-                isCopilotProvider ||
-                isClaudeCodexOauthProvider ||
-                isXaiOauthProvider
-              }
-              isCopilotAuthenticated={isCopilotAuthenticated}
-              selectedGitHubAccountId={selectedGitHubAccountId}
-              onGitHubAccountSelect={setSelectedGitHubAccountId}
-              onManageAuthAccounts={onManageAuthAccounts}
-              isCodexOauthAuthenticated={isCodexOauthAuthenticated}
-              selectedCodexAccountId={selectedCodexAccountId}
-              onCodexAccountSelect={setSelectedCodexAccountId}
-              codexFastMode={codexFastMode}
-              onCodexFastModeChange={setCodexFastMode}
-              isXaiOauthAuthenticated={isXaiOauthAuthenticated}
-              selectedXaiAccountId={selectedXaiAccountId}
-              onXaiAccountSelect={setSelectedXaiAccountId}
               templateValueEntries={templateValueEntries}
               templateValues={templateValues}
               templatePresetName={templatePreset?.name || ""}
@@ -2535,34 +1951,14 @@ function ProviderFormFull({
               subagentModel={subagentModel}
               onModelChange={handleModelChange}
               speedTestEndpoints={speedTestEndpoints}
-              apiFormat={localApiFormat}
-              onApiFormatChange={handleApiFormatChange}
               apiKeyField={localApiKeyField}
               onApiKeyFieldChange={handleApiKeyFieldChange}
-              isFullUrl={localIsFullUrl}
-              onFullUrlChange={setLocalIsFullUrl}
-              customUserAgent={customUserAgent}
-              onCustomUserAgentChange={setCustomUserAgent}
-              localProxyHeadersOverride={localProxyHeadersOverride}
-              onLocalProxyHeadersOverrideChange={setLocalProxyHeadersOverride}
-              localProxyBodyOverride={localProxyBodyOverride}
-              onLocalProxyBodyOverrideChange={setLocalProxyBodyOverride}
-              variant={useStackLayout ? "stack" : "classic"}
-              stackModelRows={shownClaudeStackRows}
-              onStackModelRowsChange={handleClaudeStackRowsChange}
             />
           )}
 
           {appId === "codex" && (
             <CodexFormFields
               providerId={providerId}
-              isXaiOauthPreset={
-                presetProviderType === "xai_oauth" ||
-                initialData?.meta?.providerType === "xai_oauth"
-              }
-              isXaiOauthAuthenticated={isXaiOauthAuthenticated}
-              selectedXaiAccountId={selectedXaiAccountId}
-              onXaiAccountSelect={setSelectedXaiAccountId}
               codexApiKey={codexApiKey}
               onApiKeyChange={handleCodexApiKeyChange}
               category={category}
@@ -2593,8 +1989,6 @@ function ProviderFormFull({
               shouldShowSpeedTest={shouldShowSpeedTest}
               codexBaseUrl={codexBaseUrl}
               onBaseUrlChange={handleCodexBaseUrlChange}
-              isFullUrl={localIsFullUrl}
-              onFullUrlChange={setLocalIsFullUrl}
               isEndpointModalOpen={isCodexEndpointModalOpen}
               onEndpointModalToggle={setIsCodexEndpointModalOpen}
               onCustomEndpointsChange={
@@ -2604,28 +1998,9 @@ function ProviderFormFull({
               onAutoSelectChange={setEndpointAutoSelect}
               codexModel={codexModel}
               onModelChange={handleCodexModelChange}
-              apiFormat={localCodexApiFormat}
-              onApiFormatChange={handleCodexApiFormatChange}
-              anthropicAuthField={localCodexAnthropicAuthField}
-              onAnthropicAuthFieldChange={setLocalCodexAnthropicAuthField}
-              impersonateClaudeCode={localCodexImpersonateClaudeCode}
-              onImpersonateClaudeCodeChange={setLocalCodexImpersonateClaudeCode}
-              maxOutputTokens={localCodexMaxOutputTokens}
-              onMaxOutputTokensChange={setLocalCodexMaxOutputTokens}
-              codexChatReasoning={codexChatReasoning}
-              onCodexChatReasoningChange={setCodexChatReasoning}
-              promptCacheRouting={promptCacheRouting}
-              onPromptCacheRoutingChange={setPromptCacheRouting}
               catalogModels={codexCatalogModels}
               onCatalogModelsChange={setCodexCatalogModels}
               speedTestEndpoints={speedTestEndpoints}
-              customUserAgent={customUserAgent}
-              onCustomUserAgentChange={setCustomUserAgent}
-              localProxyHeadersOverride={localProxyHeadersOverride}
-              onLocalProxyHeadersOverrideChange={setLocalProxyHeadersOverride}
-              localProxyBodyOverride={localProxyBodyOverride}
-              onLocalProxyBodyOverrideChange={setLocalProxyBodyOverride}
-              variant={useStackLayout ? "stack" : "classic"}
             />
           )}
 
@@ -2748,16 +2123,13 @@ function ProviderFormFull({
           )}
 
           {/* 配置编辑器：Codex、Claude、Gemini 分别使用不同的编辑器 */}
-          {useStackLayout ? (
-            settingsConfigErrorField
-          ) : appId === "codex" ? (
+          {appId === "codex" ? (
             <>
               <CodexConfigEditor
                 authValue={codexAuth}
                 configValue={codexConfig}
                 providerName={form.watch("name")}
                 showRemoteCompaction={category !== "official"}
-                isProxyTakeover={isProxyTakeover}
                 onAuthChange={setCodexAuth}
                 onConfigChange={handleCodexConfigChange}
                 authError={codexAuthError}
@@ -2915,19 +2287,16 @@ function ProviderFormFull({
         onConfirm={async () => {
           if (isConfirmSubmitting) return;
           const values = pendingFormValues;
-          const overridesResult = pendingLocalProxyRequestOverridesResult;
-          if (!values || !overridesResult) {
+          if (!values) {
             setSoftIssues(null);
             setPendingFormValues(null);
-            setPendingLocalProxyRequestOverridesResult(null);
             return;
           }
           setIsConfirmSubmitting(true);
           try {
-            await performSubmit(values, overridesResult);
+            await performSubmit(values);
             setSoftIssues(null);
             setPendingFormValues(null);
-            setPendingLocalProxyRequestOverridesResult(null);
           } catch (error) {
             console.error("[ProviderForm] soft-confirm submit failed:", error);
             // 保留确认框和 pending values，让用户可以重试或取消
@@ -2939,7 +2308,6 @@ function ProviderFormFull({
           if (isConfirmSubmitting) return;
           setSoftIssues(null);
           setPendingFormValues(null);
-          setPendingLocalProxyRequestOverridesResult(null);
         }}
       />
     </>

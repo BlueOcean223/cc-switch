@@ -41,7 +41,6 @@
     "enableAllForApp": "Enable all for {{app}}",
     "disableAllForApp": "Disable all for {{app}}",
     "bulkToggleFailed": "Failed to update {{count}} item(s)",
-    "reset": "Reset",
     "actions": "Actions",
     "deleting": "Deleting...",
     "auto": "Auto",
@@ -106,32 +105,10 @@
     "noProvidersDescription": "If you already have a config, click \"Import Current Config\" — all data will be safely saved in a default provider",
     "noProvidersDescriptionKeyFields": "Switching providers only replaces the key, endpoint and model; plugins and other settings stay in the config file and apply to every provider",
     "importCurrent": "Import Current Config",
-    "importFromClaude": "Import existing providers from Claude Code",
     "importCurrentDescription": "Import current live config as default provider",
     "currentlyUsing": "Currently Using",
     "enable": "Enable",
     "inUse": "In Use",
-    "needsRouting": "Needs Routing",
-    "directProvider": "Direct",
-    "directProviderHint": "Leaving routing mode switches back to this provider",
-    "stackBadge": "Aggregation",
-    "stackBadgeHint": "Pick in {{client}}'s model picker: {{models}}",
-    "stackBadgeNoModels": "This provider has no models configured, so nothing shows up in the model picker",
-    "stackSaved": "Saved. Restart {{client}} to apply",
-    "stackSavedLive": "Saved. Takes effect in {{client}} right away",
-    "stackReselectHint": "Whenever CC Switch rewrites the client config, pick the aggregated model again in the model picker",
-    "stackPartial": "Partly written; it will be finished on the next change or when CC Switch restarts",
-    "stackFailed": "Failed to save aggregated models: {{error}}",
-    "stackDefaultCannotRemove": "The default provider cannot be removed; set another provider as the default first",
-    "stackDefaultHint": "This is the default provider: the first model in its list handles Claude Code's startup and background tasks",
-    "officialModelsBundled": "The official model list isn't available yet, so Codex's built-in list is used for now and account-specific models may be missing",
-    "officialModelsUnavailable": "Aggregated models are unavailable for now: the Codex model list can't be read",
-    "routeOwnsCatalog": "Aggregated models won't show up in Codex: the routed provider uses its own model catalog file (model_catalog_json)",
-    "adoptCatalog": "Use CC Switch's model catalog",
-    "adoptCatalogDone": "Now using CC Switch's model catalog. Restart Codex to apply",
-    "adoptCatalogFailed": "Failed to switch to CC Switch's model catalog: {{error}}",
-    "noRoutingSupport": "No Routing Support",
-    "blockedByProxyHint": "Can't switch to an official provider in Routing mode",
     "editProvider": "Edit Provider",
     "editProviderHint": "Configuration will be applied to the current provider immediately after update.",
     "deleteProvider": "Delete Provider",
@@ -200,19 +177,11 @@
     },
     "backToList": "Back to providers",
     "editProviderNamed": "Edit {{name}}",
-    "formSubtitleStack": "{{app}} (Aggregation mode)",
     "editCurrentNoticeFile": "This is the provider in use. Saving writes it to",
     "editCurrentNoticeFileEnd": " right away; the next request uses it.",
     "editCurrentNotice": "This is the provider in use. Saving takes effect right away; the next request uses the new settings."
   },
-  "claudeCode": {
-    "needsRouting": "Needs Routing",
-    "noRoutingSupport": "No Routing Support"
-  },
   "codex": {
-    "needsRouting": "Needs Routing",
-    "noRoutingSupport": "No Routing Support",
-    "officialRouting": "Official Account Routing",
     "nativeLogin": "Codex Sign-in",
     "followCodexLogin": "Follow Codex login",
     "followCodexLoginDescription": "The account changes with the current Codex CLI login",
@@ -223,51 +192,6 @@
     "boundAccountUnavailable": "The linked account is unavailable",
     "accountLoading": "Loading account…"
   },
-  "claudeDesktop": {
-    "modelConfigTitle": "Model Configuration",
-    "modelModeLabel": "Connection Mode",
-    "modelModeDirect": "Direct",
-    "modelModeProxy": "Model Mapping",
-    "officialNotice": "Claude Desktop official providers use the built-in 1P sign-in. No API key or endpoint URL is required.",
-    "mode": "Model handling",
-    "modeDirect": "Direct",
-    "modeProxy": "Requires routing",
-    "modelMappingToggle": "Needs model mapping",
-    "modelMappingOffHint": "Direct mode works only when the provider accepts Claude Desktop's three role IDs (claude-sonnet-* / claude-opus-* / claude-haiku-*); for any other model name (including legacy IDs like claude-3-5-sonnet-…), select Model Mapping.",
-    "modelMappingOnHint": "Claude Desktop only accepts the three role IDs claude-sonnet-* / claude-opus-* / claude-haiku-*. In Model Mapping mode, CC Switch maps these roles to your provider's actual models and keeps local routing running while in use.",
-    "routeMapTitle": "Model mapping",
-    "routeMapHint": "Fill in the actual request model for each of the Sonnet, Opus, and Haiku tiers. Use the menu display name for branded models such as DeepSeek or Kimi. Any tier left blank inherits the Sonnet tier's model (or the first tier you filled in), so the Haiku that sub-agents call is always available.",
-    "routeModelLabel": "Model role",
-    "routeRoleSonnet": "Sonnet",
-    "routeRoleOpus": "Opus",
-    "routeRoleFable": "Fable",
-    "routeRoleHaiku": "Haiku",
-    "labelOverrideLabel": "Menu display name",
-    "upstreamModelLabel": "Requested model",
-    "supports1mLabel": "Declare 1M",
-    "supports1mShort": "1M",
-    "directModelListTitle": "Model List",
-    "directModelListCollapsedHint": "Native Claude model providers usually do not need this. Claude Desktop will fetch /v1/models automatically.",
-    "directModelListHint": "Configure the Sonnet, Opus, and Haiku models available to Claude Desktop. Leave this empty to let Claude Desktop fetch /v1/models automatically. Checking 1M declares 1M context support.",
-    "directModelInvalid": "Direct models must use Claude Desktop-recognized Sonnet / Opus / Haiku model IDs",
-    "addModel": "Add model",
-    "addRoute": "Add model",
-    "routeInvalid": "Choose a model role and enter the requested model",
-    "routesRequired": "At least one model mapping is required",
-    "statusTitle": "Claude Desktop configuration needs attention",
-    "statusUnsupported": "This platform does not support writing Claude Desktop 3P configuration yet.",
-    "statusStaleRawModels": "The Claude Desktop profile contains model IDs outside the Sonnet / Opus / Haiku role families. Newer Claude Desktop versions may reject it; switch to the current provider again to repair it.",
-    "statusMissingRouteMappings": "The current provider has model mapping enabled but no valid routes. Edit the provider and add at least one mapping.",
-    "statusGatewayTokenMissing": "The local routing token has not been generated yet. Switching to this provider again will write a new local token.",
-    "statusBaseUrlMismatch": "The Claude Desktop profile points to a different URL than the current provider. Current: {{actual}}; expected: {{expected}}. Switch to the current provider again to repair it.",
-    "route": {
-      "tooltip": {
-        "active": "Claude Desktop local routing is running - {{address}}:{{port}}",
-        "inactive": "Turn on Claude Desktop local routing for providers that need model mapping or format conversion. Configured address: {{address}}:{{port}}"
-      },
-      "stopBlockedByTakeover": "Other apps are still in Routing mode. Switch them back to Direct before stopping the routing service."
-    }
-  },
   "notifications": {
     "providerAdded": "Provider added",
     "providerSaved": "Provider configuration saved",
@@ -276,8 +200,6 @@
     "codexRestartRequired": "Switched successfully. Restart the client to apply changes.",
     "geminiRestartRequired": "Switched successfully. Restart Gemini CLI to apply changes.",
     "grokBuildRestartRequired": "Switched successfully. Restart Grok Build to apply changes.",
-    "claudeDesktopRestartRequired": "Switched successfully. Restart Claude Desktop to apply changes.",
-    "claudeDesktopProxyRestartRequired": "Switched successfully. Keep CC Switch running and restart Claude Desktop to apply changes.",
     "addToConfigSuccess": "Added to config",
     "removeFromConfigSuccess": "Removed from config",
     "removeFromConfigFailed": "Could not remove provider",
@@ -298,16 +220,6 @@
     "deleteFailed": "Failed to delete provider: {{error}}",
     "settingsSaved": "Settings saved",
     "settingsSaveFailed": "Failed to save settings: {{error}}",
-    "proxyRequiredForSwitch": "This provider {{reason}}, requires the routing service to work properly. Start routing first.",
-    "proxyReasonCopilot": "uses GitHub Copilot as a Claude provider",
-    "proxyReasonOpenAIChat": "uses OpenAI Chat API format",
-    "proxyReasonOpenAIResponses": "uses OpenAI Responses API format",
-    "proxyReasonAnthropicMessages": "uses Anthropic Messages API format",
-    "proxyReasonFullUrl": "has full URL connection mode enabled",
-    "proxyReasonManagedOAuth": "uses managed OAuth login (token injected by local routing)",
-    "proxyReasonRoutingRequired": "requires local routing to process requests",
-    "openAIFormatHint": "This provider uses OpenAI-compatible format and requires the routing service to be enabled",
-    "copilotProxyHint": "GitHub Copilot as a Claude provider always requires local routing; routing automatically selects Chat Completions or Responses based on the current model.",
     "openLinkFailed": "Failed to open link",
     "openclawModelsRegistered": "Models have been registered to /model list",
     "openclawDefaultModelSet": "Set as default model",
@@ -316,9 +228,7 @@
     "openclawModelNotFound": "The selected model no longer exists. Refresh and try again.",
     "backfillWarning": "Switched successfully, but failed to save changes back to the previous provider",
     "codexAuthCleanupFailed": "Switched successfully, but auth.json could not be removed — the official login credentials are still on disk; delete auth.json from the Codex config directory to remove them",
-    "windowControlFailed": "Window control failed: {{error}}",
-    "officialBlockedByProxy": "Cannot switch to official provider while local routing is active. Using routing with official APIs may cause account bans.",
-    "proxyOfficialWarning": "Current provider {{name}} is official. Consider switching to a third-party provider before using local routing."
+    "windowControlFailed": "Window control failed: {{error}}"
   },
   "confirm": {
     "deleteProvider": "Delete Provider",
@@ -326,16 +236,6 @@
     "removeProvider": "Remove Provider",
     "removeProviderMessage": "Are you sure you want to remove provider \"{{name}}\" from the configuration?\n\nAfter removal, this provider will no longer be active, but the configuration data will be retained in CC Switch. You can re-add it at any time.",
     "piDefaultProviderWarning": "Pi's global default currently points to this provider. If you continue, Pi will try another available model; use /model to choose one or /login to sign in to another provider.",
-    "proxy": {
-      "title": "Enable Local Routing",
-      "message": "Local routing is an advanced feature. Please make sure you understand how it works before enabling.\n\nWe recommend consulting the relevant documentation or your provider for proper configuration.",
-      "confirm": "I understand, enable"
-    },
-    "failover": {
-      "title": "Enable Failover",
-      "message": "Failover is an advanced feature. Please make sure you understand how it works before enabling.\n\nWe recommend configuring provider priorities in the failover queue first.",
-      "confirm": "I understand, enable"
-    },
     "unifyCodexHistory": {
       "title": "Unified Codex session history",
       "message": "When enabled, the official subscription and third-party providers share one session history list. Note: resuming an old session across providers may fail because its encrypted_content reasoning cannot be decrypted by another backend.\n\nYou can also migrate your existing official session history into the shared list (originals are backed up to ~/.cc-switch/backups first and can be restored when you turn this off).",
@@ -376,34 +276,15 @@
     "tabGeneral": "General",
     "tabAuth": "Auth",
     "tabAdvanced": "Advanced",
-    "tabProxy": "Routing",
     "authCenter": {
-      "description": "Use GitHub Copilot, ChatGPT and xAI subscriptions as providers. The routing service injects their credentials, so these providers run in Routing mode (except Codex's official-login binding).",
+      "description": "Manage ChatGPT accounts. When a Codex official card is bound to an account, switching to it writes that account's login into Codex.",
       "beta": "Beta",
-      "copilotDescription": "Manage GitHub Copilot accounts",
-      "codexOauthDescription": "Manage ChatGPT accounts",
-      "xaiOauthDescription": "Manage xAI / Grok accounts"
+      "codexOauthDescription": "Manage ChatGPT accounts"
     },
     "advanced": {
       "configDir": {
         "title": "Configuration Directory",
         "description": "Manage storage paths for Claude, Codex and Gemini configurations"
-      },
-      "proxy": {
-        "title": "Local Routing",
-        "description": "Control routing service toggle, view status and port info",
-        "enableFeature": "Show Routing Toggle on Main Page",
-        "enableFeatureDescription": "When enabled, the routing and failover toggles will appear at the top of the main page",
-        "enableStackMode": "Show the Aggregation mode switch on the main page",
-        "enableStackModeDescription": "When on, the main-page switch for Claude Code and Codex becomes the Aggregation mode: add several providers like in OpenCode, and all their models appear in the client's model list (Codex needs a restart first). No failover. This and the local routing switch are mutually exclusive; switching sends Claude Code and Codex back to direct first",
-        "enableFailoverToggle": "Show Failover Toggle on Main Page",
-        "enableFailoverToggleDescription": "When enabled, the failover toggle will appear independently at the top of the main page",
-        "running": "Running",
-        "stopped": "Stopped"
-      },
-      "failover": {
-        "title": "Auto Failover",
-        "description": "Configure failover queue and circuit breaker strategy"
       },
       "pricing": {
         "title": "Cost Pricing",
@@ -424,31 +305,6 @@
       "cloudSync": {
         "title": "Cloud Sync",
         "description": "Sync data across devices via WebDAV"
-      },
-      "rectifier": {
-        "title": "Rectifier",
-        "description": "Automatically fix API request compatibility issues",
-        "enabled": "Enable Rectifier",
-        "enabledDescription": "Master switch, all rectification features will be disabled when turned off",
-        "requestGroup": "Request Rectification",
-        "responseGroup": "Response Rectification",
-        "thinkingSignature": "Thinking Signature Rectification",
-        "thinkingSignatureDescription": "When an Anthropic-type provider returns thinking signature incompatibility or illegal request errors, automatically removes incompatible thinking-related blocks and retries once with the same provider",
-        "thinkingBudget": "Thinking Budget Rectification",
-        "thinkingBudgetDescription": "When an Anthropic-type provider returns budget_tokens constraint errors (such as at least 1024), automatically normalizes thinking to enabled, sets thinking budget to 32000, and raises max_tokens to 64000 if needed, then retries once",
-        "mediaFallback": "Unsupported Image Fallback",
-        "mediaFallbackDescription": "When a provider does not support image input (it declares text-only capability, or the upstream returns an unsupported-image error), automatically replaces image blocks with an [Unsupported Image] marker so the conversation is not interrupted",
-        "mediaHeuristic": "Text-Only Model Preflight",
-        "mediaHeuristicDescription": "Before sending, strips images for models in the built-in confirmed text-only registry. Turning this off only disables the proxy's registry-based preflight; declared text-only handling and upstream-error fallback remain, and Codex model-catalog capability declarations are unchanged"
-      },
-      "optimizer": {
-        "title": "Bedrock Request Optimizer",
-        "description": "Automatically optimize Thinking and Cache configuration before sending requests (only applies to Bedrock providers)",
-        "enabled": "Enable Optimizer",
-        "thinkingOptimizer": "Thinking Optimization",
-        "thinkingOptimizerDescription": "Automatically enable Adaptive Thinking for Opus/Sonnet, and inject Extended Thinking for legacy models",
-        "cacheInjection": "Cache Injection",
-        "cacheInjectionDescription": "Automatically inject standard 5-minute cache breakpoints at key positions to reduce duplicate token billing"
       },
       "logConfig": {
         "title": "Application Diagnostic Logs",
@@ -807,8 +663,8 @@
     "skipClaudeOnboarding": "Skip Claude Code first-run confirmation",
     "skipClaudeOnboardingDescription": "On first launch, Claude Code runs an onboarding flow that asks you to pick a theme and sign in to an Anthropic account. If you use a third-party provider you don't need that sign-in, so turning this on skips straight past it. It works by writing hasCompletedOnboarding: true to ~/.claude.json; turning it off removes that field, and the onboarding appears again on the next launch.",
     "codexAuth": "Codex App Enhancements",
-    "preserveCodexOfficialAuthOnSwitch": "Keep official login for direct switches",
-    "preserveCodexOfficialAuthOnSwitchDescription": "Controls third-party switches when local routing is off. Takeover routing always preserves the Codex official login.",
+    "preserveCodexOfficialAuthOnSwitch": "Keep official login when switching",
+    "preserveCodexOfficialAuthOnSwitchDescription": "Keep the Codex official (ChatGPT) login in auth.json when switching to a third-party provider.",
     "unifyCodexSessionHistory": "Unified Codex session history",
     "unifyCodexSessionHistoryDescription": "When enabled, the official subscription runs under the shared \"custom\" provider id so official and third-party sessions appear in one history list, optionally migrating existing official sessions in (backed up first). When turning it off, the migrated sessions can be restored from backup. Note: resuming an old session across providers may fail because its encrypted_content reasoning can only be decrypted by the backend that created it.",
     "unifyCodexHistoryRestoreCompleted": "Official session history restored from backup ({{files}} session files, {{rows}} index rows)",
@@ -963,7 +819,7 @@
     "saving": "Saving...",
     "globalProxy": {
       "label": "Global Proxy",
-      "hint": "Proxy all requests (API, Skills download, etc.). When local routing is enabled, app traffic is also routed through this proxy. Leave empty for direct connection.",
+      "hint": "Proxy all requests CC Switch makes (API, Skills download, etc.). Leave empty for direct connection.",
       "username": "Username (optional)",
       "password": "Password (optional)",
       "test": "Test Connection",
@@ -973,32 +829,18 @@
       "saved": "Proxy settings saved",
       "saveFailed": "Save failed: {{error}}",
       "testSuccess": "Connected! Latency {{latency}}ms",
-      "testFailed": "Connection failed: {{error}}",
-      "pricingDefaultsTitle": "Pricing Defaults",
-      "pricingDefaultsDescription": "Choose whether each app matches pricing by the request model or the response model. Only applies to requests that go through local routing.",
-      "pricingAppLabel": "App",
-      "pricingModelSourceLabel": "Pricing Model Source",
-      "pricingModelSourceRequest": "Request model",
-      "pricingModelSourceResponse": "Response model",
-      "pricingSave": "Save Pricing Defaults",
-      "pricingSaved": "Pricing defaults saved",
-      "pricingSaveFailed": "Failed to save pricing defaults: {{error}}",
-      "pricingLoadFailed": "Failed to load pricing defaults: {{error}}"
+      "testFailed": "Connection failed: {{error}}"
     },
     "saveFailedGeneric": "Save failed, please try again",
     "sections": {
       "general": "General",
       "appConfig": "App config",
-      "routing": "Local routing",
       "network": "Network",
       "data": "Data",
       "about": "About"
     },
     "appConfig": {
       "configDir": "Config directory"
-    },
-    "routing": {
-      "service": "Service"
     },
     "data": {
       "location": "Location"
@@ -1007,8 +849,6 @@
   "apps": {
     "claude": "Claude",
     "claudeCode": "Claude Code",
-    "claudeDesktop": "Claude Desktop",
-    "claude-desktop": "Claude Desktop",
     "codex": "Codex",
     "gemini": "Gemini",
     "grokbuild": "Grok Build",
@@ -1184,9 +1024,6 @@
     "invalidToml": "Invalid config.toml: {{error}}",
     "defaultModelPlaceholder": "e.g. grok-4.5",
     "defaultModelHint": "The model Grok Build requests by default; change it anytime without waiting for a preset update.",
-    "advancedSectionHint": "Includes upstream format, reasoning overrides and custom User-Agent. Providers using the Chat Completions or Anthropic Messages protocol require routing takeover to be enabled.",
-    "reasoningEffortHint": "Enable when the upstream supports thinking-depth control such as low/high/max. Enabling this also turns on thinking mode and converts the request's reasoning effort into the upstream Chat parameter.",
-    "maxOutputTokensHint": "The default 8192 ceiling can truncate long or thinking-heavy responses (stop_reason=max_tokens). This value overrides the request's max_tokens on the Anthropic path. Do not exceed the real output ceiling of the model/gateway or it may 400. Leave empty to use the default 8192.",
     "keyFieldsHint": "The default model (models.default) and the model table it points to follow the provider; everything else is Grok Build global settings and applies to every provider after saving.",
     "inactiveFieldsHint": "This provider still stores {{count}} settings that do not follow the provider. Click one to copy its TOML and paste it above if you need it; the value stored in the provider is kept.",
     "inactiveFieldCopied": "Copied"
@@ -1223,7 +1060,7 @@
     "expandContent": "Expand full content",
     "collapseContent": "Collapse",
     "helpTitle": "Where sessions come from",
-    "helpBody": "CC Switch reads the session records each app keeps on this computer. See “Where sessions are stored” in the ⋯ menu. Claude Desktop has no session records of its own.",
+    "helpBody": "CC Switch reads the session records each app keeps on this computer. See “Where sessions are stored” in the ⋯ menu.",
     "moreActions": "More session actions",
     "refreshList": "Refresh list",
     "listRefreshed": "Session list refreshed",
@@ -1231,7 +1068,7 @@
     "preferredTerminal": "Preferred terminal",
     "whereMenu": "Where sessions are stored",
     "whereTitle": "Where sessions are stored",
-    "whereLead": "CC Switch reads sessions from these locations. Claude Desktop has no session records of its own.",
+    "whereLead": "CC Switch reads sessions from these locations.",
     "whereNote": "Apps with a custom config directory in Settings are read from that directory.",
     "appPrefix": "App: ",
     "chooseApp": "Choose app",
@@ -1242,7 +1079,6 @@
     "groupBy": "Group by",
     "groupByTime": "By time",
     "groupByProject": "By project",
-    "desktopNote": "Claude Desktop has no session records of its own. Showing Claude Code sessions.",
     "matchCount": "{{count}} matching sessions",
     "totalCount": "{{count}} sessions",
     "selectAllMatches": "Select all matches",
@@ -1523,8 +1359,6 @@
     "fastModelPlaceholder": "e.g., GLM-4.5-Air",
     "modelHint": "💡 Leave blank to use provider's default model",
     "apiHint": "💡 Fill in Claude API compatible service endpoint, avoid trailing slash",
-    "apiHintOAI": "💡 Fill in OpenAI Chat Completions compatible service endpoint, avoid trailing slash",
-    "apiHintGeminiNative": "💡 Prefer a Gemini Native base URL such as https://generativelanguage.googleapis.com or https://generativelanguage.googleapis.com/v1beta; the proxy will append models/*:generateContent automatically",
     "codexApiHint": "💡 Fill in service endpoint compatible with OpenAI Response format",
     "fillSupplierName": "Please fill in provider name",
     "fillConfigContent": "Please fill in configuration content",
@@ -1545,36 +1379,13 @@
     "visitWebsite": "Visit {{url}}",
     "anthropicModel": "Main Model",
     "anthropicSmallFastModel": "Fast Model",
-    "apiFormat": "Upstream Format",
-    "apiFormatHint": "Pick Anthropic Messages when your provider is natively an Anthropic Messages API (direct, no format conversion); pick Chat when it uses Chat Completions; pick Responses when it uses the Responses API; pick Gemini Native when it uses Gemini generateContent. Chat, Responses, and Gemini Native require routing takeover to convert to Anthropic Messages.",
-    "customUserAgent": "Custom User-Agent",
-    "customUserAgentHint": "Only applies in Routing mode; replaces the User-Agent in requests forwarded to the provider API.",
-    "customUserAgentInvalid": "User-Agent must not contain control characters (e.g. line breaks); otherwise it will be ignored.",
-    "customUserAgentPresets": "Presets",
-    "localProxyRequestOverrides": "Local proxy request overrides",
-    "localProxyRequestOverridesHint": "Only applies in Routing mode; applied to the upstream request after format conversion.",
-    "localProxyRequestOverridesInvalid": "Local proxy request overrides format error: {{error}}",
-    "localProxyHeaderOverrides": "Header overrides",
-    "localProxyHeaderOverridesInvalidDetail": "Header overrides format error: {{error}}",
-    "localProxyBodyOverrides": "Body overrides",
-    "localProxyBodyOverridesInvalidDetail": "Body overrides format error: {{error}}",
-    "fullUrlLabel": "Full URL",
     "fullUrlEnabled": "Full URL Mode",
     "fullUrlDisabled": "Mark as Full URL",
-    "fullUrlHint": "💡 Enter the full request URL. This mode requires routing to be enabled, and routing will use the URL as-is without appending a path",
-    "fullUrlHintGeminiNative": "💡 In Gemini Native full URL mode, two inputs are supported: 1. official/structured Gemini URLs, which will still be normalized to the requested model and streaming method; 2. opaque custom relay URLs, which will be used mostly as-is with only query parameters appended",
-    "apiFormatAnthropic": "Anthropic Messages (Native)",
-    "apiFormatOpenAIChat": "OpenAI Chat Completions (Requires routing)",
-    "apiFormatOpenAIResponses": "OpenAI Responses API (Requires routing)",
-    "apiFormatGeminiNative": "Gemini Native generateContent (Requires routing)",
     "codexApiFormatResponses": "OpenAI Responses API (Native)",
-    "codexApiFormatOpenAIChat": "OpenAI Chat Completions (Requires routing)",
-    "codexApiFormatHint": "Select the Codex API format actually supported by this provider; the config stays on Responses for newer Codex versions, while Chat Completions is converted through local routing.",
     "authField": "Auth Field",
     "authFieldAuthToken": "ANTHROPIC_AUTH_TOKEN (Default)",
     "authFieldApiKey": "ANTHROPIC_API_KEY",
     "authFieldHint": "Select the authentication env variable name for the config",
-    "apiHintResponses": "💡 Fill in OpenAI Responses API compatible service endpoint, avoid trailing slash",
     "anthropicDefaultHaikuModel": "Default Haiku Model",
     "anthropicDefaultSonnetModel": "Default Sonnet Model",
     "anthropicDefaultOpusModel": "Default Opus Model",
@@ -1584,17 +1395,6 @@
     "modelHelper": "Optional: Specify default Claude model to use, leave blank to use system default.",
     "modelMappingLabel": "Model Mapping",
     "modelMappingHint": "Display names only affect the /model menu; 1M is only a Claude Code context-capability declaration.",
-    "stackModelsLabel": "Models",
-    "addStackModel": "Add manually",
-    "stackModelsHint": "These models appear in Claude Code's /model menu; picking one sends requests straight to this provider. The first one (★) is this provider's default model: while this provider is the default, Claude Code uses it at startup and for background tasks.",
-    "stackModelsEmpty": "No models configured: this provider won't appear in the model picker once added to the aggregation",
-    "stackModelPlaceholder": "e.g. deepseek-v4-pro",
-    "stackModelDefault": "Default model",
-    "stackModelMakeDefault": "Make default model",
-    "stackLayout": {
-      "advancedHint": "Custom User-Agent and request overrides; usually no need to change.",
-      "noModels": "The model list is empty: this provider won't appear in the model picker once added to the aggregation"
-    },
     "modelRoleLabel": "Model role",
     "modelRoleSonnet": "Sonnet",
     "modelRoleOpus": "Opus",
@@ -1612,7 +1412,7 @@
     "quickSetModels": "Quick Set",
     "quickSetSuccess": "Model name applied to all roles",
     "advancedOptionsToggle": "Advanced Options",
-    "advancedOptionsHint": "Includes API format, auth field, and model mapping. Defaults work for most use cases.",
+    "advancedOptionsHint": "Includes auth field and model mapping. Defaults work for most use cases.",
     "categoryOfficial": "Official",
     "categoryCnOfficial": "Opensource Official",
     "categoryAggregation": "Aggregation",
@@ -1641,44 +1441,6 @@
     "fetchModelsTimeout": "Request timed out, please check network connection",
     "requiredFields": "Please fill in provider name, API endpoint, API Key and model"
   },
-  "copilot": {
-    "authSection": "GitHub Copilot Authentication",
-    "authStatus": "Authentication Status",
-    "authenticated": "Authenticated as {{username}}",
-    "notAuthenticated": "Not authenticated",
-    "loginWithGitHub": "Login with GitHub",
-    "githubAccount": "GitHub account",
-    "manageAccounts": "Manage accounts",
-    "loginRequired": "Please login to GitHub Copilot first",
-    "statusLoading": "Loading account status...",
-    "statusUnavailable": "Status unavailable",
-    "statusLoadFailed": "Failed to load GitHub Copilot account status. Please retry.",
-    "waitingForAuth": "Waiting for authorization...",
-    "enterCode": "Please enter the code in your browser:",
-    "logout": "Logout",
-    "authSuccess": "GitHub Copilot authentication successful",
-    "authFailed": "Authentication failed: {{error}}",
-    "authTimeout": "Authentication timed out, please try again",
-    "tokenExpired": "Token expired, please re-authenticate",
-    "accountCount": "{{count}} account(s)",
-    "selectAccount": "Select Account",
-    "selectAccountPlaceholder": "Select a GitHub account",
-    "useDefaultAccount": "Use default account",
-    "loggedInAccounts": "Logged in accounts",
-    "defaultAccount": "Default",
-    "selected": "Selected",
-    "removeAccount": "Remove account",
-    "setAsDefault": "Set as default",
-    "addAnotherAccount": "Add another account",
-    "retry": "Retry",
-    "copyCode": "Copy code",
-    "migrationFailed": "Legacy auth migration failed: {{error}}",
-    "loadModelsFailed": "Failed to load Copilot models",
-    "deploymentType": "GitHub Deployment Type",
-    "deploymentGitHubCom": "GitHub.com",
-    "deploymentEnterprise": "GitHub Enterprise Server",
-    "enterpriseDomainPlaceholder": "e.g. company.ghe.com"
-  },
   "codexOauth": {
     "authStatus": "Auth status",
     "notAuthenticated": "Not authenticated",
@@ -1699,7 +1461,6 @@
     "officialAccountPlaceholder": "Choose a sign-in method",
     "addOrManageAccounts": "Add or manage ChatGPT accounts",
     "explicitSelectionRequired": "Choose a sign-in method",
-    "useDefaultAccount": "Use default account",
     "noneOptionLabel": "Follow Codex login",
     "reauthDescription": "To match the browser-login behavior, these accounts must sign in again to restore the required login credential (id_token). Once re-authenticated they can be used for managed binding.",
     "reauthBadge": "Re-login required",
@@ -1715,35 +1476,11 @@
     "addAnotherAccount": "Add another account",
     "logoutAll": "Logout all accounts",
     "retry": "Retry",
-    "copyCode": "Copy code",
-    "fastMode": "FAST mode",
-    "fastModeDescription": "Send service_tier=\"priority\" for lower latency. Off by default — enabling it consumes your ChatGPT quota at a higher rate."
-  },
-  "xaiOauth": {
-    "authStatus": "xAI OAuth authentication",
-    "accountCount": "Usable accounts: {{count}}",
-    "reauthRequired": "Sign-in required",
-    "notAuthenticated": "Not authenticated",
-    "selectAccount": "Select account",
-    "selectAccountPlaceholder": "Select an xAI account",
-    "useDefaultAccount": "Use default account",
-    "accounts": "xAI accounts",
-    "defaultAccount": "Default",
-    "expired": "Credentials expired",
-    "setAsDefault": "Set as default",
-    "removeAccount": "Remove account",
-    "addOrReauth": "Add account or sign in again",
-    "login": "Sign in with xAI",
-    "waitingForAuth": "Waiting for xAI authorization…",
-    "enterCode": "If the browser did not fill it in automatically, enter:",
-    "retry": "Retry",
-    "logoutAll": "Delete all xAI accounts",
-    "loginRequired": "Sign in to an xAI account first"
+    "copyCode": "Copy code"
   },
   "managedAuth": {
     "accountRemoved": "Account deleted",
     "selectedAccountNeedsReauth": "The linked account is missing or needs you to sign in again",
-    "selectedAccountUnavailable": "The linked account is missing or needs you to sign in again. Select another account.",
     "usedBy": "Used by {{count}} provider(s)",
     "usedByTitle": "Used by: {{names}}",
     "remove": {
@@ -1753,7 +1490,6 @@
       "leadAll": "This deletes the sign-in credentials CC Switch keeps for these {{count}} accounts. This can’t be undone.",
       "brokenOne": "These providers will stop working until you sign in again or pick another account:",
       "brokenAll": "These providers will stop working until you sign in again:",
-      "moved": "These providers use the default account and will switch to the new default:",
       "noneOne": "No provider uses this account.",
       "noneAll": "No provider uses these accounts.",
       "confirmOne": "Delete account",
@@ -1792,11 +1528,8 @@
     "authJson": "auth.json (JSON) *",
     "authJsonPlaceholder": "{\n  \"OPENAI_API_KEY\": \"sk-your-api-key-here\"\n}",
     "authJsonHint": "Codex auth.json configuration content",
-    "authJsonStorageHint": "In Routing mode this shows the stored auth, not the live auth.json.",
     "configToml": "config.toml (TOML)",
     "configTomlHint": "Codex config.toml configuration content",
-    "configTomlStorageHint": "In Routing mode this shows the stored config, not the live config.toml.",
-    "proxyTakeoverStorageNotice": "💡 This app is in Routing mode. You are editing the stored provider config; the live config is temporarily managed by the routing service.",
     "enableRemoteCompaction": "Enable remote compaction",
     "remoteCompactionHint": "When enabled, the active model_providers entry name is written as OpenAI so Codex can try remote compaction.",
     "apiUrlLabel": "API Request URL",
@@ -1804,27 +1537,7 @@
     "saveFailed": "Save failed: {{error}}",
     "modelNameHint": "Specify the model to use, will be auto-updated in config.toml",
     "modelName": "Model Name",
-    "upstreamFormatLabel": "Upstream Format",
-    "upstreamFormatHint": "Pick Responses when your provider is natively a Responses API (direct, no format conversion); pick Chat when it uses the Chat Completions protocol; pick Anthropic Messages when it only offers the native Anthropic Messages protocol. Chat and Anthropic Messages both require routing takeover to convert to Responses.",
-    "upstreamFormatChat": "Chat Completions (routing required)",
-    "upstreamFormatResponses": "Responses (native)",
-    "upstreamFormatAnthropic": "Anthropic Messages (routing required)",
-    "anthropicAuthFieldLabel": "Auth field",
-    "anthropicAuthFieldAuthToken": "ANTHROPIC_AUTH_TOKEN (Authorization)",
-    "anthropicAuthFieldApiKey": "ANTHROPIC_API_KEY (x-api-key)",
-    "anthropicAuthFieldHint": "Choose which header carries the API key to the gateway: ANTHROPIC_AUTH_TOKEN sends Authorization: Bearer; ANTHROPIC_API_KEY sends x-api-key. Only one is sent.",
-    "impersonateClaudeCodeLabel": "Emulate Claude Code client",
-    "impersonateClaudeCodeHint": "Enable when the gateway (or its upstream) restricts usage to Claude Code: spoofs the User-Agent, anthropic-beta and x-app headers, and injects the Claude Code identity as the first system prompt line.",
-    "maxOutputTokensLabel": "Max output tokens",
-    "maxOutputTokensPlaceholder": "Leave empty to use the default 8192",
-    "maxOutputTokensHint": "Codex does not forward model_max_output_tokens in the request body, so the default 8192 ceiling can truncate long or thinking-heavy responses (stop_reason=max_tokens). This value overrides the request's max_tokens on the Anthropic path. Do not exceed the real output ceiling of the model/gateway or it may 400. Leave empty to use the default 8192.",
-    "promptCacheRoutingLabel": "Prompt cache routing",
-    "promptCacheRoutingAuto": "Auto (recommended)",
-    "promptCacheRoutingEnabled": "Enabled",
-    "promptCacheRoutingDisabled": "Disabled",
-    "promptCacheRoutingHint": "Auto sends prompt_cache_key only to known-compatible upstreams. Enable it for other compatible gateways, or disable it if a strict gateway rejects unknown fields with HTTP 400. Only a stable client-provided session ID is used.",
     "upstreamModelName": "Upstream Model Name",
-    "upstreamModelNameHint": "For Chat format, enter the real upstream model here; routing converts Codex Responses requests to Chat Completions while keeping this model.",
     "modelNamePlaceholder": "e.g., gpt-5-codex",
     "contextWindow1M": "1M Context Window",
     "contextWindow": "Context Window",
@@ -1842,12 +1555,6 @@
     "modelMappingTitle": "Model Mapping",
     "modelMappingHint": "Generates Codex model_catalog_json so /model can show these third-party model names; entries are saved exactly as listed. Codex must be restarted to refresh the model list after changes.",
     "addCatalogModel": "Add manually",
-    "modelListTitle": "Models",
-    "stackModelListHint": "These models appear in Codex's /model menu; picking one sends requests straight to this provider. The one marked ★ is this provider's default model: while this provider is the default, Codex uses it by default. Restart Codex after changes.",
-    "stackDefaultNotInList": "The default model {{model}} is not in the list: Codex still requests it by default, but /model won't show it.",
-    "addToModelList": "Add to list",
-    "modelListEmpty": "No models configured: in Aggregation mode only this provider's default model (the model in config.toml) is published.",
-    "stackAdvancedHint": "Reasoning, Anthropic-specific options, custom User-Agent and request overrides; usually no need to change.",
     "catalogDisplayName": "Display Name",
     "catalogDisplayNamePlaceholder": "e.g., DeepSeek V4 Flash",
     "catalogModelId": "Model ID",
@@ -1862,13 +1569,7 @@
     "defaultReasoningLevelLabel": "Default level",
     "defaultReasoningLevelPlaceholder": "Auto",
     "defaultReasoningLevelTip": "Default level: {{level}}",
-    "reasoningModeToggle": "Supports Thinking Mode",
-    "reasoningModeHint": "Enable when the upstream Chat Completions API supports toggling thinking on/off. Providers like Kimi, GLM and Qwen usually fall into this category.",
-    "reasoningEffortToggle": "Supports Reasoning Effort",
-    "reasoningEffortHint": "Enable when the upstream supports thinking-depth control such as low/high/max. Enabling this also turns on thinking mode and converts Codex's reasoning.effort into the upstream Chat parameter.",
-    "reasoningGroupTitle": "Reasoning Capability",
-    "reasoningSectionHint": "Preset providers are configured automatically; custom providers are inferred from name/URL. Override manually only when auto-detection is wrong.",
-    "advancedSectionHint": "Includes upstream format, model mapping, reasoning overrides and custom User-Agent. Providers using the Chat Completions protocol require routing takeover to be enabled.",
+    "advancedSectionHint": "Model mapping: builds the model catalog for Codex's /model menu. Presets usually need no changes.",
     "keyFieldsHint": "The endpoint, key, model, reasoning effort, context window and compatibility switches follow the provider; everything else is a global Codex setting that applies to every provider once saved.",
     "inactiveFieldsHint": "This provider still stores {{count}} settings that are not applied when switching. Click one to copy its TOML and paste it above if you need it; the stored values are kept.",
     "inactiveFieldCopied": "Copied"
@@ -1962,7 +1663,7 @@
     },
     "crossApp": "Across apps",
     "groupHint": {
-      "login": "No API key: sign in with an existing account. Everything except Claude goes through routing.",
+      "login": "No API key: sign in with an existing account.",
       "vendor": "The vendors' own APIs and coding plans. A vendor's China site, global site and plans share one row; pick the version in the next step.",
       "thirdparty": "Platforms that aggregate many models, or relays reselling official models.",
       "cloud": "Call models with a cloud provider account.",
@@ -1981,7 +1682,6 @@
     "loginWith": {
       "claude": "Sign in with a Claude account",
       "chatgpt": "Sign in with a ChatGPT account",
-      "github": "Sign in with a GitHub account",
       "xai": "Sign in with an xAI account",
       "google": "Sign in with a Google account"
     },
@@ -1993,7 +1693,6 @@
       "volcengine": "Volcengine",
       "tencent": "Tencent Cloud"
     },
-    "version": {},
     "switchVersionTitle": "Switch to {{version}}?",
     "switchVersionMessage": "The form will be refilled for the new version. The API key you entered and any other changes will be cleared.",
     "switchVersionConfirm": "Switch",
@@ -2293,9 +1992,9 @@
     "speedValue": "{{value}} tok/s",
     "speedEstimatedValue": "≈ {{value}} tok/s",
     "speedHelpTitle": "How speed is calculated",
-    "speedHelp": "Output tokens per second, from the first token to the end. Only requests through the routing service with at least 100 output tokens count; for models that hide their reasoning it's an approximation. A value with ≈ is estimated from session-log timestamps when routing is off: there is no first-token timing, so the wait for the first token is included and the number reads low. Only requests with at least 200 output tokens are estimated.",
+    "speedHelp": "Output tokens per second, from the first token to the end. Requests recorded by the old routing service count only with at least 100 output tokens; for models that hide their reasoning it's an approximation. A value with ≈ is estimated from session-log timestamps: there is no first-token timing, so the wait for the first token is included and the number reads low. Only requests with at least 200 output tokens are estimated.",
     "speedSumHelpTitle": "How overall speed is calculated",
-    "speedSumHelp": "Total output tokens divided by total generation time, not an average of per-request speeds, so short requests don't skew it. Only requests through the routing service with at least 100 output tokens count. A value with ≈ is estimated from session logs (it includes the wait for the first token, and only requests with at least 200 output tokens count) and is shown only when the row has no routed data.",
+    "speedSumHelp": "Total output tokens divided by total generation time, not an average of per-request speeds, so short requests don't skew it. Requests recorded by the old routing service count only with at least 100 output tokens. A value with ≈ is estimated from session logs (it includes the wait for the first token, and only requests with at least 200 output tokens count) and is shown only when the row has no routed records.",
     "timingTip": "Duration {{duration}}s · first token {{ttft}}s",
     "estimatedTimingTip": "About {{duration}}s (estimated from session-log timestamps, including the wait for the first token)",
     "cacheTip": "Cache hits {{read}} · cache writes {{write}}",
@@ -2310,7 +2009,7 @@
       "costTitle": "Cost breakdown (USD)",
       "performance": "Performance",
       "source": "Source",
-      "sourceProxy": "Routing service · status {{code}}",
+      "sourceProxy": "Old routing service · status {{code}}",
       "sourceSession": "Session log",
       "total": "Total",
       "firstToken": "First token",
@@ -2325,22 +2024,17 @@
     "sources": {
       "scanTitle": "Scan session logs automatically",
       "scanHelpTitle": "What are session logs?",
-      "scanHelp": "The conversation records each app writes on this computer. CC Switch reads usage from them, so you get data even without routing.",
+      "scanHelp": "The conversation records each app writes on this computer. CC Switch reads usage from them.",
       "coverage": "Covers 7 apps: {{apps}}",
       "cadenceOn": "Scans once at startup, then every 60 seconds",
       "cadenceOff": "Auto scan is off; logs are scanned only when you click Sync Now",
       "unsupported": "Hermes and OpenClaw don't support usage stats yet",
-      "loggingHelpTitle": "What does recording request usage do?",
-      "loggingHelp": "Each request through the routing service is recorded with its status code, duration and time to first token.",
-      "on": "On",
-      "off": "Off",
-      "editLogging": "Change “Record request usage”",
       "codexHelpTitle": "What does Codex usage maintenance do?",
       "lastSynced": "last synced: {{time}}"
     },
     "empty": {
       "title": "No usage data yet",
-      "body": "Usage from session logs and from requests through the routing service shows up here.",
+      "body": "Usage read from session logs shows up here.",
       "configurePricing": "Configure model pricing"
     },
     "pricing": {
@@ -2350,11 +2044,6 @@
       "lastSync": "Last synced {{time}}",
       "commonIncluded": "includes common models",
       "moreActions": "More pricing actions",
-      "billingHelpTitle": "What the billing defaults control",
-      "billingHelp": "Applies only to requests through the routing service. Usage imported from session logs is priced by the model recorded in the log.",
-      "byResponse": "Priced by response model",
-      "byRequest": "Priced by request model",
-      "edit": "Change",
       "tableTitle": "Model pricing · {{count}}",
       "costHelpTitle": "How cost is calculated",
       "costHelp": "Each request is priced by its model: fresh input, output, cache hits and cache writes are each multiplied by their unit price and added up.",
@@ -2376,16 +2065,12 @@
     "templateCustom": "Custom",
     "templateGeneral": "General",
     "templateNewAPI": "NewAPI",
-    "templateCopilot": "GitHub Copilot",
     "templateTokenPlan": "Token Plan",
     "templateBalance": "Official",
     "templateOfficialSubscription": "Official Subscription",
-    "copilotAutoAuth": "Auto OAuth authentication, no manual credentials needed",
     "tokenPlanHint": "Automatically uses the provider's API Key and Base URL to query Token Plan quota",
     "balanceHint": "Automatically uses the provider's API Key to query account balance",
     "officialSubscriptionHint": "Reads the local CLI OAuth credentials and calls the official API to query subscription quota. Disabled by default and only requests after you enable it.",
-    "resetDate": "Reset date",
-    "premiumRequests": "Premium Requests",
     "credentialsConfig": "Credentials",
     "credentialsHint": "Leave empty to use provider config",
     "optional": "optional",
@@ -2674,7 +2359,6 @@
     "disableFailed": "Failed to disable",
     "importSuccess": "Imported successfully",
     "importFailed": "Failed to import",
-    "confirm": {},
     "appSelect": "Choose app",
     "helpTitle": "How prompts take effect",
     "helpText": "Each app has one enabled prompt at a time, and it becomes the target file. Edits made elsewhere are pulled into the enabled prompt the next time you open this page; file content that isn't here yet is saved as an \"Original prompt\" before another one is enabled.",
@@ -2696,7 +2380,6 @@
     "copiedPath": "Copied {{path}}",
     "copyFailed": "Couldn't copy to the clipboard",
     "appLabel": "App:",
-    "appNoteDesktop": "Claude Desktop uses Claude Code's prompts.",
     "appNoteOpenclaw": "OpenClaw is managed under Workspace on its own page.",
     "targetFile": "Target file",
     "targetDir": "Folder",
@@ -2773,7 +2456,6 @@
     "switcherAriaLabel": "Project: {{name}}",
     "switcherTooltip": {
       "claude": "Projects: switch the Claude Code provider / MCP / Skills / memory files in one click",
-      "claude-desktop": "Projects: switch the Claude Desktop provider in one click",
       "codex": "Projects: switch the Codex provider / MCP / Skills / memory files in one click"
     },
     "none": "No project",
@@ -2782,7 +2464,6 @@
     "createFromCurrent": "New project",
     "createDescription": {
       "claude": "Save the current Claude Code provider, MCP, Skills and memory file as a project you can switch to later.",
-      "claude-desktop": "Save the current Claude Desktop provider as a project you can switch to later.",
       "codex": "Save the current Codex provider, MCP, Skills and memory file configuration as a project you can switch to later."
     },
     "manage": "Manage projects",
@@ -3379,253 +3060,12 @@
     "skillsFailed": "Failed to auto import skills",
     "skillsFailedDescription": "Open the Skills page and click \"Import Existing\" to import manually (or restart and try again)."
   },
-  "health": {
-    "operational": "Operational",
-    "degraded": "Degraded",
-    "failed": "Failed",
-    "circuitOpen": "Circuit Open",
-    "consecutiveFailures": "{{count}} consecutive failures"
-  },
-  "failover": {
-    "enabled": "{{app}} failover enabled",
-    "disabled": "{{app}} failover disabled",
-    "toggleFailed": "Operation failed: {{detail}}",
-    "queueAddFailed": "Failed to add to the queue: {{detail}}",
-    "queueRemoveFailed": "Failed to remove from the queue: {{detail}}",
-    "inQueue": "In queue",
-    "addQueue": "Add",
-    "priority": {
-      "tooltip": "Failover priority {{priority}}"
-    },
-    "tooltip": {
-      "enabled": "{{app}} failover enabled\nRequests follow queue priority (P1→P2→...)",
-      "disabled": "Enable {{app}} failover\nSwitches to queue P1 immediately, then falls back on failures",
-      "takeoverRequired": "Take over {{app}} first, then enable failover"
-    }
-  },
-  "proxy": {
-    "panel": {
-      "serviceAddress": "Service Address",
-      "addressCopied": "Address copied",
-      "currentProvider": "Current Provider:",
-      "waitingFirstRequest": "Current Provider: Waiting for first request...",
-      "stoppedTitle": "Routing Service Stopped",
-      "stoppedDescription": "Use the toggle above to start the service",
-      "openSettings": "Configure Routing Service",
-      "stats": {
-        "activeConnections": "Active Connections",
-        "totalRequests": "Total Requests",
-        "successRate": "Success Rate",
-        "uptime": "Uptime"
-      }
-    },
-    "settings": {
-      "title": "Routing Service Settings",
-      "description": "Configure local routing server listening address, port and runtime parameters. Changes take effect immediately after saving.",
-      "alert": {
-        "autoApply": "Changes will be automatically synced to the running routing service without manual restart."
-      },
-      "basic": {
-        "title": "Basic Settings",
-        "description": "Configure routing service listening address and port."
-      },
-      "advanced": {
-        "title": "Advanced Parameters",
-        "description": "Control request stability and logging."
-      },
-      "timeout": {
-        "title": "Timeout Settings",
-        "description": "Configure timeout for streaming and non-streaming requests."
-      },
-      "fields": {
-        "listenAddress": {
-          "label": "Listen Address",
-          "placeholder": "127.0.0.1",
-          "description": "IP address the routing server listens on (recommended: 127.0.0.1)"
-        },
-        "listenPort": {
-          "label": "Listen Port",
-          "placeholder": "15721",
-          "description": "Port number the routing server listens on (1024 ~ 65535)"
-        },
-        "maxRetries": {
-          "label": "Max Retries",
-          "placeholder": "3",
-          "description": "Number of retries on request failure (0 ~ 10)"
-        },
-        "requestTimeout": {
-          "label": "Request Timeout (sec)",
-          "placeholder": "0 (unlimited) or 300",
-          "description": "Maximum wait time for a single request (0 = unlimited, or 10 ~ 600 seconds)"
-        },
-        "enableLogging": {
-          "label": "Record Request Usage",
-          "description": "Write routing request usage and status to the local statistics database"
-        },
-        "streamingFirstByteTimeout": {
-          "label": "Streaming First Byte Timeout (sec)",
-          "description": "Maximum time to wait for the first data chunk"
-        },
-        "streamingIdleTimeout": {
-          "label": "Streaming Idle Timeout (sec)",
-          "description": "Maximum interval between data chunks"
-        },
-        "nonStreamingTimeout": {
-          "label": "Non-Streaming Timeout (sec)",
-          "description": "Total timeout for non-streaming requests"
-        }
-      },
-      "validation": {
-        "addressInvalid": "Please enter a valid IP address",
-        "portMin": "Port must be greater than 1024",
-        "portMax": "Port must be less than 65535",
-        "retryMin": "Retry count cannot be negative",
-        "retryMax": "Retry count cannot exceed 10",
-        "timeoutNonNegative": "Timeout cannot be negative",
-        "timeoutMax": "Timeout cannot exceed 600 seconds",
-        "timeoutRange": "Please enter 0 or a value between 10-600",
-        "streamingTimeoutMin": "Timeout must be at least 5 seconds",
-        "streamingTimeoutMax": "Timeout cannot exceed 300 seconds"
-      },
-      "actions": {
-        "save": "Save Configuration"
-      },
-      "toast": {
-        "saved": "Routing configuration saved",
-        "saveFailed": "Save failed: {{error}}"
-      },
-      "invalidPort": "Invalid port, please enter a number between 1024-65535",
-      "invalidAddress": "Invalid address. Enter an IPv4 (e.g. 127.0.0.1), IPv6 (e.g. ::1), or localhost",
-      "configSaved": "Routing configuration saved",
-      "configSaveFailed": "Failed to save configuration",
-      "restartRequired": "Restart routing service for address or port changes to take effect"
-    },
-    "switchFailed": "Switch failed: {{error}}",
-    "takeover": {
-      "ariaLabel": "{{appLabel}} local routing",
-      "hint": "Select apps to route — once enabled, requests from that app will go through local routing",
-      "enabled": "{{app}} routing enabled",
-      "disabled": "{{app}} routing disabled",
-      "failed": "Failed to toggle routing: {{detail}}",
-      "tooltip": {
-        "active": "{{appLabel}} is routing - {{address}}:{{port}}\nSwitching providers changes the route only; the direct provider stays",
-        "broken": "{{appLabel}} is routing, but routing service is not running",
-        "inactive": "Route {{appLabel}}'s requests through local routing"
-      }
-    },
-    "stackMode": {
-      "enabled": "{{app}} is now in Aggregation mode",
-      "exitedToDirect": "{{apps}} switched back to direct",
-      "ariaLabel": "{{appLabel}} Aggregation mode",
-      "failoverUnavailable": "{{appLabel}} is in Aggregation mode, which has no failover. The queue and settings are kept and apply again in routing mode",
-      "codexStale": {
-        "title": "Codex is still using an old model list, so aggregated models won't show",
-        "daemon": "CLI: reopening codex isn't enough; its background daemon needs a restart.",
-        "others": "Desktop app: quit it completely and reopen it (⌘Q on macOS; closing the window isn't enough). Editor extensions: reopen the editor window.",
-        "restart": "Restart Codex daemon",
-        "confirmTitle": "Restart the Codex daemon?",
-        "confirmMessage": "Every codex session in your terminals shares this daemon, so running tasks will be interrupted. Reopen codex afterwards to see the aggregated models.",
-        "confirm": "Restart",
-        "restarted": "Codex daemon restarted. Reopen codex to see the aggregated models",
-        "notRunning": "The Codex daemon isn't running. codex will load the new model list the next time it starts",
-        "failed": "Failed to restart the Codex daemon: {{error}}"
-      }
-    },
-    "failover": {
-      "proxyRequired": "Routing service must be started to configure failover",
-      "autoSwitch": "Auto Failover",
-      "autoSwitchDescription": "When enabled, switches to queue P1 immediately and automatically tries the next provider in the queue on failures"
-    },
-    "failoverQueue": {
-      "title": "Failover Queue",
-      "description": "Manage failover order for each app's providers",
-      "info": "When auto failover is enabled, requests follow the queue priority order (P1 first). On failures, the system will try the next provider in the queue.",
-      "selectProvider": "Select a provider to add to queue",
-      "noAvailableProviders": "No providers available to add",
-      "empty": "Failover queue is empty. Add providers to enable automatic failover.",
-      "orderHint": "Queue order matches the provider list order on the Home page. Reorder providers on the Home page to change priority.",
-      "dragHint": "Drag providers to adjust failover order. Lower numbers have higher priority.",
-      "toggleEnabled": "Enable/Disable",
-      "addSuccess": "Added to failover queue",
-      "addFailed": "Failed to add",
-      "removeSuccess": "Removed from failover queue",
-      "removeFailed": "Failed to remove",
-      "reorderSuccess": "Queue order updated",
-      "reorderFailed": "Failed to update order",
-      "toggleFailed": "Failed to update status"
-    },
-    "autoFailover": {
-      "info": "When the failover queue has multiple providers, the system will try them in priority order when requests fail. When a provider reaches the consecutive failure threshold, the circuit breaker will open and skip it temporarily.",
-      "configSaved": "Auto failover config saved",
-      "configSaveFailed": "Failed to save",
-      "validationFailed": "The following fields are out of valid range: {{fields}}",
-      "retrySettings": "Retry & Timeout Settings",
-      "failureThreshold": "Failure Threshold",
-      "failureThresholdHint": "Open circuit breaker after this many consecutive failures (recommended: 3-10)",
-      "timeout": "Recovery Wait Time (seconds)",
-      "timeoutHint": "Wait this long before trying to recover after circuit opens (recommended: 30-120)",
-      "circuitBreakerSettings": "Circuit Breaker Settings",
-      "successThreshold": "Recovery Success Threshold",
-      "successThresholdHint": "Close circuit breaker after this many successes in half-open state",
-      "errorRate": "Error Rate Threshold (%)",
-      "errorRateHint": "Open circuit breaker when error rate exceeds this value",
-      "minRequests": "Minimum Requests",
-      "minRequestsHint": "Minimum requests before calculating error rate",
-      "explanationTitle": "How It Works",
-      "failureThresholdLabel": "Failure Threshold",
-      "failureThresholdExplain": "Circuit breaker opens after this many consecutive failures, making the provider temporarily unavailable",
-      "timeoutLabel": "Recovery Wait Time",
-      "timeoutExplain": "After circuit opens, wait this long before trying half-open state",
-      "successThresholdLabel": "Recovery Success Threshold",
-      "successThresholdExplain": "In half-open state, close circuit breaker after this many successes, making provider available again",
-      "errorRateLabel": "Error Rate Threshold",
-      "errorRateExplain": "Open circuit breaker when error rate exceeds this value, even if failure threshold not reached",
-      "maxRetries": "Max Retries",
-      "timeoutSettings": "Timeout Settings",
-      "streamingFirstByte": "Streaming First Byte Timeout",
-      "streamingIdle": "Streaming Idle Timeout",
-      "nonStreaming": "Non-Streaming Timeout",
-      "maxRetriesHint": "Number of retries on request failure (0-10)",
-      "streamingFirstByteHint": "Max time to wait for first data chunk, range 1-120s, default 60s",
-      "streamingIdleHint": "Max interval between data chunks, range 60-600s, 0 to disable (prevents mid-stream stalls)",
-      "nonStreamingHint": "Total timeout for non-streaming requests, range 60-1200s, default 600s (10 min)"
-    },
-    "logging": {
-      "enabled": "Logging enabled",
-      "disabled": "Logging disabled",
-      "failed": "Failed to toggle logging"
-    },
-    "server": {
-      "started": "Routing service started - {{address}}:{{port}}",
-      "startFailed": "Failed to start routing service: {{detail}}",
-      "stopped": "Routing service stopped",
-      "stopFailed": "Failed to stop routing service: {{detail}}"
-    },
-    "stoppedWithRestore": "Routing service stopped; all apps are back on direct connections",
-    "stopWithRestoreFailed": "Stop failed: {{detail}}"
-  },
   "streamCheck": {
     "reachable": "{{providerName}} is reachable ({{responseTimeMs}}ms)",
     "reachableSlow": "{{providerName}} reachable but slow ({{responseTimeMs}}ms)",
     "unreachable": "{{providerName}} unreachable: {{message}}",
     "unreachableHint": "Could not establish a connection (DNS / connect / TLS / timeout). Check the base_url and your network.",
     "error": "{{providerName}} check error: {{error}}"
-  },
-  "proxyConfig": {
-    "proxyEnabled": "Routing Master Switch",
-    "appTakeover": "Routing Enabled",
-    "perAppConfig": "Per-App Config",
-    "circuitBreaker": "Circuit Breaker",
-    "circuitBreakerSettings": "Circuit Breaker Settings",
-    "failureThreshold": "Failure Threshold",
-    "successThreshold": "Success Threshold",
-    "recoveryTimeout": "Recovery Timeout",
-    "errorRateThreshold": "Error Rate Threshold",
-    "minRequests": "Min Requests",
-    "timeoutConfig": "Timeout Config",
-    "streamingFirstByte": "Streaming First Byte Timeout",
-    "streamingIdle": "Streaming Idle Timeout",
-    "nonStreaming": "Non-Streaming Timeout"
   },
   "universalProvider": {
     "duplicate": "Duplicate",
@@ -3878,8 +3318,7 @@
       "geminiFlash": "Flash",
       "geminiFlashLite": "Lite",
       "monthly": "Mo",
-      "credits": "Credits",
-      "copilotPremium": "Premium"
+      "credits": "Credits"
     },
     "fiveHour": "5-hour",
     "sevenDay": "Weekly",
@@ -3893,7 +3332,6 @@
     "weeklyLimit": "Weekly",
     "monthly": "Monthly",
     "credits": "Credits",
-    "copilotPremium": "Premium",
     "utilization": "{{value}}%",
     "resetsIn": "Resets in {{time}}",
     "extraUsage": "Extra Usage",
@@ -3919,13 +3357,6 @@
     "appsHasUpdate": "Apps · updates available",
     "settings": "Settings",
     "settingsHasUpdate": "Settings · a new CC Switch version is available",
-    "mode": {
-      "route": "Routing",
-      "stack": "Aggregation",
-      "mapping": "Mapping",
-      "mappingFull": "Model mapping"
-    },
-    "needsAttention": "Needs attention",
     "back": "Back"
   },
   "appsPage": {
@@ -3942,10 +3373,6 @@
     "columnVersion": "Version",
     "columnVisible": "Show",
     "visibleHelp": "When off, the app no longer appears in the sidebar, in the MCP / Skills app columns, or in the app pickers on Prompts and Sessions. Its existing config stays and keeps syncing.",
-    "desktopHelp": "Claude Desktop is a desktop app and can't be installed or upgraded here; CC Switch connects to it through its config file.",
-    "desktopUnsupported": "Not supported on this system",
-    "desktopConnected": "Connected",
-    "desktopNotConnected": "Not connected",
     "newVersion": "{{version}} available",
     "notRunnable": "Can't run",
     "otherInstalls": "{{count}} more install(s)",
@@ -3976,192 +3403,39 @@
     "webUi": "Web UI",
     "viewUsage": "View usage for this app"
   },
-  "mode": {
-    "tabsLabel": "Connection mode",
-    "names": {
-      "direct": "Direct",
-      "route": "Routing",
-      "stack": "Aggregation"
-    },
-    "active": "active",
-    "activeTitle": "{{mode}} is active",
-    "noProvider": "(none)",
-    "failover": "Failover",
-    "routeSettings": "Routing settings",
-    "routeSettingsTitle": "Routing settings",
-    "moreRouteSettings": "More routing settings",
-    "queueMoved": "{{name}} moved to position {{position}}.",
-    "status": {
-      "directLead": "Direct is active · connected to",
-      "routeLead": "Routing is active",
-      "byQueue": "by queue",
-      "stackLead": "Aggregation is active · default",
-      "stackValue": "{{name}} · {{count}} more with {{models}} models"
-    },
-    "activate": {
-      "viewing": "You're viewing “{{view}}”. {{app}} is currently on {{active}}.",
-      "route": "Start routing",
-      "stack": "Switch to Aggregation",
-      "direct": "Back to direct"
-    },
-    "notice": {
-      "serviceDown": "{{app}} is in {{mode}} mode but the routing service isn't running, so requests will fail.",
-      "startService": "Start service",
-      "backToDirect": "Back to direct",
-      "attachFailed": "{{mode}} couldn't reconnect last time, so {{app}} went back to direct."
-    },
-    "toast": {
-      "enteredRoute": "{{app}} is now routing → {{provider}}.",
-      "enteredStack": "{{app}} switched to Aggregation. Restart {{app}} to see the aggregated models in /model.",
-      "enteredStackLive": "{{app}} switched to Aggregation. The aggregated models are now in /model.",
-      "exited": "Back to direct: {{app}} now connects to {{provider}} directly.",
-      "defaultRemembered": "{{provider}} will be the default provider once you switch to Aggregation.",
-      "restartHint": " Restart {{app}} to apply.",
-      "undo": "Undo",
-      "failed": "Couldn't switch: {{detail}}"
-    },
-    "dialog": {
-      "routeTitle": "Use routing for {{app}}?",
-      "stackTitle": "Use Aggregation for {{app}}?",
-      "switchTitle": "Switch {{app}} from “{{from}}” to “{{to}}”?",
-      "routeLead": "Requests go through CC Switch on this machine first, then to the provider you pick.",
-      "stackLead": "The default provider takes requests without a prefix.",
-      "routeTo": "Route to",
-      "stackDefault": "Default provider",
-      "officialOption": "{{name}} (official)",
-      "stackOfficialNote": "If you use an official subscription, set the official account as the default provider.",
-      "routeNoteFile": "Rewrites the address and key in {{file}}. The real key stays in CC Switch; other settings are untouched.",
-      "routeNoteSwitch": "Changing providers later on the Routing tab won't rewrite the config file.",
-      "routeNoteKeepRunning": "Keep CC Switch running. Quitting writes the direct config back; it reconnects on the next start.",
-      "stackNoteMembers": "{{names}} add {{count}} models, shown in /model with the ccs- prefix.",
-      "stackNoteEmpty": "No other providers added yet, so only the default is available. You can add more on the Aggregation tab later.",
-      "stackNoteNoFailover": "Aggregation has no failover. The queue and its settings are kept and come back with routing.",
-      "stackNoteRestartCodex": "Restart {{app}} to see the aggregated models; quit the desktop app completely and reopen it.",
-      "stackToRouteNote": "Aggregated models are withdrawn from /model (the list is kept); a selected aggregated model must be changed back to a regular one.",
-      "confirmRoute": "Start routing",
-      "confirmStack": "Switch to Aggregation",
-      "needsRouteTitle": "{{provider}} needs routing",
-      "needsRouteLead": "{{provider}}: {{reason}}. If you switch to it directly, {{app}} won't be able to use it.",
-      "switchAnyway": "Switch directly anyway",
-      "routeAndUse": "Start routing and use it"
-    },
-    "help": {
-      "title": "How the connection modes differ",
-      "direct": "Direct: the client connects straight to the chosen provider; switching rewrites its config.",
-      "route": "Routing: requests go through CC Switch on this machine first; failover is available.",
-      "stack": "Aggregation: models from several providers are listed together in /model; no failover."
-    }
-  },
   "providerCard": {
     "status": {
       "inUse": "In use",
-      "routing": "Routing",
-      "currentDefault": "Current default",
-      "defaultAfterSwitch": "Default after switching",
       "current": "Current",
       "default": "Default"
     },
     "action": {
       "switch": "Switch",
-      "routeHere": "Route here",
-      "backToDirectAndUse": "Back to direct and use",
-      "addToQueue": "Add to queue",
-      "removeFromQueue": "Remove from queue",
       "setDefault": "Set as default",
       "add": "Add",
       "remove": "Remove",
       "enable": "Enable",
       "disable": "Disable",
       "edit": "Edit {{name}}",
-      "more": "More actions for {{name}}",
-      "moveUp": "Move {{name}} up",
-      "moveDown": "Move {{name}} down"
+      "more": "More actions for {{name}}"
     },
     "chip": {
       "official": "Official",
-      "needsRoute": "Needs routing",
-      "directWhenDirect": "Used when direct",
-      "default": "Default",
-      "models": "{{count}} models",
-      "noModels": "No models",
-      "mapping": "Model mapping",
-      "direct": "Direct",
       "hermesManaged": "Managed by Hermes",
       "defaultModel": "Default model {{model}}"
     },
     "reason": {
-      "noRoute": "Official subscriptions don't go through routing; available again in direct mode.",
-      "noStack": "Official subscriptions can't be used in Aggregation.",
-      "officialStack": "Official accounts can only be the default; they can't join the aggregation.",
-      "defaultWhileRouting": "While routing, the default is the provider you route to. You can pick another one when switching to Aggregation.",
-      "needsRoute": "Needs routing: {{reason}}; can't connect directly.",
       "defaultCannotRemove": "The default can't be removed. Make another provider the default first.",
       "currentCannotRemove": "The provider in use can't be removed. Enable another one first.",
-      "inUseCannotDelete": "The provider in use can't be deleted. Switch to another one first.",
-      "noFailover": "Official accounts can't join the failover queue: they use the client's own login and can't rotate with other providers."
+      "inUseCannotDelete": "The provider in use can't be deleted. Switch to another one first."
     },
     "section": {
-      "queue": "Queue · by priority ({{count}})",
-      "queueHelpTitle": "Failover queue",
-      "queueHelp": "Requests go to the first provider; after repeated failures they move to the next. Reorder with move up / down or by dragging.",
-      "queueEmpty": "The queue is empty. Add providers from below.",
-      "notInQueue": "Not in queue ({{count}})",
-      "stackDefault": "Default provider",
-      "stackDefaultAfterSwitch": "Default provider after switching to Aggregation",
-      "stackDefaultHelp": "Requests without a prefix go to it; other added providers appear in /model with the ccs- prefix.",
-      "stackEmpty": "No other providers added yet.",
       "added": "Added · {{count}}",
       "addedHelpTitle": "Added",
       "addedHelp": "Added providers are all written into {{app}}'s config; pick the model inside {{app}}.",
       "addedEmpty": "No providers added yet.",
-      "available": "Available · {{count}}",
-      "stackNoDefault": "No default provider yet. You pick one when switching to Aggregation."
+      "available": "Available · {{count}}"
     }
-  },
-  "desktopAccess": {
-    "current": "Current: {{name}} · {{mode}}",
-    "noCurrent": "No provider selected",
-    "helpTitle": "How Claude Desktop connects",
-    "help": "Claude Desktop's connection is set per provider: direct providers are written into Desktop's config; model-mapping providers go through the routing service, which stays running automatically while one is in use.",
-    "service": "Routing service",
-    "running": "Running",
-    "notRunning": "The routing service couldn't start",
-    "changePort": "Change port",
-    "notNeeded": "Routing service: not needed by the current provider"
-  },
-  "routingSettings": {
-    "service": "Service",
-    "serviceName": "Routing service",
-    "serviceHelp": "In routing and Aggregation modes, requests go through the routing service on this machine before reaching the provider. It starts automatically when an app enters either mode, or when Claude Desktop uses model mapping.",
-    "runningFor": "Running · up {{uptime}}",
-    "uptimeHours": "{{hours}} h {{minutes}} min",
-    "uptimeMinutes": "{{minutes}} min",
-    "stopped": "Stopped",
-    "totalRequests": "Requests",
-    "successRate": "Success rate",
-    "activeConnections": "Active connections",
-    "start": "Start",
-    "stop": "Stop",
-    "stopBlocked": "Some apps still use the routing service. Switch them back to direct first.",
-    "listen": "Listen address and port",
-    "address": "Listen address",
-    "addressHint": "Recommended: 127.0.0.1",
-    "port": "Listen port",
-    "saveAndRestart": "Save and restart service",
-    "logging": "Record request usage",
-    "loggingHelp": "When off, Usage has no per-request details for routed requests.",
-    "usingApps": "Apps using routing · {{count}}",
-    "noApps": "No app is using routing. Enter it from the Routing or Aggregation tab on an app's page.",
-    "routeDetail": "Routing to {{name}}",
-    "stackDetail": "Default {{name}}",
-    "desktopMode": "Model mapping · kept running automatically",
-    "desktopDetail": "Current provider {{name}}",
-    "goTo": "Open",
-    "exitAll": "Switch all back to direct",
-    "exitAllTitle": "Switch every app back to direct?",
-    "exitAllMessage": "Apps in routing or Aggregation mode get their direct config written back, then the routing service stops. Route targets, queues and aggregation lists are kept.",
-    "exitAllConfirm": "Switch all back to direct",
-    "failoverHelp": "Tune each app's timeouts, retries and circuit breaker here. Queues are managed on each app's Routing tab."
   },
   "quota": {
     "tierShort": "{{label}} {{value}}%",
@@ -4231,7 +3505,7 @@
     "noun": "MCP servers",
     "listSeparator": ", ",
     "helpTitle": "How MCP syncs",
-    "help": "This list is the source of truth: it is written into the config files of the apps you tick, and rewritten from here when you switch providers. Claude Desktop and OpenClaw are not supported, so they have no column; Pi needs 1.0 or later and does not support SSE.",
+    "help": "This list is the source of truth: it is written into the config files of the apps you tick, and rewritten from here when you switch providers. OpenClaw is not supported, so it has no column; Pi needs 1.0 or later and does not support SSE.",
     "importFromApps": "Import from apps",
     "add": "Add MCP",
     "moreActions": "More MCP actions",
@@ -4391,7 +3665,7 @@
   "skillsPage": {
     "noun": "Skills",
     "helpTitle": "How Skills sync",
-    "help": "The main copy lives in CC Switch's folder and is synced to the apps you tick. Claude Desktop and OpenClaw don't support Skills, so they have no column.",
+    "help": "The main copy lives in CC Switch's folder and is synced to the apps you tick. OpenClaw doesn't support Skills, so it has no column.",
     "add": "Add Skill",
     "addMenu": {
       "discover": "Browse in Discover",
@@ -4579,29 +3853,20 @@
     "helpTitle": "What is Accounts?",
     "group": {
       "helpTitle": "How {{service}} accounts are used",
-      "copilotHelp": "Used by GitHub Copilot presets in Claude Code and Claude Desktop. Providers without a chosen account use the Default one.",
-      "chatgptHelp": "Used by ChatGPT presets in Claude Code and Claude Desktop, and by Codex's official-login binding. Providers without a chosen account use the Default one.",
-      "xaiHelp": "Used by xAI presets in Claude Code, Claude Desktop and Codex. Providers without a chosen account use the Default one."
+      "chatgptHelp": "Codex official cards can be bound to an account here; switching writes that account's login into Codex."
     },
     "addAccount": "Add account",
     "groupMenu": "More actions for {{service}}",
     "accountMenu": "More actions for {{login}}",
     "removeAll": "Delete all accounts",
     "removeAccount": "Delete account",
-    "setDefault": "Set as default",
     "reauth": "Sign in again",
     "busyHint": "Finish or cancel the sign-in in progress first",
-    "default": "Default",
     "needsReauth": "Sign-in needed",
     "empty": "No {{service}} account signed in yet.",
     "signedInOn": "Signed in {{date}}",
-    "enterpriseServer": "Enterprise Server",
-    "enterpriseDomain": "Enterprise domain",
-    "enterpriseDomainRequired": "Enter the enterprise domain first, e.g. company.ghe.com",
     "codexReauthNote": "Missing a sign-in credential (id_token), so it can't be used for Codex managed binding",
-    "xaiReauthNote": "Sign-in credential expired; providers using it won't work",
     "statusLoading": "Loading accounts…",
-    "xaiStatusLoadFailed": "Couldn't load xAI accounts. Try again.",
     "retry": "Retry",
     "loginFailed": "Sign-in didn't finish",
     "pending": {

@@ -4,11 +4,11 @@
 
 use crate::database::{lock_conn, Database};
 use crate::error::AppError;
-use crate::proxy::usage::calculator::ModelPricing;
 use crate::services::sql_helpers::{
     fresh_input_sql, real_total_tokens_sql, INPUT_TOKEN_SEMANTICS_FRESH,
     INPUT_TOKEN_SEMANTICS_TOTAL,
 };
+use crate::token_usage::calculator::ModelPricing;
 use chrono::{Local, NaiveDate, TimeZone, Timelike};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
@@ -2514,7 +2514,7 @@ fn clean_model_id_for_pricing(model_id: &str) -> String {
         .to_ascii_lowercase();
 
     normalized
-        .trim_end_matches(crate::claude_desktop_config::ONE_M_CONTEXT_MARKER)
+        .trim_end_matches(crate::model_capabilities::ONE_M_CONTEXT_MARKER)
         .trim()
         .to_string()
 }

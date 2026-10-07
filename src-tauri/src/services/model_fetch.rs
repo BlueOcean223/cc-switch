@@ -92,7 +92,7 @@ pub async fn fetch_models(
     let candidates = build_models_url_candidates(base_url, is_full_url, models_url_override)?;
     let headers =
         build_model_fetch_headers(api_key, api_format, user_agent.as_ref(), request_headers)?;
-    let client = crate::proxy::http_client::get();
+    let client = crate::http_client::get();
     let mut last_err: Option<String> = None;
     let mut known_secrets = vec![api_key.to_string()];
     if let Some(request_headers) = request_headers {

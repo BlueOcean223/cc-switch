@@ -1,7 +1,7 @@
 //! Claude Code 会话日志使用追踪
 //!
 //! 从 ~/.claude/projects/ 下的 JSONL 会话文件中提取 token 使用数据，
-//! 实现无代理模式下的使用统计。
+//! 写入使用统计。
 //!
 //! ## 数据流
 //! ```text
@@ -11,11 +11,11 @@
 use crate::config::get_claude_config_dir;
 use crate::database::{lock_conn, Database};
 use crate::error::AppError;
-use crate::proxy::usage::calculator::{CostCalculator, ModelPricing};
-use crate::proxy::usage::parser::TokenUsage;
 use crate::services::usage_stats::{
     effective_usage_log_filter, find_model_pricing, has_matching_proxy_usage_log, DedupKey,
 };
+use crate::token_usage::calculator::{CostCalculator, ModelPricing};
+use crate::token_usage::parser::TokenUsage;
 use rusqlite::OptionalExtension;
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
@@ -840,7 +840,7 @@ fn sync_single_file(
 
         let request_id = format!(
             "{}{}",
-            crate::proxy::usage::parser::SESSION_REQUEST_ID_PREFIX,
+            crate::token_usage::parser::SESSION_REQUEST_ID_PREFIX,
             msg.message_id
         );
 
@@ -1037,7 +1037,6 @@ fn session_costs(conn: &rusqlite::Connection, msg: &ParsedAssistantUsage) -> [St
         cache_read_tokens: msg.cache_read_tokens,
         cache_creation_tokens: msg.cache_creation_tokens,
         model: Some(msg.model.clone()),
-        message_id: None,
     };
     match find_model_pricing_for_session(conn, &msg.model) {
         Some(pricing) => {
@@ -1730,7 +1729,7 @@ mod tests {
                 "SELECT COUNT(*) FROM proxy_request_logs WHERE request_id = ?1",
                 rusqlite::params![format!(
                     "{}msg_x",
-                    crate::proxy::usage::parser::SESSION_REQUEST_ID_PREFIX
+                    crate::token_usage::parser::SESSION_REQUEST_ID_PREFIX
                 )],
                 |row| row.get(0),
             )?;
@@ -1794,7 +1793,7 @@ mod tests {
             "SELECT COUNT(*) FROM proxy_request_logs WHERE request_id = ?1",
             rusqlite::params![format!(
                 "{}msg_a",
-                crate::proxy::usage::parser::SESSION_REQUEST_ID_PREFIX
+                crate::token_usage::parser::SESSION_REQUEST_ID_PREFIX
             )],
             |row| row.get(0),
         )?;

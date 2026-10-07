@@ -223,94 +223,15 @@ describe("useProviderActions", () => {
     );
   });
 
-  it("warns but still switches providers that require proxy when proxy is not running", async () => {
-    switchProviderMutateAsync.mockResolvedValueOnce(undefined);
-    const { wrapper } = createWrapper();
-    const provider = createProvider({
-      category: "custom",
-      meta: {
-        apiFormat: "openai_chat",
-      },
-    });
-
-    const { result } = renderHook(() => useProviderActions("claude"), {
-      wrapper,
-    });
-
-    await act(async () => {
-      await result.current.switchProvider(provider);
-    });
-
-    expect(toastWarningMock).toHaveBeenCalledTimes(1);
-    expect(switchProviderMutateAsync).toHaveBeenCalledWith(provider.id);
-  });
-
-  it("warns but still switches Codex full URL providers when proxy is not running", async () => {
-    switchProviderMutateAsync.mockResolvedValueOnce(undefined);
-    const { wrapper } = createWrapper();
-    const provider = createProvider({
-      category: "custom",
-      meta: {
-        isFullUrl: true,
-      },
-    });
-
-    const { result } = renderHook(() => useProviderActions("codex"), {
-      wrapper,
-    });
-
-    await act(async () => {
-      await result.current.switchProvider(provider);
-    });
-
-    expect(toastWarningMock).toHaveBeenCalledTimes(1);
-    expect(switchProviderMutateAsync).toHaveBeenCalledWith(provider.id);
-  });
-
-  it("warns when switching a Codex Anthropic-format provider without proxy", async () => {
-    switchProviderMutateAsync.mockResolvedValueOnce(undefined);
-    const { wrapper } = createWrapper();
-    const provider = createProvider({
-      category: "custom",
-      meta: { apiFormat: "anthropic" },
-    });
-
-    const { result } = renderHook(() => useProviderActions("codex"), {
-      wrapper,
-    });
-
-    await act(async () => {
-      await result.current.switchProvider(provider);
-    });
-
-    expect(toastWarningMock).toHaveBeenCalledWith(
-      expect.stringContaining("Anthropic Messages"),
-    );
-    expect(switchProviderMutateAsync).toHaveBeenCalledWith(provider.id);
-  });
-
-  it("warns for Grok providers that require the Responses router", async () => {
+  it("switches custom and official providers without any extra checks", async () => {
     switchProviderMutateAsync.mockResolvedValue(undefined);
     const { wrapper } = createWrapper();
     const providers = [
-      createProvider({
-        id: "grok-chat",
-        category: "custom",
-        meta: { apiFormat: "openai_chat" },
-      }),
-      createProvider({
-        id: "grok-anthropic",
-        category: "custom",
-        meta: { apiFormat: "anthropic" },
-      }),
-      createProvider({
-        id: "grok-full-url",
-        category: "custom",
-        meta: { isFullUrl: true },
-      }),
+      createProvider({ id: "relay", category: "custom" }),
+      createProvider({ id: "claude-official", category: "official" }),
     ];
 
-    const { result } = renderHook(() => useProviderActions("grokbuild"), {
+    const { result } = renderHook(() => useProviderActions("claude"), {
       wrapper,
     });
 
@@ -320,143 +241,12 @@ describe("useProviderActions", () => {
       });
     }
 
-    expect(toastWarningMock).toHaveBeenCalledTimes(3);
-    expect(switchProviderMutateAsync).toHaveBeenCalledTimes(3);
-  });
-
-  it("warns for managed OAuth until the current Code app is taken over", async () => {
-    switchProviderMutateAsync.mockResolvedValueOnce(undefined);
-    const { wrapper } = createWrapper();
-    const provider = createProvider({
-      category: "custom",
-      meta: {
-        providerType: "codex_oauth",
-        apiFormat: "openai_responses",
-      },
-    });
-
-    const { result } = renderHook(() => useProviderActions("codex", false), {
-      wrapper,
-    });
-
-    await act(async () => {
-      await result.current.switchProvider(provider);
-    });
-
-    expect(toastWarningMock).toHaveBeenCalledWith(
-      expect.stringContaining("托管 OAuth"),
+    expect(switchProviderMutateAsync).toHaveBeenNthCalledWith(1, "relay");
+    expect(switchProviderMutateAsync).toHaveBeenNthCalledWith(
+      2,
+      "claude-official",
     );
-    expect(switchProviderMutateAsync).toHaveBeenCalledWith(provider.id);
-  });
-
-  it("does not warn for managed OAuth after the current Code app is taken over", async () => {
-    switchProviderMutateAsync.mockResolvedValueOnce(undefined);
-    const { wrapper } = createWrapper();
-    const provider = createProvider({
-      category: "custom",
-      meta: {
-        providerType: "codex_oauth",
-        apiFormat: "openai_responses",
-      },
-    });
-
-    const { result } = renderHook(() => useProviderActions("codex", true), {
-      wrapper,
-    });
-
-    await act(async () => {
-      await result.current.switchProvider(provider);
-    });
-
     expect(toastWarningMock).not.toHaveBeenCalled();
-    expect(switchProviderMutateAsync).toHaveBeenCalledWith(provider.id);
-  });
-
-  it("does not warn for Claude Desktop model mapping, which starts routing itself", async () => {
-    switchProviderMutateAsync.mockResolvedValue(undefined);
-    const { wrapper } = createWrapper();
-    const provider = createProvider({
-      category: "custom",
-      meta: { claudeDesktopMode: "proxy" },
-    });
-
-    const { result } = renderHook(
-      () => useProviderActions("claude-desktop", false),
-      { wrapper },
-    );
-
-    await act(async () => {
-      await result.current.switchProvider(provider);
-    });
-
-    expect(toastWarningMock).not.toHaveBeenCalled();
-    expect(switchProviderMutateAsync).toHaveBeenCalledWith(provider.id);
-  });
-
-  it("allows the native Codex official provider during takeover", async () => {
-    switchProviderMutateAsync.mockResolvedValueOnce(undefined);
-    const { wrapper } = createWrapper();
-    const provider = createProvider({
-      id: "codex-official",
-      category: "official",
-    });
-
-    const { result } = renderHook(() => useProviderActions("codex", true), {
-      wrapper,
-    });
-
-    await act(async () => {
-      await result.current.switchProvider(provider);
-    });
-
-    expect(switchProviderMutateAsync).toHaveBeenCalledWith("codex-official");
-    expect(toastErrorMock).not.toHaveBeenCalled();
-  });
-
-  it("continues blocking other official providers during takeover", async () => {
-    const { wrapper } = createWrapper();
-    const provider = createProvider({
-      id: "claude-official",
-      category: "official",
-    });
-
-    const { result } = renderHook(() => useProviderActions("claude", true), {
-      wrapper,
-    });
-
-    await act(async () => {
-      await result.current.switchProvider(provider);
-    });
-
-    expect(switchProviderMutateAsync).not.toHaveBeenCalled();
-    expect(toastErrorMock).toHaveBeenCalledTimes(1);
-  });
-
-  it("allows a managed Codex Official card during takeover", async () => {
-    switchProviderMutateAsync.mockResolvedValueOnce(undefined);
-    const { wrapper } = createWrapper();
-    const provider = createProvider({
-      id: "generated-uuid",
-      category: "official",
-      settingsConfig: { auth: {}, config: "" },
-      meta: {
-        providerType: "codex_oauth",
-        authBinding: {
-          source: "managed_account",
-          authProvider: "codex_oauth",
-          accountId: "acct-managed",
-        },
-      },
-    });
-    const { result } = renderHook(() => useProviderActions("codex", true), {
-      wrapper,
-    });
-
-    await act(async () => {
-      await result.current.switchProvider(provider);
-    });
-
-    expect(switchProviderMutateAsync).toHaveBeenCalledWith("generated-uuid");
     expect(toastErrorMock).not.toHaveBeenCalled();
   });
 

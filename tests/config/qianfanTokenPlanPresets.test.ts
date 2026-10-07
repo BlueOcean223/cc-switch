@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import { providerPresets } from "@/config/claudeProviderPresets";
-import { claudeDesktopProviderPresets } from "@/config/claudeDesktopProviderPresets";
 import { opencodeProviderPresets } from "@/config/opencodeProviderPresets";
 import { hermesProviderPresets } from "@/config/hermesProviderPresets";
 import {
@@ -9,8 +8,8 @@ import {
 } from "@/config/openclawProviderPresets";
 
 // 千帆 Token Plan 个人版（2026-07-13 起替代 Coding Plan 发售；存量 Coding
-// Plan 可用至到期，旧预设保留并存）。Codex 侧口径由 codexChatProviderPresets
-// 与 codexReasoningLevelPresets 两个测试锁定，此处覆盖其余五应用。
+// Plan 可用至到期，旧预设保留并存）。Codex 没有这个预设：它的 OpenAI 端点只有
+// Chat Completions，Codex 直连用不了。
 const PRESET_NAME = "Baidu Qianfan Token Plan";
 const OPENAI_BASE = "https://qianfan.baidubce.com/v2/tokenplan/personal";
 const ANTHROPIC_BASE =
@@ -41,16 +40,6 @@ describe("Baidu Qianfan Token Plan presets", () => {
     ]) {
       expect(env[key], key).toBe("deepseek-v4-pro");
     }
-  });
-
-  it("Claude Desktop preset proxies the Anthropic-compatible endpoint", () => {
-    const preset = claudeDesktopProviderPresets.find(
-      (item) => item.name === PRESET_NAME,
-    );
-    expect(preset).toBeDefined();
-    expect(preset?.baseUrl).toBe(ANTHROPIC_BASE);
-    expect(preset?.mode).toBe("proxy");
-    expect(preset?.apiFormat).toBe("anthropic");
   });
 
   it("OpenCode preset carries the full Token Plan lineup", () => {

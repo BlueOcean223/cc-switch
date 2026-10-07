@@ -252,7 +252,7 @@ function PromptAppPicker({
           className="shrink-0 gap-2 pe-2 ps-2.5"
         >
           <span className="sr-only">{t("prompts.appLabel")}</span>
-          <AppGlyph app={app} size={16} badgeClassName="bg-surface" />
+          <AppGlyph app={app} size={16} />
           <span>{APP_DISPLAY_NAME[app]}</span>
           <span className="text-caption font-normal tabular-nums text-fg-2">
             {count}
@@ -290,7 +290,7 @@ function PromptAppPicker({
                 selected ? "font-medium" : "font-normal",
               )}
             >
-              <AppGlyph app={id} size={16} badgeClassName="bg-surface" />
+              <AppGlyph app={id} size={16} />
               <span className="min-w-0 flex-1 truncate">
                 {APP_DISPLAY_NAME[id]}
               </span>
@@ -315,8 +315,7 @@ function PromptAppPicker({
         })}
         <div aria-hidden="true" className="mx-1.5 my-1 h-px bg-border" />
         <p className="m-0 px-2.5 pb-1.5 pt-1 text-caption text-fg-2">
-          <span className="block">{t("prompts.appNoteDesktop")}</span>
-          <span className="block">{t("prompts.appNoteOpenclaw")}</span>
+          {t("prompts.appNoteOpenclaw")}
         </p>
       </PopoverContent>
     </Popover>

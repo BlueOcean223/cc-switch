@@ -19,7 +19,7 @@ requires_openai_auth = true`;
 
 describe("detectCodingPlanProvider (OpenCode Go)", () => {
   it("matches both base variants across apps", () => {
-    // claude/claude-desktop 预设是 /zen/go，codex/opencode/pi 是 /zen/go/v1
+    // claude 预设是 /zen/go，opencode/pi 是 /zen/go/v1
     expect(detectCodingPlanProvider("https://opencode.ai/zen/go")).toBe(
       "opencode_go",
     );
@@ -52,14 +52,11 @@ describe("detectCodingPlanProvider (MiniMax)", () => {
 });
 
 describe("extractBaseUrlForUsageDetection", () => {
-  it("reads env.ANTHROPIC_BASE_URL for claude and claude-desktop", () => {
+  it("reads env.ANTHROPIC_BASE_URL for claude", () => {
     const config = {
       env: { ANTHROPIC_BASE_URL: "https://opencode.ai/zen/go" },
     };
     expect(extractBaseUrlForUsageDetection("claude", config)).toBe(
-      "https://opencode.ai/zen/go",
-    );
-    expect(extractBaseUrlForUsageDetection("claude-desktop", config)).toBe(
       "https://opencode.ai/zen/go",
     );
   });
@@ -111,16 +108,9 @@ describe("injectCodingPlanUsageScript", () => {
     });
   };
 
-  it("injects OpenCode Go for every app that ships its preset", () => {
+  it("injects OpenCode Go for every app that can point at it", () => {
     expectInjected(
       inject("claude", {
-        settingsConfig: {
-          env: { ANTHROPIC_BASE_URL: "https://opencode.ai/zen/go" },
-        },
-      }),
-    );
-    expectInjected(
-      inject("claude-desktop", {
         settingsConfig: {
           env: { ANTHROPIC_BASE_URL: "https://opencode.ai/zen/go" },
         },

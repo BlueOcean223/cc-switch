@@ -107,8 +107,7 @@ pub const CLAUDE_EXCLUSIVE_ENV: &[&str] = &[
     "CLAUDE_CODE_MAX_OUTPUT_TOKENS",
     "CLAUDE_CODE_DISABLE_1M_CONTEXT",
     "CLAUDE_CODE_DISABLE_UNKNOWN_MODEL_WINDOW_ENFORCEMENT",
-    // 向 ANTHROPIC_BASE_URL 取模型列表：网关（含代理模式下的 Stack 模型）要它，用户也可能
-    // 自己设成全局。
+    // 向 ANTHROPIC_BASE_URL 取模型列表：网关要它，用户也可能自己设成全局。
     "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY",
 ];
 
@@ -183,24 +182,6 @@ pub fn gemini_floor_env(key: &str) -> bool {
 /// Gemini CLI `settings.json` 里的关键字段：按键路径只清这两个键。
 pub const GEMINI_FLOOR_SETTINGS: &[&[&str]] =
     &[&["security", "auth", "selectedType"], &["model", "name"]];
-
-/// Claude Desktop 的 `configLibrary/<id>.json` 里的关键字段。
-pub const DESKTOP_PROFILE_FLOOR: &[&str] = &[
-    "inferenceProvider",
-    "inferenceGatewayBaseUrl",
-    "inferenceGatewayApiKey",
-    "inferenceGatewayAuthScheme",
-    "inferenceModels",
-];
-
-pub fn desktop_profile_floor(key: &str) -> bool {
-    DESKTOP_PROFILE_FLOOR.contains(&key)
-}
-
-/// Claude Desktop profile 里的策略键：缺失时写入，存在时不动，用户可以自己收紧
-/// 出站白名单、打开部署模式选择器。
-pub const DESKTOP_PROFILE_SEED: &[&str] =
-    &["disableDeploymentModeChooser", "coworkEgressAllowedHosts"];
 
 #[cfg(test)]
 mod tests {

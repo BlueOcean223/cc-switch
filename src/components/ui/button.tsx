@@ -29,13 +29,6 @@ const buttonVariants = cva(
           "border border-border-strong bg-surface text-fg-1 hover:bg-subtle disabled:opacity-100 disabled:border-border disabled:bg-transparent disabled:text-fg-3",
         // 透明：页头里带 ⌄ / › 的次要操作
         quiet: "border border-transparent text-fg-1 hover:bg-subtle",
-        // 模式色实心：只用于模式切换的主操作
-        direct:
-          "border border-transparent bg-direct-solid text-direct-on font-semibold hover:brightness-110",
-        route:
-          "border border-transparent bg-route-solid text-route-on font-semibold hover:brightness-110",
-        stack:
-          "border border-transparent bg-stack-solid text-stack-on font-semibold hover:brightness-110",
       },
       size: {
         // 旧尺寸都映射到 v7 的三档（docs/design-system.html「按钮」）：

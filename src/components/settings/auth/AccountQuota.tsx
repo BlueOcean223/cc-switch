@@ -18,7 +18,6 @@ import {
   countdownStr,
   formatRelativeTime,
   lineHint,
-  tierLine,
   type QuotaLine,
 } from "@/components/quota/quotaRules";
 import {
@@ -26,9 +25,6 @@ import {
   quotaRows,
 } from "@/components/SubscriptionQuotaFooter";
 import type { SubscriptionQuota } from "@/types/subscription";
-import { useCopilotQuota } from "@/lib/query/copilot";
-import { useXaiOauthQuotaByAccountId } from "@/lib/query/subscription";
-import { extractErrorMessage } from "@/utils/errorUtils";
 
 export interface AccountQuotaRow {
   label: string;
@@ -229,7 +225,7 @@ function QuotaRowCells({
   );
 }
 
-/** SubscriptionQuota（ChatGPT / xAI 账号的订阅额度）→ 额度列状态 */
+/** SubscriptionQuota（ChatGPT 账号的订阅额度）→ 额度列状态 */
 export function subscriptionQuotaState(
   t: TFunction,
   quota: SubscriptionQuota | undefined,
@@ -252,82 +248,4 @@ export function subscriptionQuotaState(
   }
   const rows = quotaRows(t, quota, locale);
   return rows.length > 0 ? { kind: "rows", rows } : null;
-}
-
-/** GitHub Copilot 账号的高级请求额度（copilot_get_usage_for_account） */
-export function CopilotAccountQuota({
-  accountId,
-  login,
-}: {
-  accountId: string;
-  login: string;
-}) {
-  const { t } = useTranslation();
-  const query = useCopilotQuota(accountId, { enabled: true, autoQuery: false });
-  const { data: quota, isFetching: loading } = query;
-
-  let state: AccountQuotaState;
-  if (quota?.success) {
-    const label = t("subscription.copilotPremium");
-    state =
-      quota.tiers.length > 0
-        ? {
-            kind: "rows",
-            rows: quota.tiers.map((tier) => ({
-              label,
-              line: tierLine(t, tier, label),
-            })),
-          }
-        : null;
-  } else if (quota) {
-    state = {
-      kind: "failed",
-      reason: quota.error || t("subscription.queryFailed"),
-    };
-  } else if (query.isError) {
-    state = {
-      kind: "failed",
-      reason: extractErrorMessage(query.error) || t("subscription.queryFailed"),
-    };
-  } else {
-    state = loading ? { kind: "loading" } : null;
-  }
-
-  return (
-    <AccountQuotaColumn
-      login={login}
-      state={state}
-      queriedAt={quota?.queriedAt ?? null}
-      loading={loading}
-      onRefresh={() => void query.refetch()}
-    />
-  );
-}
-
-/** xAI 账号的订阅额度（get_xai_oauth_quota(accountId)） */
-export function XaiAccountQuota({
-  accountId,
-  login,
-}: {
-  accountId: string;
-  login: string;
-}) {
-  const { t, i18n } = useTranslation();
-  const {
-    data: quota,
-    isFetching: loading,
-    refetch,
-  } = useXaiOauthQuotaByAccountId(accountId, {
-    enabled: true,
-    autoQuery: false,
-  });
-  return (
-    <AccountQuotaColumn
-      login={login}
-      state={subscriptionQuotaState(t, quota, loading, i18n.language)}
-      queriedAt={quota?.queriedAt ?? null}
-      loading={loading}
-      onRefresh={() => void refetch()}
-    />
-  );
 }

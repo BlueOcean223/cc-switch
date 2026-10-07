@@ -14,7 +14,7 @@ export interface RequestLog {
   appType: string;
   model: string;
   requestModel?: string;
-  /** 写入时实际用于计价的模型名；路由接管 + request 计价模式下可能与 model 不同 */
+  /** 写入时实际用于计价的模型名；旧版路由记下的行可能与 model 不同 */
   pricingModel?: string;
   costMultiplier: string;
   inputTokens: number;
@@ -199,18 +199,10 @@ export interface UsageRangeSelection {
 /**
  * App types surfaced as dashboard filter buttons.
  *
- * `claude-desktop` is intentionally NOT listed: the Desktop gateway's proxy
- * traffic is still recorded under its own `app_type` (preserving route-takeover
- * billing audit — the request detail panel shows the real value), but the
- * dashboard folds it into `claude` for display. It is the embedded Claude Code
- * runtime running inside the Desktop shell, and Desktop *chat* usage never
- * passes through this app at all, so a separate "Claude Desktop" bucket would
- * only ever show a partial number and mislead users into reading it as the
- * Desktop's full usage. The backend collapses `claude-desktop → claude` in
- * every dashboard query (see `folded_app_type_sql`).
- * `opencode` and `pi` have no proxy handler; their usage reaches this
- * dashboard through session importers. `openclaw` / `hermes` appear only as
- * managed apps elsewhere.
+ * Usage reaches this dashboard through session importers. Historical
+ * `claude-desktop` rows are folded into `claude` by the backend (see
+ * `folded_app_type_sql`). `openclaw` / `hermes` appear only as managed apps
+ * elsewhere.
  */
 export type AppType =
   | "claude"
@@ -234,7 +226,7 @@ export const KNOWN_APP_TYPES: ReadonlyArray<AppType> = [
 ];
 
 /**
- * App types whose proxy uses an OpenAI-style protocol. Two consequences:
+ * App types whose API uses an OpenAI-style protocol. Two consequences:
  *
  * 1. `inputTokens` already includes the cached portion (must subtract
  *    `cacheReadTokens` to get fresh-input semantics — see

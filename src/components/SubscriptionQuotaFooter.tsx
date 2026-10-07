@@ -52,8 +52,6 @@ export const TIER_I18N_KEYS: Record<string, string> = {
   monthly: "subscription.monthly",
   // Grok credit 额度的兜底窗口（重置距离可识别时归入 weekly_limit/monthly）
   credits: "subscription.credits",
-  // GitHub Copilot
-  premium: "subscription.copilotPremium",
 };
 
 /** 卡片上不显示的档（展开时仍列出） */

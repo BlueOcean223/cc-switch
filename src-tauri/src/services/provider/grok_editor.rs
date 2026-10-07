@@ -83,7 +83,7 @@ pub fn view(
     let pre = read_current(&file.path)?;
     let mut doc = parse(&file.path, pre.as_deref())?;
     let live_owner =
-        crate::mode::current::direct_provider(&state.db, &crate::app_config::AppType::GrokBuild)?;
+        crate::mode::current::provider(&state.db, &crate::app_config::AppType::GrokBuild)?;
     let retired = grok_direct::retired_tables(&DeviceStore::for_device(), live_owner.as_ref())?;
     GrokConfigPatch::direct(&projection, retired, PROXY_TOKEN_PLACEHOLDER)
         .apply_to(&file.path, &mut doc)?;

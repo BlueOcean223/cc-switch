@@ -46,9 +46,7 @@ export function ProviderEmptyState({
           {onImport && (
             <Button variant="neutral" size="regular" onClick={onImport}>
               <Download className="h-4 w-4" />
-              {appId === "claude-desktop"
-                ? t("provider.importFromClaude")
-                : t("provider.importCurrent")}
+              {t("provider.importCurrent")}
             </Button>
           )}
           {onCreate && (

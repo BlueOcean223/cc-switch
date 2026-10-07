@@ -113,7 +113,7 @@ interface ImportReport {
 
 /**
  * MCP 全局页（v7）：页头 + 应用矩阵 + 添加 / 编辑抽屉。
- * 以这里为准写进勾选的应用；不支持的应用（Claude Desktop、OpenClaw）没有列。
+ * 以这里为准写进勾选的应用；不支持的应用（OpenClaw）没有列。
  */
 const UnifiedMcpPanel: React.FC<UnifiedMcpPanelProps> = ({
   onInteractionBlockedChange,

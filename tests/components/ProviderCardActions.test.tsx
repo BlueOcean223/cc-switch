@@ -4,14 +4,17 @@ import { describe, expect, it, vi } from "vitest";
 import { ProviderCardActions } from "@/components/providers/ProviderCardActions";
 import type { CardPresentation } from "@/components/providers/presentation";
 
-async function openMenu(presentation: CardPresentation) {
+async function openMenu(
+  presentation: CardPresentation,
+  onDelete: () => void = vi.fn(),
+) {
   const user = userEvent.setup();
   render(
     <ProviderCardActions
       providerName="Kimi"
       presentation={presentation}
       onEdit={vi.fn()}
-      onDelete={vi.fn()}
+      onDelete={onDelete}
       onDuplicate={vi.fn()}
     />,
   );
@@ -21,52 +24,8 @@ async function openMenu(presentation: CardPresentation) {
   return { user, menu: await screen.findByRole("menu") };
 }
 
-describe("ProviderCardActions — mode items in the more menu", () => {
-  it("lists them first", async () => {
-    const onSelect = vi.fn();
-    const { user, menu } = await openMenu({
-      buttons: [],
-      chips: [],
-      menuItems: [
-        {
-          key: "setDefault",
-          label: "providerCard.action.setDefault",
-          onSelect,
-        },
-      ],
-    });
-
-    const items = within(menu).getAllByRole("menuitem");
-    expect(items[0]).toHaveTextContent("providerCard.action.setDefault");
-    expect(items[1]).toHaveTextContent("provider.duplicate");
-
-    await user.click(items[0]);
-    expect(onSelect).toHaveBeenCalledTimes(1);
-  });
-
-  it("keeps a disabled one listed with its reason", async () => {
-    const onSelect = vi.fn();
-    const { user, menu } = await openMenu({
-      buttons: [],
-      chips: [],
-      menuItems: [
-        {
-          key: "setDefault",
-          label: "providerCard.action.setDefault",
-          disabledReason: "providerCard.reason.defaultWhileRouting",
-          onSelect,
-        },
-      ],
-    });
-
-    const item = within(menu).getAllByRole("menuitem")[0];
-    expect(item).toHaveAttribute("aria-disabled", "true");
-    expect(item).toHaveTextContent("providerCard.reason.defaultWhileRouting");
-    await user.click(item);
-    expect(onSelect).not.toHaveBeenCalled();
-  });
-
-  it("shows only the usual items when the mode has none", async () => {
+describe("ProviderCardActions — the more menu", () => {
+  it("shows the usual items", async () => {
     const { menu } = await openMenu({ buttons: [], chips: [] });
 
     expect(
@@ -74,5 +33,23 @@ describe("ProviderCardActions — mode items in the more menu", () => {
         .getAllByRole("menuitem")
         .map((item) => item.textContent),
     ).toEqual(["provider.duplicate", "common.delete"]);
+  });
+
+  it("keeps delete listed with its reason when it is not allowed", async () => {
+    const onDelete = vi.fn();
+    const { user, menu } = await openMenu(
+      {
+        buttons: [],
+        chips: [],
+        deleteDisabledReason: "providerCard.reason.inUseCannotDelete",
+      },
+      onDelete,
+    );
+
+    const item = within(menu).getAllByRole("menuitem").at(-1)!;
+    expect(item).toHaveAttribute("aria-disabled", "true");
+    expect(item).toHaveTextContent("providerCard.reason.inUseCannotDelete");
+    await user.click(item);
+    expect(onDelete).not.toHaveBeenCalled();
   });
 });

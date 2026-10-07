@@ -49,7 +49,7 @@ export const usageApi = {
     });
   },
 
-  // Proxy usage statistics methods
+  // Usage statistics methods
   getUsageSummary: async (
     startDate?: number,
     endDate?: number,

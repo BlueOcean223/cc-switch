@@ -56,7 +56,6 @@ vi.mock("@/components/providers/forms/ProviderForm", () => ({
     onSubmit,
     onSubmitReadyChange,
     onManageAuthAccounts,
-    isProxyTakeover,
   }: {
     initialData: {
       name?: string;
@@ -78,7 +77,6 @@ vi.mock("@/components/providers/forms/ProviderForm", () => ({
     }) => void;
     onSubmitReadyChange?: (isReady: boolean) => void;
     onManageAuthAccounts?: (target: "codex_oauth") => void;
-    isProxyTakeover?: boolean;
     appId?: string;
   }) => {
     useEffect(() => {
@@ -115,9 +113,6 @@ vi.mock("@/components/providers/forms/ProviderForm", () => ({
       >
         <output data-testid="settings-config">
           {JSON.stringify(initialData.settingsConfig ?? {})}
-        </output>
-        <output data-testid="is-proxy-takeover">
-          {isProxyTakeover ? "true" : "false"}
         </output>
         <button
           type="button"
@@ -301,49 +296,6 @@ describe("EditProviderDialog", () => {
     fireEvent.click(screen.getByRole("button", { name: "common.save" }));
     await waitFor(() => expect(handleSubmit).toHaveBeenCalledTimes(1));
     expect(handleSubmit.mock.calls[0][0].editorSave).toBeUndefined();
-  });
-
-  it("代理模式下编辑 Codex 供应商也显示它自己的关键字段，不读 live 里的代理契约", async () => {
-    const provider: Provider = {
-      id: "deepseek",
-      name: "DeepSeek",
-      category: "custom",
-      settingsConfig: {
-        auth: {
-          OPENAI_API_KEY: "db-key",
-        },
-        config:
-          'model_provider = "custom"\n[model_providers.custom]\nbase_url = "https://api.deepseek.com/v1"\n',
-      },
-    };
-
-    render(
-      <EditProviderDialog
-        open
-        provider={provider}
-        onOpenChange={vi.fn()}
-        onSubmit={vi.fn()}
-        appId="codex"
-        isProxyTakeover
-      />,
-    );
-
-    await waitFor(() => {
-      expect(screen.getByTestId("is-proxy-takeover").textContent).toBe("true");
-    });
-
-    expect(apiMocks.getLiveProviderSettings).not.toHaveBeenCalled();
-    await waitFor(() => {
-      expect(
-        JSON.parse(screen.getByTestId("settings-config").textContent ?? "{}"),
-      ).toEqual(provider.settingsConfig);
-    });
-    expect(apiMocks.getEditorView).toHaveBeenCalledWith(
-      "codex",
-      provider.settingsConfig,
-      "custom",
-      provider.id,
-    );
   });
 
   it("clears the nested auth panel before the dialog reopens", async () => {

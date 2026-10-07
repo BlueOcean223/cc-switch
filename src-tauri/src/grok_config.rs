@@ -232,12 +232,6 @@ pub fn extract_base_url(config_toml: &str) -> Option<String> {
     Some(extract_model_config(config_toml)?.base_url)
 }
 
-pub fn has_proxy_placeholder(config_toml: &str, token_placeholder: &str) -> bool {
-    extract_model_config(config_toml)
-        .and_then(|config| config.api_key)
-        .is_some_and(|api_key| api_key == token_placeholder)
-}
-
 /// Remove MCP projections from a provider-owned Grok Build settings snapshot.
 /// MCP servers are owned by the database and projected into live config.toml.
 pub fn strip_grok_mcp_servers_from_settings(settings: &mut Value) -> Result<(), AppError> {

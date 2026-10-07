@@ -379,11 +379,7 @@ export const SessionReaderHeader = memo(function SessionReaderHeader({
           </button>
         </HoverTip>
       }
-      icon={
-        appId ? (
-          <AppGlyph app={appId} size={16} badgeClassName="bg-app" />
-        ) : undefined
-      }
+      icon={appId ? <AppGlyph app={appId} size={16} /> : undefined}
       title={<span title={title}>{title}</span>}
       titleExtra={
         <span className="sr-only">

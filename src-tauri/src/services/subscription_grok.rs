@@ -561,18 +561,14 @@ fn tier_name_for_reset(resets_at: Option<i64>, now_secs: i64) -> &'static str {
 /// 与 claude/codex/gemini 同一约定：瞬时传输失败返回 `Err`（前端 retry +
 /// 保留上次成功值），确定性失败返回 `Ok(success:false)`。
 ///
-/// 参数化 `tool_label` / `relogin_hint` 让该函数可被两个调用点共用（与
-/// `query_codex_quota` 的双调用点设计一致）：
-/// - `"grokbuild"` + "grok login"（Grok CLI 凭据路径）
-/// - `"xai_oauth"` + "re-login via cc-switch"（cc-switch 自管 xAI OAuth 路径，
-///   见 `commands::xai_oauth::get_xai_oauth_quota`；两者是同一个 OAuth client，
-///   token 对 grok.com 账单端点等效）
+/// `tool_label` / `relogin_hint` 写进返回的快照（Grok CLI 凭据路径传 `"grokbuild"` +
+/// "grok login"）。
 pub(crate) async fn query_grok_quota(
     access_token: &str,
     tool_label: &str,
     relogin_hint: &str,
 ) -> Result<SubscriptionQuota, String> {
-    let client = crate::proxy::http_client::get();
+    let client = crate::http_client::get();
 
     // 空 gRPC-web 帧：1 字节 flags + 4 字节大端长度 0
     let resp = client
@@ -989,10 +985,10 @@ mod tests {
         let determinate = grpc_status_failure(13, "internal", "grokbuild", RELOGIN_HINT)
             .expect("determinate is Ok");
         assert!(!determinate.success);
-        // tool_label 参数化：两条链路（CLI / cc-switch 自管 OAuth）标签正确落到快照
+        // tool_label 落到快照
         let auth =
-            grpc_status_failure(16, "", "xai_oauth", "re-login").expect("auth failure is Ok");
+            grpc_status_failure(16, "", "grokbuild", RELOGIN_HINT).expect("auth failure is Ok");
         assert!(matches!(auth.credential_status, CredentialStatus::Expired));
-        assert_eq!(auth.tool, "xai_oauth");
+        assert_eq!(auth.tool, "grokbuild");
     }
 }
