@@ -14,7 +14,7 @@
 <a href="https://trendshift.io/repositories/15372" target="_blank"><img src="https://trendshift.io/api/badge/repositories/15372" alt="farion1231%2Fcc-switch | Trendshift" style="width: 250px; height: 55px;" width="250" height="55"/></a>
 <a href="https://www.star-history.com/#farion1231/cc-switch&Date"><picture><source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/badge?repo=farion1231/cc-switch&theme=dark" /><img alt="Star History Rank" src="https://api.star-history.com/badge?repo=farion1231/cc-switch" width="196" height="55" /></picture></a>
 
-### 🌐 唯一の公式サイト：**[ccswitch.io](https://ccswitch.io)**
+このリポジトリは [farion1231/cc-switch](https://github.com/farion1231/cc-switch) の軽量版で、設定ファイルの管理だけを行います。上流の公式サイト ccswitch.io と Homebrew、AUR のパッケージは上流版です。
 
 [English](README.md) | [中文](README_ZH.md) | 日本語 | [Deutsch](README_DE.md) | [Changelog](CHANGELOG.md)
 
@@ -55,31 +55,9 @@ Claude Code、Codex、Gemini CLI などの AI コーディングツールは、�
 
 ### macOS ユーザー
 
-**方法 1: Homebrew でインストール（推奨）**
-
-```bash
-brew install --cask cc-switch
-```
-
-アップデート:
-
-```bash
-brew upgrade --cask cc-switch
-```
-
-**方法 2: 手動ダウンロード**
-
 [Releases](../../releases) から `CC-Switch-v{version}-macOS.dmg`（推奨）または `.zip` をダウンロード。Apple Silicon と Intel Mac の両方でネイティブに動作する Universal ビルドです。
 
-> **注意**: CC Switch の macOS 版は Apple によるコード署名と公証が完了しているため、そのままインストールして開けます。
-
-### Arch Linux ユーザー
-
-**paru でインストール（推奨）**
-
-```bash
-paru -S cc-switch-bin
-```
+> **注意**: macOS パッケージが Apple の公証を受けているかどうかは、各バージョンのリリースノートに記載されています。公証されていないバージョンは初回起動時にシステムにブロックされるので、ターミナルで `xattr -dr com.apple.quarantine "/Applications/CC Switch.app"` を実行してから開いてください。
 
 ### Linux ユーザー
 

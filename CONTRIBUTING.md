@@ -8,9 +8,9 @@ Thank you for your interest in contributing to CC Switch! Please read our [Code 
 
 There are many ways to contribute:
 
-- **Report bugs** — Found something broken? [Open a bug report](https://github.com/farion1231/cc-switch/issues/new?template=bug_report.yml).
-- **Suggest features** — Have an idea? [Submit a feature request](https://github.com/farion1231/cc-switch/issues/new?template=feature_request.yml).
-- **Improve docs** — Spot a typo or missing info? [Report a doc issue](https://github.com/farion1231/cc-switch/issues/new?template=doc_issue.yml).
+- **Report bugs** — Found something broken? [Open a bug report](https://github.com/BlueOcean223/cc-switch/issues/new?template=bug_report.yml).
+- **Suggest features** — Have an idea? [Submit a feature request](https://github.com/BlueOcean223/cc-switch/issues/new?template=feature_request.yml).
+- **Improve docs** — Spot a typo or missing info? [Report a doc issue](https://github.com/BlueOcean223/cc-switch/issues/new?template=doc_issue.yml).
 - **Contribute code** — Fix bugs or implement features via pull requests.
 - **Translate** — Help us improve translations for Simplified Chinese, Traditional Chinese, English, and Japanese.
 
@@ -78,6 +78,20 @@ pnpm tauri build -c '{"bundle":{"createUpdaterArtifacts":false}}'
 ```
 
 For a debug build, append `--debug` to the command above. This single-quote form works on macOS and Linux; on Windows, save `{"bundle":{"createUpdaterArtifacts":false}}` to a JSON file and pass it with `-c <file path>`.
+
+### Releasing
+
+1. Set the new version in `package.json`, `src-tauri/Cargo.toml` and `src-tauri/tauri.conf.json`, and refresh `src-tauri/Cargo.lock`. The in-app updater only offers a version higher than the installed one.
+2. Push a `v*` tag (for example `v4.0.1`). `.github/workflows/release.yml` builds every platform and publishes the GitHub Release as a prerelease.
+3. Check the build, then edit the release on GitHub and set it as the latest release. The in-app updater reads `latest.json` from the latest full release, so it does not see a prerelease.
+
+The workflow needs these repository secrets (Settings → Secrets and variables → Actions):
+
+| Secret | Required | Content |
+|---|---|---|
+| `TAURI_SIGNING_PRIVATE_KEY` | Yes | Content of the updater private key file. Its public key is `plugins.updater.pubkey` in `src-tauri/tauri.conf.json` |
+| `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | Yes, if the key has a password | The private key's password |
+| `APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`, `KEYCHAIN_PASSWORD`, `APPLE_ID`, `APPLE_PASSWORD`, `APPLE_TEAM_ID` | No | Apple Developer ID certificate and notarization account. Without `APPLE_CERTIFICATE`, the macOS build is ad-hoc signed and not notarized |
 
 ## Testing
 
@@ -244,8 +258,8 @@ The CC Switch UI supports four languages: Simplified Chinese, Traditional Chines
 
 ## Questions?
 
-- [Open a question](https://github.com/farion1231/cc-switch/issues/new?template=question.yml)
-- [GitHub Discussions](https://github.com/farion1231/cc-switch/discussions)
+- [Open a question](https://github.com/BlueOcean223/cc-switch/issues/new?template=question.yml)
+- [GitHub Discussions](https://github.com/BlueOcean223/cc-switch/discussions)
 
 ---
 
@@ -259,9 +273,9 @@ The CC Switch UI supports four languages: Simplified Chinese, Traditional Chines
 
 你可以通过多种方式参与贡献：
 
-- **报告 Bug** — 发现问题？[提交 Bug 报告](https://github.com/farion1231/cc-switch/issues/new?template=bug_report.yml)。
-- **建议功能** — 有想法？[提交功能请求](https://github.com/farion1231/cc-switch/issues/new?template=feature_request.yml)。
-- **改进文档** — 发现错误或缺失？[报告文档问题](https://github.com/farion1231/cc-switch/issues/new?template=doc_issue.yml)。
+- **报告 Bug** — 发现问题？[提交 Bug 报告](https://github.com/BlueOcean223/cc-switch/issues/new?template=bug_report.yml)。
+- **建议功能** — 有想法？[提交功能请求](https://github.com/BlueOcean223/cc-switch/issues/new?template=feature_request.yml)。
+- **改进文档** — 发现错误或缺失？[报告文档问题](https://github.com/BlueOcean223/cc-switch/issues/new?template=doc_issue.yml)。
 - **贡献代码** — 通过 Pull Request 修复 Bug 或实现新功能。
 - **翻译** — 帮助改进简体中文、繁体中文、英文和日文的翻译。
 
@@ -329,6 +343,20 @@ pnpm tauri build -c '{"bundle":{"createUpdaterArtifacts":false}}'
 ```
 
 需要调试版本时，在上面的命令后加 `--debug`。这种单引号写法适用于 macOS 和 Linux；在 Windows 上，可以把 `{"bundle":{"createUpdaterArtifacts":false}}` 存成一个 JSON 文件，再用 `-c <文件路径>` 传入。
+
+### 发布
+
+1. 把 `package.json`、`src-tauri/Cargo.toml` 和 `src-tauri/tauri.conf.json` 里的版本号改成新版本，并更新 `src-tauri/Cargo.lock`。应用内更新只会提示比已安装版本更高的版本。
+2. 推送 `v*` 标签（例如 `v4.0.1`）。`.github/workflows/release.yml` 会构建所有平台，并以预发布（prerelease）的形式发布 GitHub Release。
+3. 确认构建没有问题后，在 GitHub 上编辑这个 Release，把它设为最新版本（latest）。应用内更新读取的是最新正式版里的 `latest.json`，看不到预发布版本。
+
+工作流需要这些仓库 Secrets（Settings → Secrets and variables → Actions）：
+
+| Secret | 是否必需 | 内容 |
+|---|---|---|
+| `TAURI_SIGNING_PRIVATE_KEY` | 必需 | 更新签名私钥文件的内容。对应的公钥是 `src-tauri/tauri.conf.json` 里的 `plugins.updater.pubkey` |
+| `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | 私钥有密码时必需 | 私钥的密码 |
+| `APPLE_CERTIFICATE`、`APPLE_CERTIFICATE_PASSWORD`、`KEYCHAIN_PASSWORD`、`APPLE_ID`、`APPLE_PASSWORD`、`APPLE_TEAM_ID` | 可选 | Apple Developer ID 证书和公证账号。没有 `APPLE_CERTIFICATE` 时，macOS 包使用 ad-hoc 签名，不经过公证 |
 
 ## 测试
 
@@ -495,5 +523,5 @@ CC Switch 的界面支持简体中文、繁体中文、英文和日文四种语�
 
 ## 有疑问？
 
-- [提问](https://github.com/farion1231/cc-switch/issues/new?template=question.yml)
-- [GitHub 讨论区](https://github.com/farion1231/cc-switch/discussions)
+- [提问](https://github.com/BlueOcean223/cc-switch/issues/new?template=question.yml)
+- [GitHub 讨论区](https://github.com/BlueOcean223/cc-switch/discussions)

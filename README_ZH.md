@@ -14,7 +14,7 @@
 <a href="https://trendshift.io/repositories/15372" target="_blank"><img src="https://trendshift.io/api/badge/repositories/15372" alt="farion1231%2Fcc-switch | Trendshift" style="width: 250px; height: 55px;" width="250" height="55"/></a>
 <a href="https://www.star-history.com/#farion1231/cc-switch&Date"><picture><source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/badge?repo=farion1231/cc-switch&theme=dark" /><img alt="Star History Rank" src="https://api.star-history.com/badge?repo=farion1231/cc-switch" width="196" height="55" /></picture></a>
 
-### 🌐 唯一官方网站：**[ccswitch.io](https://ccswitch.io)**
+本仓库是 [farion1231/cc-switch](https://github.com/farion1231/cc-switch) 的精简版，只管理配置文件。上游官网 ccswitch.io 以及 Homebrew、AUR 上的安装包是上游版本。
 
 [English](README.md) | 中文 | [日本語](README_JA.md) | [Deutsch](README_DE.md) | [更新日志](CHANGELOG.md)
 
@@ -55,31 +55,9 @@ Claude Code、Codex、Gemini CLI 等 AI 编程工具各有各的配置格式。�
 
 ### macOS 用户
 
-**方式一：通过 Homebrew 安装（推荐）**
-
-```bash
-brew install --cask cc-switch
-```
-
-更新：
-
-```bash
-brew upgrade --cask cc-switch
-```
-
-**方式二：手动下载**
-
 从 [Releases](../../releases) 页面下载 `CC-Switch-v{版本号}-macOS.dmg`（推荐）或 `.zip`。这是 Universal 通用包，Apple Silicon 和 Intel Mac 均可原生运行。
 
-> **注意**：CC Switch macOS 版本已通过 Apple 代码签名和公证，可直接安装打开。
-
-### Arch Linux 用户
-
-**通过 paru 安装（推荐）**
-
-```bash
-paru -S cc-switch-bin
-```
+> **注意**：macOS 包是否经过 Apple 公证，每个版本的 Release 说明里会写明。没有公证的版本首次打开会被系统拦截，在终端运行 `xattr -dr com.apple.quarantine "/Applications/CC Switch.app"` 后即可打开。
 
 ### Linux 用户
 

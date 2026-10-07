@@ -113,5 +113,5 @@
 
 Feel free to submit Issues or PRs to improve the documentation:
 
-- [GitHub Issues](https://github.com/farion1231/cc-switch/issues)
-- [GitHub Repository](https://github.com/farion1231/cc-switch)
+- [GitHub Issues](https://github.com/BlueOcean223/cc-switch/issues)
+- [GitHub Repository](https://github.com/BlueOcean223/cc-switch)

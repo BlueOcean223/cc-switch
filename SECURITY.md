@@ -8,18 +8,14 @@ Only the latest release of CC Switch receives security updates.
 
 | Version / 版本 | Supported / 是否支持 |
 |----------------|---------------------|
-| Latest 3.x     | ✅ Yes / 是          |
-| < 3.0          | ❌ No / 否           |
+| Latest 4.x     | ✅ Yes / 是          |
+| < 4.0          | ❌ No / 否           |
 
 ## Threat Model / 威胁模型
 
 CC Switch is a local desktop application. It manages configuration files for AI coding CLIs on the user's own machine. There is no project-operated cloud backend, no multi-user model, and no privilege separation from the user who runs it.
 
 CC Switch 是一个本地桌面应用，用于管理本机上各 AI 编程 CLI 的配置文件。本项目不运营任何云端后端，没有多用户模型，也不与运行它的用户之间存在权限隔离。
-
-It does, however, run a **local HTTP proxy** whose listen address and port are user-configurable and **may be bound to a non-loopback interface**. Requests arriving at that listener are untrusted input and are in scope — see Scope below.
-
-但它会启动一个**本地 HTTP 代理**，其监听地址与端口可由用户配置，**可能绑定到非 loopback 接口**。抵达该监听端口的请求属于不可信输入，在范围内——见下方「范围」。
 
 ### The bundled renderer is inside the trust boundary / 打包的渲染进程属于信任边界之内
 
@@ -40,9 +36,9 @@ The bundled WebView renderer is treated as a trusted component. This is a **scop
 
 **它排除什么、不排除什么。** 不在范围内的是：抵达 IPC 接口的**唯一途径**为**从 DevTools 或本地改造过的前端直接调用**的报告。处于该位置的人已经控制了这台机器。
 
-**Still in scope:** any complete, demonstrable chain in which an *untrusted* source — a `ccswitch://` deep link, a remote sync payload, remote data, an inbound proxy request, or an XSS — reaches a high-privilege IPC command. The trust placed in the renderer covers the code we ship, not arbitrary values that flow through it.
+**Still in scope:** any complete, demonstrable chain in which an *untrusted* source — a `ccswitch://` deep link, a remote sync payload, remote data, or an XSS — reaches a high-privilege IPC command. The trust placed in the renderer covers the code we ship, not arbitrary values that flow through it.
 
-**仍在范围内**：任何完整、可演示的利用链，其中**不可信来源**——`ccswitch://` deeplink、远程同步载荷、远程数据、代理入站请求或 XSS——抵达高权限 IPC 命令。对渲染进程的信任覆盖的是我们发布的代码，而非流经其中的任意值。
+**仍在范围内**：任何完整、可演示的利用链，其中**不可信来源**——`ccswitch://` deeplink、远程同步载荷、远程数据或 XSS——抵达高权限 IPC 命令。对渲染进程的信任覆盖的是我们发布的代码，而非流经其中的任意值。
 
 ### Invalidation triggers / 声明失效条件
 
@@ -70,10 +66,8 @@ Inputs that genuinely cross a trust boundary:
 真正跨越信任边界的输入：
 
 - `ccswitch://` deep link payloads / deeplink 载荷（由第三方构造，经浏览器抵达）
-- **Inbound requests to the local HTTP proxy**, including from other hosts when it is configured to bind a non-loopback address / **抵达本地 HTTP 代理的入站请求**，包括配置为绑定非 loopback 地址时来自其他主机的请求
 - Remote sync payloads restored from WebDAV / S3 / 从 WebDAV、S3 还原的同步数据
 - Imported files: SQL import/export, provider and MCP config import / 导入文件：SQL 导入导出、供应商与 MCP 配置导入
-- Upstream API responses processed by the local proxy (`src-tauri/src/proxy/`) / 本地代理处理的上游 API 响应
 - Remote data rendered or acted upon by the renderer (model pricing, avatars) / 渲染进程展示或据以行动的远程数据（模型定价、头像）
 - Live config files on disk that a third party can write / 磁盘上可被第三方写入的 live 配置文件
 - Any path by which credentials (API keys, tokens) reach logs, telemetry, or shared config snippets / 凭据（API Key、令牌）进入日志、遥测或共享配置片段的任何路径
@@ -85,8 +79,8 @@ Inputs that genuinely cross a trust boundary:
   抵达 IPC 接口的唯一途径为从 DevTools 或本地改造过的前端直接调用的问题——见威胁模型
 - **Ordinary file operations the user directs.** Reading or writing a file whose path *and* content the user chose through the local UI, with no untrusted input participating.
   **用户主动指示的常规文件操作。** 读写路径**与**内容均由用户经本地界面选定、且无不可信输入参与的文件。
-  → Not excluded: cases where a deep link, sync payload, proxy request or other untrusted source controls the path or the content. Having the same filesystem permissions as the user does not make it the user's decision — that is a confused-deputy attack and is **in scope**.
-  → 不属豁免：路径或内容由 deeplink、同步载荷、代理请求等不可信来源控制的情形。攻击者与用户拥有相同的文件系统权限，并不等于该操作出自用户的决定——那是 confused deputy 攻击，**在范围内**。
+  → Not excluded: cases where a deep link, sync payload or other untrusted source controls the path or the content. Having the same filesystem permissions as the user does not make it the user's decision — that is a confused-deputy attack and is **in scope**.
+  → 不属豁免：路径或内容由 deeplink、同步载荷等不可信来源控制的情形。攻击者与用户拥有相同的文件系统权限，并不等于该操作出自用户的决定——那是 confused deputy 攻击，**在范围内**。
 - **User-authored integrations executing by design.** MCP servers, terminal launch and usage scripts run commands because that is their purpose. Where the user typed the command themselves and enabled it themselves, execution is the feature, not the bug.
   **用户亲手编写的集成按设计执行命令。** MCP server、终端启动、用量脚本执行命令是其本职。命令由用户自己输入、并由用户自己启用时，执行本身是功能而非缺陷。
   → Not excluded: the same integrations when they **arrive through import or a deep link**. There the required security property is *informed consent*, and the following are **in scope**: the command, arguments, environment or script body being hidden, truncated or misrepresented in the confirmation UI; and any integration carrying executable content being enabled without an explicit user decision.
@@ -104,9 +98,9 @@ Inputs that genuinely cross a trust boundary:
 
 **请不要通过公开的 GitHub Issue 报告安全漏洞。**
 
-Instead, please report them through [GitHub Security Advisories](https://github.com/farion1231/cc-switch/security/advisories/new).
+Instead, please report them through [GitHub Security Advisories](https://github.com/BlueOcean223/cc-switch/security/advisories/new).
 
-请通过 [GitHub 安全公告](https://github.com/farion1231/cc-switch/security/advisories/new) 进行报告。
+请通过 [GitHub 安全公告](https://github.com/BlueOcean223/cc-switch/security/advisories/new) 进行报告。
 
 When reporting, please include:
 
@@ -155,6 +149,6 @@ Severity is scored with CVSS (v3.1 or v4.0), and the vector will reflect any req
 
 ## Security Updates / 安全更新
 
-Security fixes are released as patch versions and announced via [GitHub Releases](https://github.com/farion1231/cc-switch/releases). We recommend always updating to the latest version.
+Security fixes are released as patch versions and announced via [GitHub Releases](https://github.com/BlueOcean223/cc-switch/releases). We recommend always updating to the latest version.
 
-安全修复通过补丁版本发布，并通过 [GitHub Releases](https://github.com/farion1231/cc-switch/releases) 通知。建议始终更新到最新版本。
+安全修复通过补丁版本发布，并通过 [GitHub Releases](https://github.com/BlueOcean223/cc-switch/releases) 通知。建议始终更新到最新版本。

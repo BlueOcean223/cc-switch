@@ -14,7 +14,7 @@
 <a href="https://trendshift.io/repositories/15372" target="_blank"><img src="https://trendshift.io/api/badge/repositories/15372" alt="farion1231%2Fcc-switch | Trendshift" style="width: 250px; height: 55px;" width="250" height="55"/></a>
 <a href="https://www.star-history.com/#farion1231/cc-switch&Date"><picture><source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/badge?repo=farion1231/cc-switch&theme=dark" /><img alt="Star History Rank" src="https://api.star-history.com/badge?repo=farion1231/cc-switch" width="196" height="55" /></picture></a>
 
-### 🌐 The Only Official Website: **[ccswitch.io](https://ccswitch.io)**
+This repository is a trimmed-down version of [farion1231/cc-switch](https://github.com/farion1231/cc-switch) that only manages config files. The upstream website ccswitch.io and the Homebrew and AUR packages ship the upstream version.
 
 English | [中文](README_ZH.md) | [日本語](README_JA.md) | [Deutsch](README_DE.md) | [Changelog](CHANGELOG.md)
 
@@ -55,31 +55,9 @@ Download the latest `CC-Switch-v{version}-Windows.msi` installer or `CC-Switch-v
 
 ### macOS Users
 
-**Method 1: Install via Homebrew (Recommended)**
-
-```bash
-brew install --cask cc-switch
-```
-
-Update:
-
-```bash
-brew upgrade --cask cc-switch
-```
-
-**Method 2: Manual Download**
-
 Download `CC-Switch-v{version}-macOS.dmg` (recommended) or `.zip` from the [Releases](../../releases) page. It's a Universal build that runs natively on both Apple Silicon and Intel Macs.
 
-> **Note**: CC Switch for macOS is code-signed and notarized by Apple. You can install and open it directly.
-
-### Arch Linux Users
-
-**Install via paru (Recommended)**
-
-```bash
-paru -S cc-switch-bin
-```
+> **Note**: The release notes of each version say whether the macOS package is notarized by Apple. macOS blocks a version that is not notarized the first time you open it; run `xattr -dr com.apple.quarantine "/Applications/CC Switch.app"` in Terminal and open it again.
 
 ### Linux Users
 

@@ -14,7 +14,7 @@
 <a href="https://trendshift.io/repositories/15372" target="_blank"><img src="https://trendshift.io/api/badge/repositories/15372" alt="farion1231%2Fcc-switch | Trendshift" style="width: 250px; height: 55px;" width="250" height="55"/></a>
 <a href="https://www.star-history.com/#farion1231/cc-switch&Date"><picture><source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/badge?repo=farion1231/cc-switch&theme=dark" /><img alt="Star History Rank" src="https://api.star-history.com/badge?repo=farion1231/cc-switch" width="196" height="55" /></picture></a>
 
-### 🌐 Die einzige offizielle Website: **[ccswitch.io](https://ccswitch.io)**
+Dieses Repository ist eine abgespeckte Version von [farion1231/cc-switch](https://github.com/farion1231/cc-switch), die nur Konfigurationsdateien verwaltet. Die Upstream-Website ccswitch.io sowie die Homebrew- und AUR-Pakete liefern die Upstream-Version.
 
 [English](README.md) | [中文](README_ZH.md) | [日本語](README_JA.md) | Deutsch | [Changelog](CHANGELOG.md)
 
@@ -55,31 +55,9 @@ Laden Sie das neueste Installationsprogramm `CC-Switch-v{version}-Windows.msi` o
 
 ### macOS-Nutzer
 
-**Methode 1: Installation über Homebrew (empfohlen)**
-
-```bash
-brew install --cask cc-switch
-```
-
-Aktualisieren:
-
-```bash
-brew upgrade --cask cc-switch
-```
-
-**Methode 2: Manueller Download**
-
 Laden Sie `CC-Switch-v{version}-macOS.dmg` (empfohlen) oder `.zip` von der Seite [Releases](../../releases) herunter. Es handelt sich um einen Universal-Build, der nativ auf Apple-Silicon- und Intel-Macs läuft.
 
-> **Hinweis**: CC Switch für macOS ist von Apple code-signiert und notarisiert. Sie können es direkt installieren und öffnen.
-
-### Arch-Linux-Nutzer
-
-**Installation über paru (empfohlen)**
-
-```bash
-paru -S cc-switch-bin
-```
+> **Hinweis**: Ob das macOS-Paket von Apple notarisiert ist, steht in den Release Notes der jeweiligen Version. Eine nicht notarisierte Version blockiert macOS beim ersten Öffnen; führen Sie im Terminal `xattr -dr com.apple.quarantine "/Applications/CC Switch.app"` aus und öffnen Sie die App erneut.
 
 ### Linux-Nutzer
 
