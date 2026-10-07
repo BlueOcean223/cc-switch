@@ -14,14 +14,16 @@ const PRESET_NAME = "Baidu Qianfan Token Plan";
 const OPENAI_BASE = "https://qianfan.baidubce.com/v2/tokenplan/personal";
 const ANTHROPIC_BASE =
   "https://qianfan.baidubce.com/anthropic/tokenplan/personal";
-// 阵容=Token Plan 主文档（2026-08-14 版）；ernie-5.1 官方标注 8/20 下线不收
+// 阵容=Token Plan 个人版文档（2026-09-30 版）
 const MODEL_IDS = [
   "deepseek-v4-pro",
-  "deepseek-v4-flash",
+  "deepseek-v4.1-flash",
+  "deepseek-v4-pro-0813",
   "deepseek-v4-flash-0731",
+  "glm-5.3",
+  "glm-5.3-flash",
   "glm-5.2",
   "glm-5.1",
-  "kimi-k2.6",
 ];
 
 describe("Baidu Qianfan Token Plan presets", () => {

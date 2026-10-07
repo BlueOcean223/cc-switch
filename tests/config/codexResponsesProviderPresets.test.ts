@@ -75,7 +75,7 @@ describe("Codex Responses provider presets", () => {
       ["BytePlus", { contextWindows: { "ark-code-latest": 256000 } }],
       [
         "Volcengine Doubao",
-        { contextWindows: { "doubao-seed-2-1-pro-260628": 262144 } },
+        { contextWindows: { "doubao-seed-2-1-pro-260915": 1048576 } },
       ],
       [
         "千问AI平台",
@@ -93,7 +93,6 @@ describe("Codex Responses provider presets", () => {
         {
           contextWindows: {
             hy3: 256000,
-            "hy3-preview": 256000,
             "hy4-preview": 960000,
           },
         },
@@ -122,8 +121,6 @@ describe("Codex Responses provider presets", () => {
         "Xiaomi MiMo",
         {
           contextWindows: {
-            "mimo-v2.5-pro": 1048576,
-            "mimo-v2.5": 1048576,
             "mimo-v2.6-pro": 1048576,
             "mimo-v2.6-flash": 1048576,
             "mimo-v2.6-pro-ultraspeed": 1048576,
@@ -134,8 +131,6 @@ describe("Codex Responses provider presets", () => {
         "Xiaomi MiMo Token Plan (China)",
         {
           contextWindows: {
-            "mimo-v2.5-pro": 1048576,
-            "mimo-v2.5": 1048576,
             "mimo-v2.6-pro": 1048576,
             "mimo-v2.6-flash": 1048576,
           },

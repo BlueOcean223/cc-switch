@@ -1,6 +1,6 @@
 import { parse as parseToml, stringify as stringifyToml } from "smol-toml";
 
-export const GROK_BUILD_DEFAULT_MODEL = "grok-4.5";
+export const GROK_BUILD_DEFAULT_MODEL = "grok-4.7";
 /** Grok Build 的 `api_backend` 取值，决定请求上游的哪个接口。 */
 export const GROK_BUILD_API_BACKENDS = [
   { value: "responses", label: "OpenAI Responses" },

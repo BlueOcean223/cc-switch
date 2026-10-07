@@ -238,7 +238,11 @@ export const hermesProviderPresets: HermesProviderPreset[] = [
       api_key: "",
       api_mode: "chat_completions",
       models: [
-        { id: "gpt-6-astra", name: "GPT-6 Astra", context_length: 1050000 },
+        {
+          id: "openai/gpt-6-astra",
+          name: "GPT-6 Astra",
+          context_length: 1050000,
+        },
         { id: "moonshotai/kimi-k3", name: "Kimi K3", context_length: 1048576 },
         { id: "z-ai/glm-5.3", name: "GLM-5.3", context_length: 1048576 },
         {
@@ -251,7 +255,7 @@ export const hermesProviderPresets: HermesProviderPreset[] = [
     category: "aggregator",
     icon: "qiniu",
     suggestedDefaults: {
-      model: { default: "gpt-6-astra", provider: "qiniu" },
+      model: { default: "openai/gpt-6-astra", provider: "qiniu" },
     },
   },
   {
@@ -379,7 +383,7 @@ export const hermesProviderPresets: HermesProviderPreset[] = [
       api_mode: "anthropic_messages",
       models: [
         {
-          id: "doubao-seed-2-1-pro-260628",
+          id: "doubao-seed-2-1-pro-260915",
           name: "Doubao Seed 2.1 Pro",
         },
       ],
@@ -389,7 +393,7 @@ export const hermesProviderPresets: HermesProviderPreset[] = [
     iconColor: "#3370FF",
     suggestedDefaults: {
       model: {
-        default: "doubao-seed-2-1-pro-260628",
+        default: "doubao-seed-2-1-pro-260915",
         provider: "doubao_seed",
       },
     },
@@ -406,9 +410,10 @@ export const hermesProviderPresets: HermesProviderPreset[] = [
       api_key: "",
       api_mode: "chat_completions",
       models: [
+        // MiniMax-M2.5 已于 2026-09-11 下线，国内站没有别的 MiniMax 模型
         {
-          id: "Pro/MiniMaxAI/MiniMax-M2.5",
-          name: "Pro / MiniMax M2.5",
+          id: "deepseek-ai/DeepSeek-V4-Flash",
+          name: "DeepSeek V4 Flash",
         },
       ],
     },
@@ -417,7 +422,7 @@ export const hermesProviderPresets: HermesProviderPreset[] = [
     iconColor: "#6E29F6",
     suggestedDefaults: {
       model: {
-        default: "Pro/MiniMaxAI/MiniMax-M2.5",
+        default: "deepseek-ai/DeepSeek-V4-Flash",
         provider: "siliconflow",
       },
     },
@@ -501,15 +506,15 @@ export const hermesProviderPresets: HermesProviderPreset[] = [
       api_mode: "chat_completions",
       models: [
         {
-          id: "zai-org/glm-5.1",
-          name: "GLM 5.1",
+          id: "zai-org/glm-5.2",
+          name: "GLM 5.2",
         },
       ],
     },
     category: "aggregator",
     icon: "atlascloud",
     suggestedDefaults: {
-      model: { default: "zai-org/glm-5.1", provider: "atlascloud" },
+      model: { default: "zai-org/glm-5.2", provider: "atlascloud" },
     },
   },
   {
@@ -524,13 +529,13 @@ export const hermesProviderPresets: HermesProviderPreset[] = [
       api_mode: "chat_completions",
       models: [
         {
-          id: "anthropic/claude-opus-5",
-          name: "Claude Opus 5",
+          id: "anthropic/claude-opus-5.5",
+          name: "Claude Opus 5.5",
           context_length: 1000000,
         },
         {
-          id: "anthropic/claude-sonnet-5",
-          name: "Claude Sonnet 5",
+          id: "anthropic/claude-sonnet-5.5",
+          name: "Claude Sonnet 5.5",
           context_length: 1000000,
         },
         {
@@ -542,16 +547,6 @@ export const hermesProviderPresets: HermesProviderPreset[] = [
           id: "openai/gpt-5.6-sol",
           name: "GPT-5.6 Sol",
           context_length: 400000,
-        },
-        {
-          id: "google/gemini-3.6-flash",
-          name: "Gemini 3.6 Flash",
-          context_length: 1000000,
-        },
-        {
-          id: "anthropic/claude-opus-5.5",
-          name: "Claude Opus 5.5",
-          context_length: 1000000,
         },
         {
           id: "anthropic/claude-fable-5.1",
@@ -574,7 +569,7 @@ export const hermesProviderPresets: HermesProviderPreset[] = [
     icon: "openrouter",
     iconColor: "#6366F1",
     suggestedDefaults: {
-      model: { default: "anthropic/claude-opus-5", provider: "openrouter" },
+      model: { default: "anthropic/claude-opus-5.5", provider: "openrouter" },
     },
   },
   {
@@ -617,21 +612,24 @@ export const hermesProviderPresets: HermesProviderPreset[] = [
       base_url: "https://api.together.xyz/v1",
       api_key: "",
       api_mode: "chat_completions",
+      // 原来的 Qwen3 Coder 480B、DeepSeek V3.2、Llama 4 Maverick 都已不在 Serverless
+      // 列表里；下面三个都支持函数调用
+      // https://docs.together.ai/docs/serverless-models (2026-10)
       models: [
         {
-          id: "Qwen/Qwen3-Coder-480B-A35B-Instruct",
-          name: "Qwen3 Coder 480B",
-          context_length: 262144,
+          id: "zai-org/GLM-5.3",
+          name: "GLM-5.3",
+          context_length: 1048575,
         },
         {
-          id: "deepseek-ai/DeepSeek-V3.2",
-          name: "DeepSeek V3.2",
-          context_length: 64000,
+          id: "moonshotai/Kimi-K3",
+          name: "Kimi K3",
+          context_length: 1048576,
         },
         {
-          id: "meta-llama/Llama-4-Maverick-17B-128E-Instruct-FP8",
-          name: "Llama 4 Maverick",
-          context_length: 131072,
+          id: "deepseek-ai/DeepSeek-V4.1-Flash",
+          name: "DeepSeek V4.1 Flash",
+          context_length: 1000000,
         },
       ],
     },
@@ -640,7 +638,7 @@ export const hermesProviderPresets: HermesProviderPreset[] = [
     iconColor: "#0F6FFF",
     suggestedDefaults: {
       model: {
-        default: "Qwen/Qwen3-Coder-480B-A35B-Instruct",
+        default: "zai-org/GLM-5.3",
         provider: "together",
       },
     },
@@ -654,17 +652,11 @@ export const hermesProviderPresets: HermesProviderPreset[] = [
       base_url: "https://inference-api.nousresearch.com/v1",
       api_key: "",
       api_mode: "chat_completions",
+      // Hermes 4 已退役（2026-10-07 请求返回 404 "This model has been retired"），
+      // Portal 现在用 OpenRouter 风格的 ID
       models: [
-        {
-          id: "Hermes-4-405B",
-          name: "Hermes 4 405B",
-          context_length: 131072,
-        },
-        {
-          id: "Hermes-4-70B",
-          name: "Hermes 4 70B",
-          context_length: 131072,
-        },
+        { id: "z-ai/glm-5.3", name: "GLM-5.3" },
+        { id: "deepseek/deepseek-v4-pro", name: "DeepSeek V4 Pro" },
       ],
     },
     isOfficial: true,
@@ -672,7 +664,7 @@ export const hermesProviderPresets: HermesProviderPreset[] = [
     icon: "hermes",
     iconColor: "#7C3AED",
     suggestedDefaults: {
-      model: { default: "Hermes-4-405B", provider: "nous" },
+      model: { default: "z-ai/glm-5.3", provider: "nous" },
     },
   },
 
@@ -749,11 +741,8 @@ export const hermesProviderPresets: HermesProviderPreset[] = [
         { id: "deepseek-v4-flash-202605", name: "DeepSeek V4 Flash" },
         { id: "deepseek-v4-pro-202606", name: "DeepSeek V4 Pro" },
         { id: "minimax-m2.7", name: "MiniMax M2.7" },
-        { id: "glm-5", name: "GLM-5" },
-        { id: "glm-5.1", name: "GLM-5.1" },
         { id: "glm-5.2", name: "GLM-5.2" },
         { id: "hy3", name: "Hy3" },
-        { id: "hy3-preview", name: "Hy3 Preview" },
       ],
     },
     category: "cn_official",
@@ -933,7 +922,8 @@ export const hermesProviderPresets: HermesProviderPreset[] = [
     // 千帆 Token Plan 个人版（2026-07-13 起替代 Coding Plan 发售）：官方
     // Hermes 接入页确认 /v2/tokenplan/personal、默认 deepseek-v4-pro（其
     // api_mode 写 "openai_messages"，本仓 OpenAI Chat 端点惯例统一映射为
-    // chat_completions）；阵容=Token Plan 主文档 2026-08-14 版六模型
+    // chat_completions）；阵容=Token Plan 个人版文档 2026-09-30 版
+    // （cloud.baidu.com/doc/qianfan/s/Dmrabu8b6）
     name: "Baidu Qianfan Token Plan",
     websiteUrl: "https://cloud.baidu.com/product/codingplan.html",
     apiKeyUrl: "https://console.bce.baidu.com/qianfan/resource/token-plan",
@@ -944,11 +934,13 @@ export const hermesProviderPresets: HermesProviderPreset[] = [
       api_mode: "chat_completions",
       models: [
         { id: "deepseek-v4-pro", name: "DeepSeek V4 Pro" },
-        { id: "deepseek-v4-flash", name: "DeepSeek V4 Flash" },
+        { id: "deepseek-v4.1-flash", name: "DeepSeek V4.1 Flash" },
+        { id: "deepseek-v4-pro-0813", name: "DeepSeek V4 Pro 0813" },
         { id: "deepseek-v4-flash-0731", name: "DeepSeek V4 Flash 0731" },
+        { id: "glm-5.3", name: "GLM-5.3" },
+        { id: "glm-5.3-flash", name: "GLM-5.3 Flash" },
         { id: "glm-5.2", name: "GLM-5.2" },
         { id: "glm-5.1", name: "GLM-5.1" },
-        { id: "kimi-k2.6", name: "Kimi K2.6" },
       ],
     },
     category: "cn_official",
@@ -991,9 +983,11 @@ export const hermesProviderPresets: HermesProviderPreset[] = [
       base_url: "https://coding.dashscope.aliyuncs.com/apps/anthropic",
       api_key: "",
       api_mode: "anthropic_messages",
+      // qwen3-coder-plus、qwen3-max 2026-10-10 下线；Coding Plan 只认精确版本
+      // https://help.aliyun.com/zh/model-studio/coding-plan (2026-09-11)
       models: [
-        { id: "qwen3-coder-plus", name: "Qwen3 Coder Plus" },
-        { id: "qwen3-max", name: "Qwen3 Max" },
+        { id: "qwen3.7-plus", name: "Qwen3.7 Plus", context_length: 1000000 },
+        { id: "qwen3.6-plus", name: "Qwen3.6 Plus", context_length: 1000000 },
       ],
     },
     category: "cn_official",
@@ -1001,7 +995,7 @@ export const hermesProviderPresets: HermesProviderPreset[] = [
     iconColor: "#624AFF",
     suggestedDefaults: {
       model: {
-        default: "qwen3-coder-plus",
+        default: "qwen3.7-plus",
         provider: "qianwenai_coding_plan",
       },
     },
@@ -1072,11 +1066,6 @@ export const hermesProviderPresets: HermesProviderPreset[] = [
       models: [
         { id: "qwen3.7-plus", name: "Qwen3.7 Plus", context_length: 1000000 },
         { id: "qwen3.6-plus", name: "Qwen3.6 Plus", context_length: 1000000 },
-        {
-          id: "qwen3-coder-plus",
-          name: "Qwen3 Coder Plus",
-          context_length: 131072,
-        },
       ],
     },
     category: "cn_official",
@@ -1141,7 +1130,7 @@ export const hermesProviderPresets: HermesProviderPreset[] = [
     icon: "stepfun",
     iconColor: "#005AFF",
     suggestedDefaults: {
-      model: { default: "step-3.5-flash", provider: "stepfun" },
+      model: { default: "step-5-preview", provider: "stepfun" },
     },
   },
   {
@@ -1167,27 +1156,17 @@ export const hermesProviderPresets: HermesProviderPreset[] = [
     apiKeyUrl: "https://console.streamlake.ai/console/api-key",
     settingsConfig: {
       name: "kat_coder",
+      // 官方接入指南：路径里的 Endpoint ID 换成模型 ID（2026-07-13）
       base_url:
-        "https://vanchin.streamlake.ai/api/gateway/v1/endpoints/${ENDPOINT_ID}/claude-code-proxy",
+        "https://vanchin.streamlake.ai/api/gateway/v1/endpoints/kat-coder-pro-v2.5/claude-code-proxy",
       api_key: "",
       api_mode: "anthropic_messages",
-      models: [
-        { id: "KAT-Coder-Pro V1", name: "KAT-Coder Pro V1" },
-        { id: "KAT-Coder-Air V1", name: "KAT-Coder Air V1" },
-      ],
+      models: [{ id: "kat-coder-pro-v2.5", name: "KAT-Coder Pro V2.5" }],
     },
     category: "cn_official",
-    templateValues: {
-      ENDPOINT_ID: {
-        label: "Vanchin Endpoint ID",
-        placeholder: "ep-xxx-xxx",
-        defaultValue: "",
-        editorValue: "",
-      },
-    },
     icon: "catcoder",
     suggestedDefaults: {
-      model: { default: "KAT-Coder-Pro V1", provider: "kat_coder" },
+      model: { default: "kat-coder-pro-v2.5", provider: "kat_coder" },
     },
   },
   {
@@ -1277,8 +1256,8 @@ export const hermesProviderPresets: HermesProviderPreset[] = [
       api_key: "",
       api_mode: "anthropic_messages",
       models: [
-        { id: "anthropic/claude-opus-5", name: "Claude Opus 5" },
-        { id: "anthropic/claude-sonnet-5", name: "Claude Sonnet 5" },
+        { id: "anthropic/claude-opus-5.5", name: "Claude Opus 5.5" },
+        { id: "anthropic/claude-sonnet-5.5", name: "Claude Sonnet 5.5" },
         {
           id: "anthropic/claude-fable-5.1",
           name: "Claude Fable 5.1",
@@ -1289,7 +1268,7 @@ export const hermesProviderPresets: HermesProviderPreset[] = [
     category: "aggregator",
     icon: "cherryin",
     suggestedDefaults: {
-      model: { default: "anthropic/claude-opus-5", provider: "cherryin" },
+      model: { default: "anthropic/claude-opus-5.5", provider: "cherryin" },
     },
   },
   {
@@ -1302,7 +1281,6 @@ export const hermesProviderPresets: HermesProviderPreset[] = [
       api_key: "",
       api_mode: "chat_completions",
       models: [
-        { id: "zai-org/glm-5.1", name: "Zai-Org / GLM-5.1" },
         { id: "zai-org/glm-5.3", name: "GLM-5.3", context_length: 1048576 },
         {
           id: "zai-org/glm-5.3-flash",
@@ -1316,7 +1294,7 @@ export const hermesProviderPresets: HermesProviderPreset[] = [
     icon: "novita",
     iconColor: "#000000",
     suggestedDefaults: {
-      model: { default: "zai-org/glm-5.1", provider: "novita" },
+      model: { default: "zai-org/glm-5.3", provider: "novita" },
     },
   },
   {
@@ -1372,7 +1350,6 @@ export const hermesProviderPresets: HermesProviderPreset[] = [
           name: "MiMo V2.6 Pro UltraSpeed",
           context_length: 1048576,
         },
-        { id: "mimo-v2.5-pro", name: "MiMo v2.5 Pro" },
       ],
     },
     category: "cn_official",
@@ -1400,8 +1377,6 @@ export const hermesProviderPresets: HermesProviderPreset[] = [
           name: "MiMo V2.6 Flash",
           context_length: 1048576,
         },
-        { id: "mimo-v2.5-pro", name: "MiMo v2.5 Pro" },
-        { id: "mimo-v2.5", name: "MiMo v2.5" },
       ],
     },
     category: "cn_official",

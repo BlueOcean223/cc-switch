@@ -80,10 +80,12 @@ export const providerPresets: ProviderPreset[] = [
       env: {
         ANTHROPIC_BASE_URL: "https://api.moonshot.cn/anthropic",
         ANTHROPIC_AUTH_TOKEN: "",
-        ANTHROPIC_MODEL: "kimi-k2.7-code",
+        // 官方 Claude Code 指南：主模型用 K3，Haiku 用 K2.7 Code
+        // https://platform.kimi.com/docs/guide/claude-code-kimi (2026-10)
+        ANTHROPIC_MODEL: "kimi-k3",
         ANTHROPIC_DEFAULT_HAIKU_MODEL: "kimi-k2.7-code",
-        ANTHROPIC_DEFAULT_SONNET_MODEL: "kimi-k2.7-code",
-        ANTHROPIC_DEFAULT_OPUS_MODEL: "kimi-k2.7-code",
+        ANTHROPIC_DEFAULT_SONNET_MODEL: "kimi-k3",
+        ANTHROPIC_DEFAULT_OPUS_MODEL: "kimi-k3",
       },
     },
     category: "cn_official",
@@ -101,10 +103,12 @@ export const providerPresets: ProviderPreset[] = [
       env: {
         ANTHROPIC_BASE_URL: "https://api.moonshot.ai/anthropic",
         ANTHROPIC_AUTH_TOKEN: "",
-        ANTHROPIC_MODEL: "kimi-k2.7-code",
+        // 官方 Claude Code 指南：主模型用 K3，Haiku 用 K2.7 Code
+        // https://platform.kimi.com/docs/guide/claude-code-kimi (2026-10)
+        ANTHROPIC_MODEL: "kimi-k3",
         ANTHROPIC_DEFAULT_HAIKU_MODEL: "kimi-k2.7-code",
-        ANTHROPIC_DEFAULT_SONNET_MODEL: "kimi-k2.7-code",
-        ANTHROPIC_DEFAULT_OPUS_MODEL: "kimi-k2.7-code",
+        ANTHROPIC_DEFAULT_SONNET_MODEL: "kimi-k3",
+        ANTHROPIC_DEFAULT_OPUS_MODEL: "kimi-k3",
       },
     },
     category: "cn_official",
@@ -266,10 +270,10 @@ export const providerPresets: ProviderPreset[] = [
       env: {
         ANTHROPIC_BASE_URL: "https://ark.cn-beijing.volces.com/api/compatible",
         ANTHROPIC_AUTH_TOKEN: "",
-        ANTHROPIC_MODEL: "doubao-seed-2-1-pro-260628",
-        ANTHROPIC_DEFAULT_SONNET_MODEL: "doubao-seed-2-1-pro-260628",
-        ANTHROPIC_DEFAULT_OPUS_MODEL: "doubao-seed-2-1-pro-260628",
-        ANTHROPIC_DEFAULT_HAIKU_MODEL: "doubao-seed-2-1-pro-260628",
+        ANTHROPIC_MODEL: "doubao-seed-2-1-pro-260915",
+        ANTHROPIC_DEFAULT_SONNET_MODEL: "doubao-seed-2-1-pro-260915",
+        ANTHROPIC_DEFAULT_OPUS_MODEL: "doubao-seed-2-1-pro-260915",
+        ANTHROPIC_DEFAULT_HAIKU_MODEL: "doubao-seed-2-1-pro-260915",
       },
     },
     category: "cn_official",
@@ -286,10 +290,12 @@ export const providerPresets: ProviderPreset[] = [
       env: {
         ANTHROPIC_BASE_URL: "https://api.siliconflow.cn",
         ANTHROPIC_AUTH_TOKEN: "",
-        ANTHROPIC_MODEL: "Pro/MiniMaxAI/MiniMax-M2.5",
-        ANTHROPIC_DEFAULT_HAIKU_MODEL: "Pro/MiniMaxAI/MiniMax-M2.5",
-        ANTHROPIC_DEFAULT_SONNET_MODEL: "Pro/MiniMaxAI/MiniMax-M2.5",
-        ANTHROPIC_DEFAULT_OPUS_MODEL: "Pro/MiniMaxAI/MiniMax-M2.5",
+        // MiniMax-M2.5 已于 2026-09-11 下线；换成 Anthropic 接口文档里的示例模型
+        // https://docs.siliconflow.cn/docs/api/messages-post
+        ANTHROPIC_MODEL: "deepseek-ai/DeepSeek-V4-Flash",
+        ANTHROPIC_DEFAULT_HAIKU_MODEL: "deepseek-ai/DeepSeek-V4-Flash",
+        ANTHROPIC_DEFAULT_SONNET_MODEL: "deepseek-ai/DeepSeek-V4-Flash",
+        ANTHROPIC_DEFAULT_OPUS_MODEL: "deepseek-ai/DeepSeek-V4-Flash",
       },
     },
     category: "aggregator",
@@ -360,10 +366,10 @@ export const providerPresets: ProviderPreset[] = [
       env: {
         ANTHROPIC_BASE_URL: "https://api.atlascloud.ai",
         ANTHROPIC_AUTH_TOKEN: "",
-        ANTHROPIC_MODEL: "zai-org/glm-5.1",
-        ANTHROPIC_DEFAULT_HAIKU_MODEL: "zai-org/glm-5.1",
-        ANTHROPIC_DEFAULT_SONNET_MODEL: "zai-org/glm-5.1",
-        ANTHROPIC_DEFAULT_OPUS_MODEL: "zai-org/glm-5.1",
+        ANTHROPIC_MODEL: "zai-org/glm-5.2",
+        ANTHROPIC_DEFAULT_HAIKU_MODEL: "zai-org/glm-5.2",
+        ANTHROPIC_DEFAULT_SONNET_MODEL: "zai-org/glm-5.2",
+        ANTHROPIC_DEFAULT_OPUS_MODEL: "zai-org/glm-5.2",
         CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS: "1",
       },
     },
@@ -855,10 +861,12 @@ export const providerPresets: ProviderPreset[] = [
       env: {
         ANTHROPIC_BASE_URL: "https://api.stepfun.com/step_plan",
         ANTHROPIC_AUTH_TOKEN: "",
-        ANTHROPIC_MODEL: "step-3.5-flash-2603",
+        // Step Plan 的 Claude Code 指南默认 step-5-preview
+        // https://platform.stepfun.com/docs/zh/step-plan/integrations/claude-code (2026-10)
+        ANTHROPIC_MODEL: "step-5-preview",
         ANTHROPIC_DEFAULT_HAIKU_MODEL: "step-3.5-flash-2603",
-        ANTHROPIC_DEFAULT_SONNET_MODEL: "step-3.5-flash-2603",
-        ANTHROPIC_DEFAULT_OPUS_MODEL: "step-3.5-flash-2603",
+        ANTHROPIC_DEFAULT_SONNET_MODEL: "step-5-preview",
+        ANTHROPIC_DEFAULT_OPUS_MODEL: "step-5-preview",
       },
     },
     category: "cn_official",
@@ -876,10 +884,12 @@ export const providerPresets: ProviderPreset[] = [
       env: {
         ANTHROPIC_BASE_URL: "https://api.stepfun.ai/step_plan",
         ANTHROPIC_AUTH_TOKEN: "",
-        ANTHROPIC_MODEL: "step-3.5-flash-2603",
+        // Step Plan 的 Claude Code 指南默认 step-5-preview
+        // https://platform.stepfun.com/docs/zh/step-plan/integrations/claude-code (2026-10)
+        ANTHROPIC_MODEL: "step-5-preview",
         ANTHROPIC_DEFAULT_HAIKU_MODEL: "step-3.5-flash-2603",
-        ANTHROPIC_DEFAULT_SONNET_MODEL: "step-3.5-flash-2603",
-        ANTHROPIC_DEFAULT_OPUS_MODEL: "step-3.5-flash-2603",
+        ANTHROPIC_DEFAULT_SONNET_MODEL: "step-5-preview",
+        ANTHROPIC_DEFAULT_OPUS_MODEL: "step-5-preview",
       },
     },
     category: "cn_official",
@@ -908,26 +918,21 @@ export const providerPresets: ProviderPreset[] = [
     name: "KAT-Coder",
     websiteUrl: "https://console.streamlake.ai",
     apiKeyUrl: "https://console.streamlake.ai/console/api-key",
+    // 官方接入指南（按量付费）：路径里原来的 Endpoint ID 换成模型 ID，
+    // 各档都用 kat-coder-pro-v2.5；Air V1 已退役
+    // https://www.streamlake.ai/document/DOC/mg6k6nlp8j6qxicx4c9 (2026-07-13)
     settingsConfig: {
       env: {
         ANTHROPIC_BASE_URL:
-          "https://vanchin.streamlake.ai/api/gateway/v1/endpoints/${ENDPOINT_ID}/claude-code-proxy",
+          "https://vanchin.streamlake.ai/api/gateway/v1/endpoints/kat-coder-pro-v2.5/claude-code-proxy",
         ANTHROPIC_AUTH_TOKEN: "",
-        ANTHROPIC_MODEL: "KAT-Coder-Pro V1",
-        ANTHROPIC_DEFAULT_HAIKU_MODEL: "KAT-Coder-Air V1",
-        ANTHROPIC_DEFAULT_SONNET_MODEL: "KAT-Coder-Pro V1",
-        ANTHROPIC_DEFAULT_OPUS_MODEL: "KAT-Coder-Pro V1",
+        ANTHROPIC_MODEL: "kat-coder-pro-v2.5",
+        ANTHROPIC_DEFAULT_HAIKU_MODEL: "kat-coder-pro-v2.5",
+        ANTHROPIC_DEFAULT_SONNET_MODEL: "kat-coder-pro-v2.5",
+        ANTHROPIC_DEFAULT_OPUS_MODEL: "kat-coder-pro-v2.5",
       },
     },
     category: "cn_official",
-    templateValues: {
-      ENDPOINT_ID: {
-        label: "Vanchin Endpoint ID",
-        placeholder: "ep-xxx-xxx",
-        defaultValue: "",
-        editorValue: "",
-      },
-    },
     icon: "catcoder",
   },
   {
@@ -1025,10 +1030,10 @@ export const providerPresets: ProviderPreset[] = [
       env: {
         ANTHROPIC_BASE_URL: "https://open.cherryin.net",
         ANTHROPIC_AUTH_TOKEN: "",
-        ANTHROPIC_MODEL: "anthropic/claude-sonnet-5",
+        ANTHROPIC_MODEL: "anthropic/claude-sonnet-5.5",
         ANTHROPIC_DEFAULT_HAIKU_MODEL: "anthropic/claude-haiku-4.5",
-        ANTHROPIC_DEFAULT_SONNET_MODEL: "anthropic/claude-sonnet-5",
-        ANTHROPIC_DEFAULT_OPUS_MODEL: "anthropic/claude-opus-5",
+        ANTHROPIC_DEFAULT_SONNET_MODEL: "anthropic/claude-sonnet-5.5",
+        ANTHROPIC_DEFAULT_OPUS_MODEL: "anthropic/claude-opus-5.5",
       },
     },
     category: "aggregator",
@@ -1043,10 +1048,10 @@ export const providerPresets: ProviderPreset[] = [
       env: {
         ANTHROPIC_BASE_URL: "https://openrouter.ai/api",
         ANTHROPIC_AUTH_TOKEN: "",
-        ANTHROPIC_MODEL: "anthropic/claude-sonnet-5",
+        ANTHROPIC_MODEL: "anthropic/claude-sonnet-5.5",
         ANTHROPIC_DEFAULT_HAIKU_MODEL: "anthropic/claude-haiku-4.5",
-        ANTHROPIC_DEFAULT_SONNET_MODEL: "anthropic/claude-sonnet-5",
-        ANTHROPIC_DEFAULT_OPUS_MODEL: "anthropic/claude-opus-5",
+        ANTHROPIC_DEFAULT_SONNET_MODEL: "anthropic/claude-sonnet-5.5",
+        ANTHROPIC_DEFAULT_OPUS_MODEL: "anthropic/claude-opus-5.5",
       },
     },
     category: "aggregator",
@@ -1061,10 +1066,10 @@ export const providerPresets: ProviderPreset[] = [
       env: {
         ANTHROPIC_BASE_URL: "https://api.novita.ai/anthropic",
         ANTHROPIC_AUTH_TOKEN: "",
-        ANTHROPIC_MODEL: "zai-org/glm-5.1",
-        ANTHROPIC_DEFAULT_HAIKU_MODEL: "zai-org/glm-5.1",
-        ANTHROPIC_DEFAULT_SONNET_MODEL: "zai-org/glm-5.1",
-        ANTHROPIC_DEFAULT_OPUS_MODEL: "zai-org/glm-5.1",
+        ANTHROPIC_MODEL: "zai-org/glm-5.3",
+        ANTHROPIC_DEFAULT_HAIKU_MODEL: "zai-org/glm-5.3",
+        ANTHROPIC_DEFAULT_SONNET_MODEL: "zai-org/glm-5.3",
+        ANTHROPIC_DEFAULT_OPUS_MODEL: "zai-org/glm-5.3",
       },
     },
     category: "aggregator",
@@ -1127,11 +1132,11 @@ export const providerPresets: ProviderPreset[] = [
         AWS_ACCESS_KEY_ID: "${AWS_ACCESS_KEY_ID}",
         AWS_SECRET_ACCESS_KEY: "${AWS_SECRET_ACCESS_KEY}",
         AWS_REGION: "${AWS_REGION}",
-        ANTHROPIC_MODEL: "global.anthropic.claude-opus-5",
+        ANTHROPIC_MODEL: "global.anthropic.claude-opus-5-5",
         ANTHROPIC_DEFAULT_HAIKU_MODEL:
           "global.anthropic.claude-haiku-4-5-20251001-v1:0",
-        ANTHROPIC_DEFAULT_SONNET_MODEL: "global.anthropic.claude-sonnet-5",
-        ANTHROPIC_DEFAULT_OPUS_MODEL: "global.anthropic.claude-opus-5",
+        ANTHROPIC_DEFAULT_SONNET_MODEL: "global.anthropic.claude-sonnet-5-5",
+        ANTHROPIC_DEFAULT_OPUS_MODEL: "global.anthropic.claude-opus-5-5",
         CLAUDE_CODE_USE_BEDROCK: "1",
       },
     },
@@ -1168,11 +1173,11 @@ export const providerPresets: ProviderPreset[] = [
         // Claude Code 只从这个变量读 Bedrock API Key，顶层 apiKey 它不认
         AWS_BEARER_TOKEN_BEDROCK: "",
         AWS_REGION: "${AWS_REGION}",
-        ANTHROPIC_MODEL: "global.anthropic.claude-opus-5",
+        ANTHROPIC_MODEL: "global.anthropic.claude-opus-5-5",
         ANTHROPIC_DEFAULT_HAIKU_MODEL:
           "global.anthropic.claude-haiku-4-5-20251001-v1:0",
-        ANTHROPIC_DEFAULT_SONNET_MODEL: "global.anthropic.claude-sonnet-5",
-        ANTHROPIC_DEFAULT_OPUS_MODEL: "global.anthropic.claude-opus-5",
+        ANTHROPIC_DEFAULT_SONNET_MODEL: "global.anthropic.claude-sonnet-5-5",
+        ANTHROPIC_DEFAULT_OPUS_MODEL: "global.anthropic.claude-opus-5-5",
         CLAUDE_CODE_USE_BEDROCK: "1",
       },
     },

@@ -22,9 +22,6 @@ describe("Xiaomi MiMo Token Plan presets", () => {
     expect(tokenPlan?.suggestedDefaults?.modelCatalog).toHaveProperty(
       "xiaomi-mimo-token-plan/mimo-v2.6-pro",
     );
-    expect(tokenPlan?.suggestedDefaults?.modelCatalog).toHaveProperty(
-      "xiaomi-mimo-token-plan/mimo-v2.5",
-    );
   });
 
   it("rebases OpenClaw defaults to the submitted provider key", () => {
@@ -41,7 +38,6 @@ describe("Xiaomi MiMo Token Plan presets", () => {
 
     expect(rebased.model?.primary).toBe("my-mimo-plan/mimo-v2.6-pro");
     expect(rebased.modelCatalog).toHaveProperty("my-mimo-plan/mimo-v2.6-pro");
-    expect(rebased.modelCatalog).toHaveProperty("my-mimo-plan/mimo-v2.5");
     expect(rebased.modelCatalog).not.toHaveProperty(
       "xiaomi-mimo-token-plan/mimo-v2.6-pro",
     );

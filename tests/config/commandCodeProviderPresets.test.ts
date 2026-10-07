@@ -17,7 +17,7 @@ describe("Command Code provider presets", () => {
     expect(preset?.modelCatalog?.map((model) => model.model)).toEqual([
       "deepseek/deepseek-v4.1-flash",
       "z-ai/glm-5.3-flash",
-      "Qwen/Qwen3.8-Flash",
+      "Qwen/Qwen3.8-Max",
     ]);
     expect(
       preset?.modelCatalog?.some((model) => model.model.includes("claude")),

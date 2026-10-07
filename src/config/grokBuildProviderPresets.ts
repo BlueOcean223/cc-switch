@@ -15,11 +15,12 @@
  * - 不含优云智算（Compshare）：Coding Plan 只有国产模型；按量的文档只列到
  *   旧的 grok-4 系列且只支持 Chat Completions，公开模型列表里没有 Grok
  *   （2026-10 核对）。
- * - OpenCode Go 上游自 2026-08 起已提供 grok-4.5，但暂仍不收录：
- *   订阅制网关是否纳入 Grok 预设属产品决策，收录前需单独评估。
- * - 只收聚合站与第三方中转站，默认模型统一为 grok-4.5；
- *   用 x-ai/ 命名空间的站点（OpenRouter、七牛）用 "x-ai/grok-4.5"，
- *   CherryIN 没有 4.5，用 "x-ai/grok-4.6"（2026-10 公开定价接口）。
+ * - OpenCode Go 上游自 2026-08 起已提供 Grok（2026-10 文档列 grok-4.7 / 4.6），
+ *   但暂仍不收录：订阅制网关是否纳入 Grok 预设属产品决策，收录前需单独评估。
+ * - 只收聚合站与第三方中转站，默认模型统一为 grok-4.7（xAI 模型页推荐，
+ *   编程也用它）；用 x-ai/ 命名空间的站点（OpenRouter、七牛 modelink）用
+ *   "x-ai/grok-4.7"（2026-10-07 两家模型列表），CherryIN 还没有 4.7，用
+ *   "x-ai/grok-4.6"（2026-10 公开定价接口）。
  *
  * config 字段沿用 Codex 风格 TOML 作为载体：Grok 表单只从中提取
  * base_url / model 两个字段（extractCodex* 工具），再重建
@@ -65,7 +66,7 @@ export const grokBuildOfficialPreset: GrokBuildProviderPreset = {
 };
 
 /** x-ai/ 命名空间站点的 Grok 模型 id */
-const OPENROUTER_STYLE_GROK_MODEL = "x-ai/grok-4.5";
+const OPENROUTER_STYLE_GROK_MODEL = "x-ai/grok-4.7";
 
 const grokAuth = (): Record<string, any> => ({ OPENAI_API_KEY: "" });
 
@@ -93,7 +94,7 @@ export const grokBuildProviderPresets: GrokBuildProviderPreset[] = [
     apiKeyUrl: "https://portal.qiniu.com/ai-inference/api-key",
     auth: grokAuth(),
     // bypass/openai 是 GPT 的 Responses 直通，没有 Grok。Grok 走通用网关的
-    // /v1/chat/completions；海外入口 modelink.ai 的模型列表有 x-ai/grok-4.5，
+    // /v1/chat/completions；海外入口 modelink.ai 的模型列表有 x-ai/grok-4.7，
     // 国内 api.qnaigc.com 是否提供 Grok 未证实。
     apiBackend: "chat_completions",
     config: grokPresetConfig(

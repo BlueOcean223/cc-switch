@@ -464,17 +464,18 @@ export const codexProviderPresets: CodexProviderPreset[] = [
     config: generateThirdPartyConfig(
       "doubaoseed",
       "https://ark.cn-beijing.volces.com/api/v3",
-      "doubao-seed-2-1-pro-260628",
+      "doubao-seed-2-1-pro-260915",
     ),
     endpointCandidates: ["https://ark.cn-beijing.volces.com/api/v3"],
     // 火山方舟主数据面 /api/v3 原生支持 Responses API（/api/v3/responses）
     // 无官方 catalog：合成 MiMo 式（shell_command 编辑、不发 freeform apply_patch），
     // 让 Codex 直连显示模型并避免 custom 工具被网关拒绝
     modelCatalog: modelCatalog([
+      // 260628 已移到往期模型；260915 上下文 1024k（方舟模型列表 82379/1330310，2026-09-28）
       {
-        model: "doubao-seed-2-1-pro-260628",
+        model: "doubao-seed-2-1-pro-260915",
         displayName: "Doubao Seed 2.1 Pro",
-        contextWindow: 262144,
+        contextWindow: 1048576,
         // 方舟深度思考文档（82379/1449737）7 值枚举中本模型无限制的通用四档；
         // none/xhigh 仅 glm-5-2、max 的 deepseek 名单标注 Responses 待支持。
         // minimal=方舟的"关闭思考直接回答"档；官方点名本模型服务端默认 high
@@ -529,7 +530,7 @@ export const codexProviderPresets: CodexProviderPreset[] = [
     isOfficial: true,
     auth: generateThirdPartyAuth(""),
     config: `model_provider = "custom"
-model = "gpt-5.6-sol"
+model = "gpt-6.1-sol"
 model_reasoning_effort = "high"
 
 [model_providers.custom]
@@ -990,14 +991,6 @@ requires_openai_auth = true`,
         reasoningLevels: ["none", "high"],
         defaultReasoningLevel: "high",
       },
-      {
-        model: "hy3-preview",
-        displayName: "Hy3 Preview",
-        contextWindow: 256000,
-        inputModalities: ["text"],
-        // 同 hy3：官方枚举 low/high（1823/130930 交错式思考模式文档）
-        reasoningLevels: ["low", "high"],
-      },
     ]),
     category: "cn_official",
     icon: "hunyuan",
@@ -1245,26 +1238,6 @@ requires_openai_auth = true`,
         reasoningLevels: ["none", "low", "medium", "high"],
         defaultReasoningLevel: "low",
       },
-      {
-        model: "mimo-v2.5-pro",
-        displayName: "MiMo V2.5 Pro",
-        contextWindow: 1048576,
-        inputModalities: ["text"],
-        supportsParallelToolCalls: false,
-        baseInstructions: MIMO_CODEX_BASE_INSTRUCTIONS,
-        reasoningLevels: ["none", "low", "medium", "high"],
-        defaultReasoningLevel: "low",
-      },
-      {
-        model: "mimo-v2.5",
-        displayName: "MiMo V2.5",
-        contextWindow: 1048576,
-        inputModalities: ["text", "image"],
-        supportsParallelToolCalls: false,
-        baseInstructions: MIMO_CODEX_BASE_INSTRUCTIONS,
-        reasoningLevels: ["none", "low", "medium", "high"],
-        defaultReasoningLevel: "low",
-      },
     ]),
     category: "cn_official",
     icon: "xiaomimimo",
@@ -1308,26 +1281,6 @@ requires_openai_auth = true`,
         reasoningLevels: ["none", "low", "medium", "high"],
         defaultReasoningLevel: "low",
       },
-      {
-        model: "mimo-v2.5-pro",
-        displayName: "MiMo V2.5 Pro",
-        contextWindow: 1048576,
-        inputModalities: ["text"],
-        supportsParallelToolCalls: false,
-        baseInstructions: MIMO_CODEX_BASE_INSTRUCTIONS,
-        reasoningLevels: ["none", "low", "medium", "high"],
-        defaultReasoningLevel: "low",
-      },
-      {
-        model: "mimo-v2.5",
-        displayName: "MiMo V2.5",
-        contextWindow: 1048576,
-        inputModalities: ["text", "image"],
-        supportsParallelToolCalls: false,
-        baseInstructions: MIMO_CODEX_BASE_INSTRUCTIONS,
-        reasoningLevels: ["none", "low", "medium", "high"],
-        defaultReasoningLevel: "low",
-      },
     ]),
     category: "cn_official",
     icon: "xiaomimimo",
@@ -1338,7 +1291,7 @@ requires_openai_auth = true`,
     websiteUrl: "https://x.ai/api",
     apiKeyUrl: "https://console.x.ai",
     auth: generateThirdPartyAuth(""),
-    config: generateThirdPartyConfig("xai", "https://api.x.ai/v1", "grok-4.5"),
+    config: generateThirdPartyConfig("xai", "https://api.x.ai/v1", "grok-4.7"),
     endpointCandidates: ["https://api.x.ai/v1"],
     // xAI 官方以 /v1/responses 为一等端点（docs.x.ai api-reference）：Codex 硬依赖的
     // store:false / include=["reasoning.encrypted_content"] / reasoning effort 均支持，
@@ -1401,7 +1354,7 @@ requires_openai_auth = true`,
     config: generateThirdPartyConfig(
       "cherryin",
       "https://open.cherryin.net/v1",
-      "openai/gpt-5.6-sol",
+      "openai/gpt-6.1-sol",
     ),
     endpointCandidates: ["https://open.cherryin.net/v1"],
     category: "aggregator",
@@ -1415,7 +1368,7 @@ requires_openai_auth = true`,
     config: generateThirdPartyConfig(
       "openrouter",
       "https://openrouter.ai/api/v1",
-      "gpt-5.6-sol",
+      "openai/gpt-6.1-sol",
     ),
     category: "aggregator",
     icon: "openrouter",
@@ -1446,9 +1399,10 @@ requires_openai_auth = true`,
         displayName: "GLM-5.3 Flash",
         contextWindow: 1048576,
       },
+      // Qwen3.8-Flash 只开放 /chat/completions，换成支持 /responses 的 Max
       {
-        model: "Qwen/Qwen3.8-Flash",
-        displayName: "Qwen 3.8 Flash",
+        model: "Qwen/Qwen3.8-Max",
+        displayName: "Qwen 3.8 Max",
         contextWindow: 1000000,
       },
     ]),

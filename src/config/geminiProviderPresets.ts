@@ -79,11 +79,11 @@ export const geminiProviderPresets: GeminiProviderPreset[] = [
       env: {
         GOOGLE_GEMINI_BASE_URL: "https://open.cherryin.net",
         GEMINI_API_KEY: "",
-        GEMINI_MODEL: "google/gemini-3.6-flash",
+        GEMINI_MODEL: "google/gemini-3.8-flash",
       },
     },
     baseURL: "https://open.cherryin.net",
-    model: "google/gemini-3.6-flash",
+    model: "google/gemini-3.8-flash",
     description: "CherryIN",
     category: "aggregator",
     endpointCandidates: ["https://open.cherryin.net"],
@@ -96,11 +96,11 @@ export const geminiProviderPresets: GeminiProviderPreset[] = [
     settingsConfig: {
       env: {
         GOOGLE_GEMINI_BASE_URL: "https://openrouter.ai/api",
-        GEMINI_MODEL: "gemini-3.6-flash",
+        GEMINI_MODEL: "gemini-3.8-flash",
       },
     },
     baseURL: "https://openrouter.ai/api",
-    model: "gemini-3.6-flash",
+    model: "gemini-3.8-flash",
     description: "OpenRouter",
     category: "aggregator",
     icon: "openrouter",

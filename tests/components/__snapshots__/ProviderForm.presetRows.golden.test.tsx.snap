@@ -19,9 +19,9 @@ exports[`ProviderForm 预设新增行金标 > claude > AWS Bedrock (API Key) 1`]
       "env": {
         "ANTHROPIC_BASE_URL": "https://bedrock-runtime.us-east-1.amazonaws.com",
         "ANTHROPIC_DEFAULT_HAIKU_MODEL": "global.anthropic.claude-haiku-4-5-20251001-v1:0",
-        "ANTHROPIC_DEFAULT_OPUS_MODEL": "global.anthropic.claude-opus-5",
-        "ANTHROPIC_DEFAULT_SONNET_MODEL": "global.anthropic.claude-sonnet-5",
-        "ANTHROPIC_MODEL": "global.anthropic.claude-opus-5",
+        "ANTHROPIC_DEFAULT_OPUS_MODEL": "global.anthropic.claude-opus-5-5",
+        "ANTHROPIC_DEFAULT_SONNET_MODEL": "global.anthropic.claude-sonnet-5-5",
+        "ANTHROPIC_MODEL": "global.anthropic.claude-opus-5-5",
         "AWS_BEARER_TOKEN_BEDROCK": "sk-golden-test",
         "AWS_REGION": "us-east-1",
         "CLAUDE_CODE_USE_BEDROCK": "1",
@@ -51,10 +51,10 @@ exports[`ProviderForm 预设新增行金标 > claude > AtlasCloud 1`] = `
       "env": {
         "ANTHROPIC_AUTH_TOKEN": "sk-golden-test",
         "ANTHROPIC_BASE_URL": "https://api.atlascloud.ai",
-        "ANTHROPIC_DEFAULT_HAIKU_MODEL": "zai-org/glm-5.1",
-        "ANTHROPIC_DEFAULT_OPUS_MODEL": "zai-org/glm-5.1",
-        "ANTHROPIC_DEFAULT_SONNET_MODEL": "zai-org/glm-5.1",
-        "ANTHROPIC_MODEL": "zai-org/glm-5.1",
+        "ANTHROPIC_DEFAULT_HAIKU_MODEL": "zai-org/glm-5.2",
+        "ANTHROPIC_DEFAULT_OPUS_MODEL": "zai-org/glm-5.2",
+        "ANTHROPIC_DEFAULT_SONNET_MODEL": "zai-org/glm-5.2",
+        "ANTHROPIC_MODEL": "zai-org/glm-5.2",
         "CLAUDE_CODE_AUTO_MODE_SERVER": "0",
         "CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS": "1",
       },
@@ -138,9 +138,9 @@ exports[`ProviderForm 预设新增行金标 > claude > OpenRouter 1`] = `
         "ANTHROPIC_AUTH_TOKEN": "sk-golden-test",
         "ANTHROPIC_BASE_URL": "https://openrouter.ai/api",
         "ANTHROPIC_DEFAULT_HAIKU_MODEL": "anthropic/claude-haiku-4.5",
-        "ANTHROPIC_DEFAULT_OPUS_MODEL": "anthropic/claude-opus-5",
-        "ANTHROPIC_DEFAULT_SONNET_MODEL": "anthropic/claude-sonnet-5",
-        "ANTHROPIC_MODEL": "anthropic/claude-sonnet-5",
+        "ANTHROPIC_DEFAULT_OPUS_MODEL": "anthropic/claude-opus-5.5",
+        "ANTHROPIC_DEFAULT_SONNET_MODEL": "anthropic/claude-sonnet-5.5",
+        "ANTHROPIC_MODEL": "anthropic/claude-sonnet-5.5",
         "CLAUDE_CODE_AUTO_MODE_SERVER": "0",
       },
     },
@@ -169,7 +169,7 @@ exports[`ProviderForm 预设新增行金标 > codex > CherryIN 1`] = `
         "OPENAI_API_KEY": "sk-golden-test",
       },
       "config": "model_provider = "custom"
-model = "openai/gpt-5.6-sol"
+model = "openai/gpt-6.1-sol"
 model_reasoning_effort = "high"
 
 [model_providers.custom]
@@ -225,7 +225,7 @@ exports[`ProviderForm 预设新增行金标 > codex > xAI (Grok) 1`] = `
         "OPENAI_API_KEY": "sk-golden-test",
       },
       "config": "model_provider = "custom"
-model = "grok-4.5"
+model = "grok-4.7"
 model_reasoning_effort = "high"
 
 [model_providers.custom]

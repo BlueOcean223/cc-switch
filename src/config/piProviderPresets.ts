@@ -253,7 +253,7 @@ const piProviderPresetDefinitions: PiProviderPreset[] = [
       api: "openai-completions",
       apiKey: "",
       models: [
-        piModel("openai/gpt-6-astra", { id: "gpt-6-astra" }),
+        piModel("openai/gpt-6-astra", { id: "openai/gpt-6-astra" }),
         piModel("moonshotai/kimi-k3", {
           id: "moonshotai/kimi-k3",
         }),
@@ -349,8 +349,11 @@ const piProviderPresetDefinitions: PiProviderPreset[] = [
       api: "openai-completions",
       apiKey: "",
       models: [
+        // 方舟模型列表：上下文 1024k，最大回答 256k（2026-09-28）
         piModel("volcengine/doubao-seed-2.1-pro", {
-          id: "doubao-seed-2-1-pro-260628",
+          id: "doubao-seed-2-1-pro-260915",
+          contextWindow: 1_048_576,
+          maxTokens: 262_144,
         }),
       ],
     },
@@ -369,9 +372,9 @@ const piProviderPresetDefinitions: PiProviderPreset[] = [
       api: "openai-completions",
       apiKey: "",
       models: [
-        piModel("zai/glm-5.1", {
-          id: "zai-org/glm-5.1",
-          name: "GLM 5.1",
+        piModel("zai/glm-5.2", {
+          id: "zai-org/glm-5.2",
+          name: "GLM 5.2",
         }),
       ],
     },
@@ -557,13 +560,7 @@ const piProviderPresetDefinitions: PiProviderPreset[] = [
       baseUrl: "https://coding-intl.dashscope.aliyuncs.com/apps/anthropic",
       api: "anthropic-messages",
       apiKey: "",
-      models: [
-        piModel("qwen/qwen3.7-plus", { id: "qwen3.7-plus" }),
-        piModel("qwen/qwen3-coder-plus", {
-          id: "qwen3-coder-plus",
-          contextWindow: 131_072,
-        }),
-      ],
+      models: [piModel("qwen/qwen3.7-plus", { id: "qwen3.7-plus" })],
     },
     category: "cn_official",
     icon: "qwencloud",
@@ -836,18 +833,6 @@ const piProviderPresetDefinitions: PiProviderPreset[] = [
       apiKey: "",
       models: [
         {
-          ...piModel("xiaomi/mimo-v2.5-pro", {
-            id: "mimo-v2.5-pro",
-          }),
-          compat: { ...XIAOMI_THINKING_COMPAT },
-        },
-        {
-          ...piModel("xiaomi/mimo-v2.5", {
-            id: "mimo-v2.5",
-          }),
-          compat: { ...XIAOMI_THINKING_COMPAT },
-        },
-        {
           ...piModel("xiaomi/mimo-v2.6-pro", { id: "mimo-v2.6-pro" }),
           compat: XIAOMI_THINKING_COMPAT,
         },
@@ -884,12 +869,6 @@ const piProviderPresetDefinitions: PiProviderPreset[] = [
       api: "openai-completions",
       apiKey: "",
       models: [
-        piModel("xiaomi/mimo-v2.5-pro", {
-          id: "mimo-v2.5-pro",
-        }),
-        piModel("xiaomi/mimo-v2.5", {
-          id: "mimo-v2.5",
-        }),
         {
           ...piModel("xiaomi/mimo-v2.6-pro", { id: "mimo-v2.6-pro" }),
           compat: XIAOMI_THINKING_COMPAT,
@@ -970,11 +949,11 @@ const piProviderPresetDefinitions: PiProviderPreset[] = [
       api: "anthropic-messages",
       apiKey: "",
       models: [
-        piModel("anthropic/claude-sonnet-5", {
-          id: "anthropic/claude-sonnet-5",
+        piModel("anthropic/claude-sonnet-5.5", {
+          id: "anthropic/claude-sonnet-5.5",
         }),
-        piModel("anthropic/claude-opus-5", {
-          id: "anthropic/claude-opus-5",
+        piModel("anthropic/claude-opus-5.5", {
+          id: "anthropic/claude-opus-5.5",
         }),
         piModel("anthropic/claude-fable-5.1", {
           id: "anthropic/claude-fable-5.1",
@@ -999,11 +978,8 @@ const piProviderPresetDefinitions: PiProviderPreset[] = [
       api: "anthropic-messages",
       apiKey: "",
       models: [
-        piModel("anthropic/claude-sonnet-5", {
-          id: "anthropic/claude-sonnet-5",
-        }),
-        piModel("anthropic/claude-opus-5", {
-          id: "anthropic/claude-opus-5",
+        piModel("anthropic/claude-sonnet-5.5", {
+          id: "anthropic/claude-sonnet-5.5",
         }),
         piModel("anthropic/claude-opus-5.5", {
           id: "anthropic/claude-opus-5.5",
@@ -1028,9 +1004,6 @@ const piProviderPresetDefinitions: PiProviderPreset[] = [
       api: "openai-completions",
       apiKey: "",
       models: [
-        piModel("zai/glm-5.1", {
-          id: "zai-org/glm-5.1",
-        }),
         piModel("zai/glm-5.3", { id: "zai-org/glm-5.3" }),
         piModel("zai/glm-5.3-flash", { id: "zai-org/glm-5.3-flash" }),
         piModel("moonshotai/kimi-k3", { id: "moonshotai/kimi-k3" }),
@@ -1076,13 +1049,14 @@ const piProviderPresetDefinitions: PiProviderPreset[] = [
       api: "bedrock-converse-stream",
       apiKey: "",
       models: [
-        piModel("anthropic/claude-opus-5", {
-          id: "global.anthropic.claude-opus-5",
-          thinkingProfile: "xhighAndMax",
+        // 5.5 不能关闭思考（Anthropic effort 文档，2026-10）
+        piModel("anthropic/claude-opus-5.5", {
+          id: "global.anthropic.claude-opus-5-5",
+          thinkingProfile: "offUnsupportedXhighAndMax",
         }),
-        piModel("anthropic/claude-sonnet-5", {
-          id: "global.anthropic.claude-sonnet-5",
-          thinkingProfile: "xhighAndMax",
+        piModel("anthropic/claude-sonnet-5.5", {
+          id: "global.anthropic.claude-sonnet-5-5",
+          thinkingProfile: "offUnsupportedXhighAndMax",
         }),
         piModel("anthropic/claude-haiku-4.5-20251001", {
           id: "global.anthropic.claude-haiku-4-5-20251001-v1:0",
@@ -1140,11 +1114,8 @@ const piProviderPresetDefinitions: PiProviderPreset[] = [
           compat: { ...TENCENT_DEEPSEEK_THINKING_COMPAT },
         },
         piModel("minimax/minimax-m2.7", { id: "minimax-m2.7" }),
-        piModel("zai/glm-5", { id: "glm-5" }),
-        piModel("zai/glm-5.1", { id: "glm-5.1" }),
         piModel("zai/glm-5.2", { id: "glm-5.2" }),
         piModel("tencent/hy3", { id: "hy3" }),
-        piModel("tencent/hy3-preview", { id: "hy3-preview" }),
       ],
     },
     category: "cn_official",
@@ -1612,7 +1583,7 @@ const piProviderPresetDefinitions: PiProviderPreset[] = [
         piModel("deepseek/deepseek-v4-pro", { id: "DeepSeek-V4-Pro" }),
         piModel("zai/glm-5.3", { id: "GLM-5.3" }),
         piModel("moonshotai/kimi-k2.7-code", { id: "Kimi-K2.7-Code" }),
-        piModel("qwen/qwen3-coder-plus", { id: "qwen3-coder-plus" }),
+        piModel("qwen/qwen3.8-max", { id: "qwen3.8-max" }),
       ],
     },
     category: "aggregator",

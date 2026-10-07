@@ -326,7 +326,7 @@ export const openclawProviderPresets: OpenClawProviderPreset[] = [
       api: "openai-completions",
       models: [
         {
-          id: "gpt-6-astra",
+          id: "openai/gpt-6-astra",
           name: "GPT-6 Astra",
           reasoning: true,
           input: ["text", "image"],
@@ -371,10 +371,10 @@ export const openclawProviderPresets: OpenClawProviderPreset[] = [
     },
     suggestedDefaults: {
       model: {
-        primary: "qiniu/gpt-6-astra",
+        primary: "qiniu/openai/gpt-6-astra",
       },
       modelCatalog: {
-        "qiniu/gpt-6-astra": { alias: "GPT-6 Astra" },
+        "qiniu/openai/gpt-6-astra": { alias: "GPT-6 Astra" },
       },
     },
   },
@@ -535,10 +535,9 @@ export const openclawProviderPresets: OpenClawProviderPreset[] = [
       api: "openai-completions",
       models: [
         {
-          id: "doubao-seed-2-1-pro-260628",
+          id: "doubao-seed-2-1-pro-260915",
           name: "DouBao Seed 2.1 Pro",
-          contextWindow: 262144,
-          cost: { input: 0.84, output: 4.2 },
+          contextWindow: 1048576,
         },
       ],
     },
@@ -553,9 +552,9 @@ export const openclawProviderPresets: OpenClawProviderPreset[] = [
       },
     },
     suggestedDefaults: {
-      model: { primary: "doubaoseed/doubao-seed-2-1-pro-260628" },
+      model: { primary: "doubaoseed/doubao-seed-2-1-pro-260915" },
       modelCatalog: {
-        "doubaoseed/doubao-seed-2-1-pro-260628": { alias: "DouBao" },
+        "doubaoseed/doubao-seed-2-1-pro-260915": { alias: "DouBao" },
       },
     },
   },
@@ -570,11 +569,10 @@ export const openclawProviderPresets: OpenClawProviderPreset[] = [
       apiKey: "",
       api: "openai-completions",
       models: [
+        // MiniMax-M2.5 已于 2026-09-11 下线，国内站没有别的 MiniMax 模型
         {
-          id: "Pro/MiniMaxAI/MiniMax-M2.5",
-          name: "MiniMax M2.5",
-          contextWindow: 196608,
-          cost: { input: 0.3, output: 1.2, cacheRead: 0.06, cacheWrite: 0.375 },
+          id: "deepseek-ai/DeepSeek-V4-Flash",
+          name: "DeepSeek V4 Flash",
         },
       ],
     },
@@ -589,9 +587,9 @@ export const openclawProviderPresets: OpenClawProviderPreset[] = [
       },
     },
     suggestedDefaults: {
-      model: { primary: "siliconflow/Pro/MiniMaxAI/MiniMax-M2.5" },
+      model: { primary: "siliconflow/deepseek-ai/DeepSeek-V4-Flash" },
       modelCatalog: {
-        "siliconflow/Pro/MiniMaxAI/MiniMax-M2.5": { alias: "MiniMax" },
+        "siliconflow/deepseek-ai/DeepSeek-V4-Flash": { alias: "DeepSeek" },
       },
     },
   },
@@ -719,8 +717,8 @@ export const openclawProviderPresets: OpenClawProviderPreset[] = [
       api: "openai-completions",
       models: [
         {
-          id: "zai-org/glm-5.1",
-          name: "GLM 5.1",
+          id: "zai-org/glm-5.2",
+          name: "GLM 5.2",
         },
       ],
     },
@@ -735,7 +733,7 @@ export const openclawProviderPresets: OpenClawProviderPreset[] = [
     },
     suggestedDefaults: {
       model: {
-        primary: "atlascloud/zai-org/glm-5.1",
+        primary: "atlascloud/zai-org/glm-5.2",
       },
     },
   },
@@ -941,25 +939,7 @@ export const openclawProviderPresets: OpenClawProviderPreset[] = [
           contextWindow: 200000,
           maxTokens: 131072,
         },
-        {
-          id: "glm-5",
-          name: "GLM-5",
-          reasoning: false,
-          input: ["text"],
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-          contextWindow: 202752,
-          maxTokens: 16384,
-        },
-        // 接入页未列：maxTokens 按平台列表（128k）；reasoning 同族接入页口径
-        {
-          id: "glm-5.1",
-          name: "GLM-5.1",
-          reasoning: false,
-          input: ["text"],
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-          contextWindow: 200000,
-          maxTokens: 131072,
-        },
+        // glm-5、glm-5.1 2026-10-09 下线（Token Plan 个人版文档 1823/130060）
         // 接入页未列：maxTokens 按平台列表（128k，与企业版接入页 131072 一致）
         {
           id: "glm-5.2",
@@ -970,8 +950,8 @@ export const openclawProviderPresets: OpenClawProviderPreset[] = [
           contextWindow: 1048576,
           maxTokens: 131072,
         },
-        // 接入页未列：hy3 与 hy3-preview 同模型（preview 调用自动路由至
-        // hy3），reasoning/口径随接入页 hy3-preview；maxTokens 按平台列表
+        // 接入页未列：hy3-preview 已下线、调用自动路由至 hy3，reasoning/口径
+        // 沿用原 hy3-preview 接入页；maxTokens 按平台列表
         {
           id: "hy3",
           name: "Hy3",
@@ -979,15 +959,6 @@ export const openclawProviderPresets: OpenClawProviderPreset[] = [
           input: ["text"],
           cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
           contextWindow: 256000,
-          maxTokens: 131072,
-        },
-        {
-          id: "hy3-preview",
-          name: "Hy3 Preview",
-          reasoning: true,
-          input: ["text"],
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-          contextWindow: 262144,
           maxTokens: 131072,
         },
       ],
@@ -1803,13 +1774,6 @@ export const openclawProviderPresets: OpenClawProviderPreset[] = [
           contextWindow: 1000000,
           maxTokens: 65536,
         },
-        {
-          id: "qwen3-coder-plus",
-          name: "Qwen3 Coder Plus",
-          input: ["text"],
-          contextWindow: 131072,
-          maxTokens: 65536,
-        },
       ],
     },
     category: "cn_official",
@@ -1835,7 +1799,6 @@ export const openclawProviderPresets: OpenClawProviderPreset[] = [
       modelCatalog: {
         "qwencloud-coding/qwen3.7-plus": { alias: "Qwen3.7 Plus" },
         "qwencloud-coding/qwen3.6-plus": { alias: "Qwen3.6 Plus" },
-        "qwencloud-coding/qwen3-coder-plus": { alias: "Qwen3 Coder Plus" },
       },
     },
   },
@@ -1966,9 +1929,9 @@ export const openclawProviderPresets: OpenClawProviderPreset[] = [
       },
     },
     suggestedDefaults: {
-      model: { primary: "stepfun/step-3.5-flash-2603" },
+      model: { primary: "stepfun/step-5-preview" },
       modelCatalog: {
-        "stepfun/step-3.5-flash-2603": { alias: "StepFun" },
+        "stepfun/step-5-preview": { alias: "StepFun" },
         "stepfun/step-3.5-flash": { alias: "StepFun Flash" },
       },
     },
@@ -2036,9 +1999,9 @@ export const openclawProviderPresets: OpenClawProviderPreset[] = [
       },
     },
     suggestedDefaults: {
-      model: { primary: "stepfun-en/step-3.5-flash-2603" },
+      model: { primary: "stepfun-en/step-5-preview" },
       modelCatalog: {
-        "stepfun-en/step-3.5-flash-2603": { alias: "StepFun" },
+        "stepfun-en/step-5-preview": { alias: "StepFun" },
         "stepfun-en/step-3.5-flash": { alias: "StepFun Flash" },
       },
     },
@@ -2256,20 +2219,6 @@ export const openclawProviderPresets: OpenClawProviderPreset[] = [
       api: "openai-completions",
       models: [
         {
-          id: "mimo-v2.5-pro",
-          name: "MiMo V2.5 Pro",
-          reasoning: true,
-          input: ["text"],
-          contextWindow: 1048576,
-          maxTokens: 131072,
-          cost: {
-            input: 0.435,
-            output: 0.87,
-            cacheRead: 0.0036,
-            cacheWrite: 0,
-          },
-        },
-        {
           id: "mimo-v2.6-pro",
           name: "MiMo V2.6 Pro",
           reasoning: true,
@@ -2325,22 +2274,6 @@ export const openclawProviderPresets: OpenClawProviderPreset[] = [
       api: "openai-completions",
       models: [
         {
-          id: "mimo-v2.5-pro",
-          name: "MiMo V2.5 Pro",
-          reasoning: true,
-          input: ["text"],
-          contextWindow: 1048576,
-          maxTokens: 131072,
-        },
-        {
-          id: "mimo-v2.5",
-          name: "MiMo V2.5",
-          reasoning: true,
-          input: ["text", "image"],
-          contextWindow: 1048576,
-          maxTokens: 131072,
-        },
-        {
           id: "mimo-v2.6-pro",
           name: "MiMo V2.6 Pro",
           reasoning: true,
@@ -2376,9 +2309,6 @@ export const openclawProviderPresets: OpenClawProviderPreset[] = [
         "xiaomi-mimo-token-plan/mimo-v2.6-pro": {
           alias: "MiMo Token Plan (China)",
         },
-        "xiaomi-mimo-token-plan/mimo-v2.5": {
-          alias: "MiMo Token Plan (China) Multimodal",
-        },
       },
     },
   },
@@ -2393,13 +2323,13 @@ export const openclawProviderPresets: OpenClawProviderPreset[] = [
       api: "anthropic-messages",
       models: [
         {
-          id: "anthropic/claude-opus-5",
-          name: "Claude Opus 5",
+          id: "anthropic/claude-opus-5.5",
+          name: "Claude Opus 5.5",
           contextWindow: 1000000,
         },
         {
-          id: "anthropic/claude-sonnet-5",
-          name: "Claude Sonnet 5",
+          id: "anthropic/claude-sonnet-5.5",
+          name: "Claude Sonnet 5.5",
           contextWindow: 1000000,
         },
         {
@@ -2424,12 +2354,12 @@ export const openclawProviderPresets: OpenClawProviderPreset[] = [
     },
     suggestedDefaults: {
       model: {
-        primary: "cherryin/anthropic/claude-opus-5",
-        fallbacks: ["cherryin/anthropic/claude-sonnet-5"],
+        primary: "cherryin/anthropic/claude-opus-5.5",
+        fallbacks: ["cherryin/anthropic/claude-sonnet-5.5"],
       },
       modelCatalog: {
-        "cherryin/anthropic/claude-opus-5": { alias: "Opus" },
-        "cherryin/anthropic/claude-sonnet-5": { alias: "Sonnet" },
+        "cherryin/anthropic/claude-opus-5.5": { alias: "Opus" },
+        "cherryin/anthropic/claude-sonnet-5.5": { alias: "Sonnet" },
       },
     },
   },
@@ -2443,14 +2373,8 @@ export const openclawProviderPresets: OpenClawProviderPreset[] = [
       api: "openai-completions",
       models: [
         {
-          id: "anthropic/claude-opus-5",
-          name: "Claude Opus 5",
-          contextWindow: 1000000,
-          cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
-        },
-        {
-          id: "anthropic/claude-sonnet-5",
-          name: "Claude Sonnet 5",
+          id: "anthropic/claude-sonnet-5.5",
+          name: "Claude Sonnet 5.5",
           contextWindow: 1000000,
           cost: {
             input: 2,
@@ -2496,12 +2420,12 @@ export const openclawProviderPresets: OpenClawProviderPreset[] = [
     },
     suggestedDefaults: {
       model: {
-        primary: "openrouter/anthropic/claude-opus-5",
-        fallbacks: ["openrouter/anthropic/claude-sonnet-5"],
+        primary: "openrouter/anthropic/claude-opus-5.5",
+        fallbacks: ["openrouter/anthropic/claude-sonnet-5.5"],
       },
       modelCatalog: {
-        "openrouter/anthropic/claude-opus-5": { alias: "Opus" },
-        "openrouter/anthropic/claude-sonnet-5": { alias: "Sonnet" },
+        "openrouter/anthropic/claude-opus-5.5": { alias: "Opus" },
+        "openrouter/anthropic/claude-sonnet-5.5": { alias: "Sonnet" },
       },
     },
   },
@@ -2553,12 +2477,6 @@ export const openclawProviderPresets: OpenClawProviderPreset[] = [
       api: "openai-completions",
       models: [
         {
-          id: "zai-org/glm-5.1",
-          name: "GLM-5.1",
-          contextWindow: 202800,
-          cost: { input: 1.38, output: 4.4, cacheRead: 0.26, cacheWrite: 0 },
-        },
-        {
           id: "zai-org/glm-5.3",
           name: "GLM-5.3",
           reasoning: true,
@@ -2598,9 +2516,9 @@ export const openclawProviderPresets: OpenClawProviderPreset[] = [
       },
     },
     suggestedDefaults: {
-      model: { primary: "novita/zai-org/glm-5.1" },
+      model: { primary: "novita/zai-org/glm-5.3" },
       modelCatalog: {
-        "novita/zai-org/glm-5.1": { alias: "GLM-5.1" },
+        "novita/zai-org/glm-5.3": { alias: "GLM-5.3" },
       },
     },
   },
@@ -2662,24 +2580,26 @@ export const openclawProviderPresets: OpenClawProviderPreset[] = [
       baseUrl: "https://bedrock-runtime.us-west-2.amazonaws.com",
       apiKey: "",
       api: "bedrock-converse-stream",
+      // global 跨区推理配置：Opus / Sonnet 在 us-west-2 不支持区内调用，
+      // Haiku 4.5 不接受不带前缀的 ID（AWS 各模型卡，2026-10）
       models: [
         {
-          id: "anthropic.claude-opus-5",
-          name: "Claude Opus 5",
+          id: "global.anthropic.claude-opus-5-5",
+          name: "Claude Opus 5.5",
           contextWindow: 1000000,
-          cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
+          cost: { input: 4, output: 20, cacheRead: 0.2, cacheWrite: 5 },
         },
         {
-          id: "anthropic.claude-sonnet-5",
-          name: "Claude Sonnet 5",
+          id: "global.anthropic.claude-sonnet-5-5",
+          name: "Claude Sonnet 5.5",
           contextWindow: 1000000,
-          cost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 },
+          cost: { input: 2, output: 10, cacheRead: 0.2, cacheWrite: 2.5 },
         },
         {
-          id: "anthropic.claude-haiku-4-5-20251022-v1:0",
+          id: "global.anthropic.claude-haiku-4-5-20251001-v1:0",
           name: "Claude Haiku 4.5",
           contextWindow: 200000,
-          cost: { input: 0.8, output: 4, cacheRead: 0.08, cacheWrite: 1 },
+          cost: { input: 1, output: 5, cacheRead: 0.1, cacheWrite: 1.25 },
         },
       ],
     },
@@ -2725,11 +2645,14 @@ export const openclawProviderPresets: OpenClawProviderPreset[] = [
           contextWindow: 262144,
           maxTokens: 262144,
         },
+        // qwen3-coder-plus 2026-10-10 下线（阿里云公告 118344）
         {
-          id: "qwen3-coder-plus",
-          name: "Qwen3 Coder Plus",
-          contextWindow: 1000000,
-          maxTokens: 65536,
+          id: "qwen3.8-max",
+          name: "Qwen3.8 Max",
+          reasoning: true,
+          input: ["text", "image"],
+          contextWindow: 983616,
+          maxTokens: 131072,
         },
       ],
     },

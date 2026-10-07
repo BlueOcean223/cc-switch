@@ -40,12 +40,11 @@ describe("Codex preset pre-filled reasoning levels", () => {
     // 方舟深度思考文档：本模型无限制的通用四档（minimal=关思考直接回答）
     [
       "Volcengine Doubao",
-      "doubao-seed-2-1-pro-260628",
+      "doubao-seed-2-1-pro-260915",
       ["minimal", "low", "medium", "high"],
     ],
     // 混元官方枚举 low/high；hy3 开源 chat template 对其他值直接 raise
     ["Tencent Hunyuan", "hy3", ["low", "high"]],
-    ["Tencent Hunyuan", "hy3-preview", ["low", "high"]],
     ["Tencent Hunyuan", "hy4-preview", ["none", "high"], "high"],
     // LongCat 无档位可调：全站唯一 effort 证据=官方示例的 high
     ["Longcat", "LongCat-2.0", ["high"]],
@@ -58,17 +57,22 @@ describe("Codex preset pre-filled reasoning levels", () => {
     // MiniMax 官方 catalog=none/high；MiMo 2026-09-23 官方目录为四档、默认 low。
     ["MiniMax", "MiniMax-M3", ["none", "high"]],
     ["MiniMax en", "MiniMax-M3", ["none", "high"]],
-    ["Xiaomi MiMo", "mimo-v2.5-pro", ["none", "low", "medium", "high"], "low"],
-    ["Xiaomi MiMo", "mimo-v2.5", ["none", "low", "medium", "high"], "low"],
+    ["Xiaomi MiMo", "mimo-v2.6-pro", ["none", "low", "medium", "high"], "low"],
     [
-      "Xiaomi MiMo Token Plan (China)",
-      "mimo-v2.5-pro",
+      "Xiaomi MiMo",
+      "mimo-v2.6-flash",
       ["none", "low", "medium", "high"],
       "low",
     ],
     [
       "Xiaomi MiMo Token Plan (China)",
-      "mimo-v2.5",
+      "mimo-v2.6-pro",
+      ["none", "low", "medium", "high"],
+      "low",
+    ],
+    [
+      "Xiaomi MiMo Token Plan (China)",
+      "mimo-v2.6-flash",
       ["none", "low", "medium", "high"],
       "low",
     ],

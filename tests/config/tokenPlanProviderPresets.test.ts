@@ -54,17 +54,15 @@ const products = [
     model: "tc-code-latest",
     // 通用 + Hy 两系列合并（1823/130060，2026-08-21 版）+ /models 实测；
     // minimax-m2.5 官方已除名且平台计划下线，2026-09-07 从全部 app 移除；
-    // kimi-k2.5 官方标注 2026-08-31 下线不收
+    // kimi-k2.5 官方标注 2026-08-31 下线不收；glm-5、glm-5.1 2026-10-09 下线，
+    // hy3-preview 已自动路由到 hy3，2026-10-07 移除
     catalogModels: [
       "tc-code-latest",
       "deepseek-v4-flash-202605",
       "deepseek-v4-pro-202606",
       "minimax-m2.7",
-      "glm-5",
-      "glm-5.1",
       "glm-5.2",
       "hy3",
-      "hy3-preview",
     ],
   },
   {
@@ -362,8 +360,8 @@ describe("Tencent Token Plan provider presets", () => {
 
   const opencodeModels = (name: string) =>
     Object.keys(
-      opencodeProviderPresets.find((item) => item.name === name)
-        ?.settingsConfig.models ?? {},
+      opencodeProviderPresets.find((item) => item.name === name)?.settingsConfig
+        .models ?? {},
     );
 
   it("keeps enterprise pro and lite separated", () => {

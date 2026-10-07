@@ -88,8 +88,8 @@ describe("Pi thinking profiles", () => {
         }),
         expect.objectContaining({
           preset: "AWS Bedrock",
-          modelId: "global.anthropic.claude-opus-5",
-          profileId: "xhighAndMax",
+          modelId: "global.anthropic.claude-opus-5-5",
+          profileId: "offUnsupportedXhighAndMax",
         }),
       ]),
     );

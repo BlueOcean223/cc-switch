@@ -139,7 +139,7 @@ describe("Pi provider presets", () => {
       });
     }
 
-    for (const id of ["mimo-v2.5-pro", "mimo-v2.5"]) {
+    for (const id of ["mimo-v2.6-pro", "mimo-v2.6-flash"]) {
       expect(model("Xiaomi MiMo", id).compat).toEqual({
         requiresReasoningContentOnAssistantMessages: true,
         thinkingFormat: "deepseek",
