@@ -36,6 +36,15 @@ export const piModelCatalog = {
       maxTokens: 128_000,
     },
   },
+  "anthropic/claude-haiku-5.5": {
+    capabilities: {
+      name: "Claude Haiku 5.5",
+      reasoning: true,
+      input: ["text", "image"],
+      contextWindow: 1_000_000,
+      maxTokens: 128_000,
+    },
+  },
   "anthropic/claude-haiku-4.5": {
     capabilities: {
       name: "Claude Haiku 4.5 (latest)",

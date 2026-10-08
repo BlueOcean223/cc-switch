@@ -42,7 +42,7 @@ export interface UniversalProviderPreset {
 const NEWAPI_DEFAULT_MODELS: UniversalProviderModels = {
   claude: {
     model: "claude-sonnet-5-5",
-    haikuModel: "claude-haiku-4-5-20251001",
+    haikuModel: "claude-haiku-5-5",
     sonnetModel: "claude-sonnet-5-5",
     opusModel: "claude-opus-5-5",
   },

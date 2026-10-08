@@ -28,9 +28,10 @@ const GPT_5_6_SOL_IDS: &[&str] = &[
     "gpt-5.6-minimal",
 ];
 
-/// 来源：OpenAI 社区公告 "20% price reduction for GPT 5.6 Sol"
-/// （community.openai.com/t/1391726），附 2026-07-30 和 2026-08-21 两次调价的新旧价格表。
+/// 每次调价的来源写在条目上。
 const PRICE_CHANGES: &[PriceChange] = &[
+    // GPT-5.6 的两次调价，来源：OpenAI 社区公告 "20% price reduction for GPT 5.6 Sol"
+    // （community.openai.com/t/1391726），附 2026-07-30 和 2026-08-21 两次调价的新旧价格表。
     // 2026-07-30：Terra 降 20%，Luna 降 80%
     PriceChange {
         model_ids: &["gpt-5.6-terra"],
@@ -47,6 +48,13 @@ const PRICE_CHANGES: &[PriceChange] = &[
         model_ids: GPT_5_6_SOL_IDS,
         until: 1_787_295_600,
         prices: ["5", "30", "0.50", "6.25"],
+    },
+    // 2026-10-07：Claude Sonnet 5.5 缓存读从 $0.20 降到 $0.10（输入价的 0.1x 改为 0.05x），
+    // 其他价格不变。来源：Anthropic API 发布说明（platform.claude.com/docs/en/release-notes/overview）
+    PriceChange {
+        model_ids: &["claude-sonnet-5-5"],
+        until: 1_791_356_400,
+        prices: ["2", "10", "0.20", "2.50"],
     },
 ];
 

@@ -2372,7 +2372,7 @@ export const openclawProviderPresets: OpenClawProviderPreset[] = [
           cost: {
             input: 2,
             output: 10,
-            cacheRead: 0.2,
+            cacheRead: 0.1,
             cacheWrite: 2.5,
           },
         },
@@ -2573,8 +2573,7 @@ export const openclawProviderPresets: OpenClawProviderPreset[] = [
       baseUrl: "https://bedrock-runtime.us-west-2.amazonaws.com",
       apiKey: "",
       api: "bedrock-converse-stream",
-      // global 跨区推理配置：Opus / Sonnet 在 us-west-2 不支持区内调用，
-      // Haiku 4.5 不接受不带前缀的 ID（AWS 各模型卡，2026-10）
+      // global 跨区推理配置：这三个模型在 us-west-2 都不支持区内调用（AWS 各模型卡，2026-10）
       models: [
         {
           id: "global.anthropic.claude-opus-5-5",
@@ -2586,13 +2585,14 @@ export const openclawProviderPresets: OpenClawProviderPreset[] = [
           id: "global.anthropic.claude-sonnet-5-5",
           name: "Claude Sonnet 5.5",
           contextWindow: 1000000,
-          cost: { input: 2, output: 10, cacheRead: 0.2, cacheWrite: 2.5 },
+          cost: { input: 2, output: 10, cacheRead: 0.1, cacheWrite: 2.5 },
         },
         {
-          id: "global.anthropic.claude-haiku-4-5-20251001-v1:0",
-          name: "Claude Haiku 4.5",
-          contextWindow: 200000,
-          cost: { input: 1, output: 5, cacheRead: 0.1, cacheWrite: 1.25 },
+          id: "global.anthropic.claude-haiku-5-5",
+          name: "Claude Haiku 5.5",
+          contextWindow: 1000000,
+          // 提示不超过 100K 的价格；超过 100K 各项 ×5，这里的 cost 只能写一档
+          cost: { input: 0.1, output: 0.5, cacheRead: 0.01, cacheWrite: 0.125 },
         },
       ],
     },

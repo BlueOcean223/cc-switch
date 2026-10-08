@@ -176,10 +176,10 @@ export const OPENCODE_PRESET_MODEL_VARIANTS: Record<
       modalities: { input: ["text", "image", "pdf"], output: ["text"] },
     },
     {
-      id: "global.anthropic.claude-haiku-4-5-20251001-v1:0",
-      name: "Claude Haiku 4.5",
-      contextLimit: 200000,
-      outputLimit: 64000,
+      id: "global.anthropic.claude-haiku-5-5",
+      name: "Claude Haiku 5.5",
+      contextLimit: 1000000,
+      outputLimit: 128000,
       modalities: { input: ["text", "image", "pdf"], output: ["text"] },
     },
     {
@@ -258,6 +258,19 @@ export const OPENCODE_PRESET_MODEL_VARIANTS: Record<
     {
       id: "claude-opus-5",
       name: "Claude Opus 5",
+      contextLimit: 1000000,
+      outputLimit: 128000,
+      modalities: { input: ["text", "image", "pdf"], output: ["text"] },
+      variants: {
+        low: { effort: "low" },
+        medium: { effort: "medium" },
+        high: { effort: "high" },
+        max: { effort: "max" },
+      },
+    },
+    {
+      id: "claude-haiku-5-5",
+      name: "Claude Haiku 5.5",
       contextLimit: 1000000,
       outputLimit: 128000,
       modalities: { input: ["text", "image", "pdf"], output: ["text"] },
@@ -2063,8 +2076,8 @@ export const opencodeProviderPresets: OpenCodeProviderPreset[] = [
           name: "Claude Sonnet 5.5",
           reasoning: true,
         },
-        "global.anthropic.claude-haiku-4-5-20251001-v1:0": {
-          name: "Claude Haiku 4.5",
+        "global.anthropic.claude-haiku-5-5": {
+          name: "Claude Haiku 5.5",
           reasoning: true,
         },
         "us.amazon.nova-pro-v1:0": { name: "Amazon Nova Pro" },

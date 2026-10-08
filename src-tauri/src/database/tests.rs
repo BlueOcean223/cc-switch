@@ -970,6 +970,65 @@ fn model_pricing_seed_includes_claude_opus_5_5() {
 }
 
 #[test]
+fn model_pricing_seed_includes_claude_haiku_5_5_and_sonnet_5_5() {
+    let db = Database::memory().expect("create memory db");
+    let conn = db.conn.lock().expect("lock conn");
+    let prices = |model_id: &str| -> (String, String, String, String, String, String) {
+        conn.query_row(
+            "SELECT input_cost_per_million, output_cost_per_million,
+                    cache_read_cost_per_million, cache_creation_cost_per_million,
+                    long_context_tiers, priority_multiplier
+             FROM model_pricing WHERE model_id = ?1",
+            [model_id],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                ))
+            },
+        )
+        .expect("query price")
+    };
+
+    // 2026-10-07 起缓存读 0.05x = $0.10（之前和 Sonnet 5 一样是 $0.20）
+    let (input, output, cache_read, cache_creation, _, _) = prices("claude-sonnet-5-5");
+    assert_eq!(
+        (input, output, cache_read, cache_creation),
+        (
+            "2".to_string(),
+            "10".to_string(),
+            "0.10".to_string(),
+            "2.50".to_string()
+        )
+    );
+
+    // 提示不超过 100K 的价格；超过 100K 整次请求各项 ×5
+    let (input, output, cache_read, cache_creation, tiers, priority) = prices("claude-haiku-5-5");
+    assert_eq!(
+        (input, output, cache_read, cache_creation),
+        (
+            "0.10".to_string(),
+            "0.50".to_string(),
+            "0.01".to_string(),
+            "0.125".to_string()
+        )
+    );
+    assert_eq!(
+        crate::services::model_pricing::long_context_tiers_from_json("claude-haiku-5-5", &tiers),
+        vec![crate::services::model_pricing::LongContextTier {
+            threshold_tokens: 100_000,
+            input_multiplier: "5".to_string(),
+            output_multiplier: "5".to_string(),
+        }]
+    );
+    assert_eq!(priority, "1");
+}
+
+#[test]
 fn model_pricing_seed_includes_gpt_6_astra() {
     let db = Database::memory().expect("create memory db");
     let conn = db.conn.lock().expect("lock conn");

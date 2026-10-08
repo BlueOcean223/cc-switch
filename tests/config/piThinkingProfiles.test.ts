@@ -91,6 +91,13 @@ describe("Pi thinking profiles", () => {
           modelId: "global.anthropic.claude-opus-5-5",
           profileId: "offUnsupportedXhighAndMax",
         }),
+        // Haiku 5.5 在 high 及以下可以关闭思考
+        expect.objectContaining({
+          preset: "AWS Bedrock",
+          modelId: "global.anthropic.claude-haiku-5-5",
+          profileId: "xhighAndMax",
+          map: { xhigh: "xhigh", max: "max" },
+        }),
       ]),
     );
   });

@@ -541,9 +541,9 @@ export const hermesProviderPresets: HermesProviderPreset[] = [
           context_length: 1000000,
         },
         {
-          id: "anthropic/claude-haiku-4.5",
-          name: "Claude Haiku 4.5",
-          context_length: 200000,
+          id: "anthropic/claude-haiku-5.5",
+          name: "Claude Haiku 5.5",
+          context_length: 1000000,
         },
         {
           id: "openai/gpt-5.6-sol",

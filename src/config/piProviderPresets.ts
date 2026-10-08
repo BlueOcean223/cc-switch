@@ -1048,7 +1048,8 @@ const piProviderPresetDefinitions: PiProviderPreset[] = [
       api: "bedrock-converse-stream",
       apiKey: "",
       models: [
-        // 5.5 不能关闭思考（Anthropic effort 文档，2026-10）
+        // Opus / Sonnet 5.5 不能关闭思考；Haiku 5.5 在 high 及以下可以关闭，xhigh 和 max
+        // 不行，和 Opus 5 相同（Anthropic effort 文档，2026-10）
         piModel("anthropic/claude-opus-5.5", {
           id: "global.anthropic.claude-opus-5-5",
           thinkingProfile: "offUnsupportedXhighAndMax",
@@ -1057,8 +1058,9 @@ const piProviderPresetDefinitions: PiProviderPreset[] = [
           id: "global.anthropic.claude-sonnet-5-5",
           thinkingProfile: "offUnsupportedXhighAndMax",
         }),
-        piModel("anthropic/claude-haiku-4.5-20251001", {
-          id: "global.anthropic.claude-haiku-4-5-20251001-v1:0",
+        piModel("anthropic/claude-haiku-5.5", {
+          id: "global.anthropic.claude-haiku-5-5",
+          thinkingProfile: "xhighAndMax",
         }),
         piModel("amazon/nova-pro", {
           id: "us.amazon.nova-pro-v1:0",

@@ -2669,7 +2669,8 @@ mod tests {
                 service_tier: "",
                 native_cost: false,
                 total_cost: "0",
-                // 2026-09-21，晚于内置的调价记录
+                // 2026-09-21：晚于 GPT-5.6 的两次调价，早于 Sonnet 5.5 的缓存读降价
+                //（测试里的 Sonnet 5.5 行自己指定时间）
                 created_at: 1_790_000_000,
             }
         }
@@ -3016,6 +3017,64 @@ mod tests {
         // 300K × $8 + 1K × $30
         assert_eq!(stored_total(&db, "long")?, dec("2.43"));
         assert_eq!(stored_total(&db, "before-price-cut")?, dec("0.035"));
+        Ok(())
+    }
+
+    /// Haiku 5.5 按提示长度分两档：不超过 100K 按标准价，超过 100K 整次请求各项 ×5
+    #[test]
+    fn reprice_prices_haiku_5_5_by_prompt_length() -> Result<(), AppError> {
+        let db = Database::memory()?;
+        let haiku = |request_id, model, input, cache_creation_1h| RowSpec {
+            request_id,
+            model,
+            input,
+            output: 1000,
+            cache_read: 40_000,
+            cache_creation: 10_000,
+            cache_creation_1h,
+            ..Default::default()
+        };
+        // OpenRouter 和 Bedrock 的模型名也要查到 claude-haiku-5-5
+        insert_row(
+            &db,
+            haiku("at-threshold", "anthropic/claude-haiku-5.5", 50_000, 0),
+        )?;
+        insert_row(
+            &db,
+            haiku(
+                "over-threshold",
+                "global.anthropic.claude-haiku-5-5",
+                50_001,
+                4000,
+            ),
+        )?;
+
+        assert_eq!(db.reprice_usage_costs()?, 2);
+        // 50K × $0.10 + 40K × $0.01 + 10K × $0.125 + 1K × $0.50
+        assert_eq!(stored_total(&db, "at-threshold")?, dec("0.00715"));
+        // 50,001 × $0.50 + 40K × $0.05 + 6K × $0.625 + 4K × $1（1 小时写入）+ 1K × $2.50
+        assert_eq!(stored_total(&db, "over-threshold")?, dec("0.0372505"));
+        Ok(())
+    }
+
+    /// Sonnet 5.5 的缓存读 2026-10-07 从 $0.20 降到 $0.10，之前的请求按旧价
+    #[test]
+    fn reprice_uses_the_sonnet_5_5_cache_read_price_in_effect() -> Result<(), AppError> {
+        let db = Database::memory()?;
+        let sonnet = |request_id, created_at| RowSpec {
+            request_id,
+            model: "claude-sonnet-5-5",
+            cache_read: 1_000_000,
+            created_at,
+            ..Default::default()
+        };
+        // 2026-10-07 07:00 UTC（太平洋时间零点）前后各一秒
+        insert_row(&db, sonnet("before-cut", 1_791_356_399))?;
+        insert_row(&db, sonnet("after-cut", 1_791_356_400))?;
+
+        assert_eq!(db.reprice_usage_costs()?, 2);
+        assert_eq!(stored_total(&db, "before-cut")?, dec("0.20"));
+        assert_eq!(stored_total(&db, "after-cut")?, dec("0.10"));
         Ok(())
     }
 

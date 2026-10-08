@@ -1637,6 +1637,7 @@ type LongContext = Option<(i64, &'static str, &'static str)>;
 const OPENAI_LONG: LongContext = Some((272_000, "2", "1.5"));
 const TWO_HUNDRED_K: LongContext = Some((200_000, "2", "1.5"));
 const XAI_LONG: LongContext = Some((200_000, "2", "2"));
+const HAIKU_5_5_LONG: LongContext = Some((100_000, "5", "5"));
 
 /// 内置模型的超长上下文档位和 priority / fast 档倍率：(模型, 档位, priority 倍率)。
 /// 同一模型带推理强度后缀的行（`-low` / `-high` …）一并适用。
@@ -1678,6 +1679,8 @@ const BUILTIN_MODEL_TIERS: &[(&str, LongContext, &str)] = &[
     // 开了 1M 上下文的 Sonnet 4 / 4.5：提示超过 200K 输入侧 ×2、输出 ×1.5
     ("claude-sonnet-4-5-20250929", TWO_HUNDRED_K, "1"),
     ("claude-sonnet-4-20250514", TWO_HUNDRED_K, "1"),
+    // Haiku 5.5：提示超过 100K 整次请求输入侧和输出都 ×5（$0.10 / $0.50 → $0.50 / $2.50）
+    ("claude-haiku-5-5", HAIKU_5_5_LONG, "1"),
     // Gemini Pro：提示超过 200K 输入侧 ×2、输出 ×1.5
     ("gemini-3.1-pro-preview", TWO_HUNDRED_K, "1"),
     ("gemini-3-pro-preview", TWO_HUNDRED_K, "1"),
@@ -1758,13 +1761,14 @@ pub(crate) const BUILTIN_MODEL_PRICES: &[(&str, &str, &str, &str, &str, &str)] =
         "0.50",
         "6.25",
     ),
-    // Claude Sonnet 5.5（与 Sonnet 5 同价）
+    // Claude Sonnet 5.5（输入、输出、缓存写入与 Sonnet 5 相同；2026-10-07 起缓存读降为
+    // 0.05x = $0.10，之前是 $0.20，见 token_usage/price_history.rs）
     (
         "claude-sonnet-5-5",
         "Claude Sonnet 5.5",
         "2",
         "10",
-        "0.20",
+        "0.10",
         "2.50",
     ),
     // Claude Sonnet 5（官方定价页 2026-09 确认：$2/$10 介绍价转为正式价，
@@ -1776,6 +1780,16 @@ pub(crate) const BUILTIN_MODEL_PRICES: &[(&str, &str, &str, &str, &str, &str)] =
         "10",
         "0.20",
         "2.50",
+    ),
+    // Claude Haiku 5.5（2026-10-07 发布）：提示不超过 100K 的价格，超过 100K 的档位见
+    // BUILTIN_MODEL_TIERS
+    (
+        "claude-haiku-5-5",
+        "Claude Haiku 5.5",
+        "0.10",
+        "0.50",
+        "0.01",
+        "0.125",
     ),
     // Claude 4.7 系列
     (
