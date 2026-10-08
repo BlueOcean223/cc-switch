@@ -12,7 +12,6 @@ import { toast } from "@/lib/toast";
 import { useTranslation } from "react-i18next";
 import type { Provider } from "@/types";
 import { providersApi, type AppId } from "@/lib/api";
-import { isProxyAppId } from "@/config/appConfig";
 
 export function useDragSort(providers: Record<string, Provider>, appId: AppId) {
   const queryClient = useQueryClient();
@@ -77,24 +76,10 @@ export function useDragSort(providers: Record<string, Provider>, appId: AppId) {
 
       try {
         await providersApi.updateSortOrder(updates, appId);
+        // 后端改完排序会重建托盘菜单
         await queryClient.invalidateQueries({
           queryKey: ["providers", appId],
         });
-
-        // Routing apps derive failover order from sort_index.
-        if (isProxyAppId(appId)) {
-          await queryClient.invalidateQueries({
-            queryKey: ["failoverQueue", appId],
-          });
-        }
-
-        // 更新托盘菜单以反映新的排序（失败不影响主操作）
-        try {
-          await providersApi.updateTrayMenu();
-        } catch (trayError) {
-          console.error("Failed to update tray menu after sort", trayError);
-          // 托盘菜单更新失败不影响排序成功
-        }
 
         toast.success(
           t("provider.sortUpdated", {

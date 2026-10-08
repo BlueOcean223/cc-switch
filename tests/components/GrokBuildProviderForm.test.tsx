@@ -4,6 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { parse as parseToml } from "smol-toml";
 import { describe, expect, it, vi } from "vitest";
 import { GrokBuildProviderForm } from "@/components/providers/forms/GrokBuildProviderForm";
+import { grokBuildProviderPresets } from "@/config/grokBuildProviderPresets";
 
 vi.mock("@/components/JsonEditor", () => ({
   default: ({
@@ -36,14 +37,14 @@ describe("GrokBuildProviderForm", () => {
     expect(screen.queryByRole("button", { name: /BytePlus/ })).toBeNull();
     expect(screen.queryByRole("button", { name: /Kimi/ })).toBeNull();
 
-    await user.click(screen.getByRole("button", { name: /PatewayAI/ }));
+    await user.click(screen.getByRole("button", { name: /OpenRouter/ }));
 
     const baseUrlInput =
       container.querySelector<HTMLInputElement>("#codexBaseUrl");
     const nameInput =
       container.querySelector<HTMLInputElement>('input[name="name"]');
-    expect(baseUrlInput?.value).toBe("https://api.pateway.ai/v1");
-    expect(nameInput?.value).toBe("PatewayAI");
+    expect(baseUrlInput?.value).toBe("https://openrouter.ai/api/v1");
+    expect(nameInput?.value).toBe("OpenRouter");
   });
 
   it("points the get-API-key link at the preset's apiKeyUrl", async () => {
@@ -56,19 +57,46 @@ describe("GrokBuildProviderForm", () => {
       />,
     );
 
-    await user.click(screen.getByRole("button", { name: /88API/ }));
+    await user.click(screen.getByRole("button", { name: /CherryIN/ }));
 
     const websiteInput = container.querySelector<HTMLInputElement>(
       'input[name="websiteUrl"]',
     );
-    expect(websiteInput?.value).toBe("https://88api.ai");
+    expect(websiteInput?.value).toBe("https://open.cherryin.ai");
     expect(screen.getByRole("link", { name: /API Key/ })).toHaveAttribute(
       "href",
-      "https://88api.ai/sign-up?aff=HSGY",
+      "https://open.cherryin.ai/console/token",
     );
   });
 
-  it("submits a complete config.toml payload with Grok defaults", async () => {
+  it("writes the preset's api_backend", async () => {
+    const user = userEvent.setup();
+    const onSubmit = vi.fn();
+    render(
+      <GrokBuildProviderForm
+        submitLabel="Save"
+        onSubmit={onSubmit}
+        onCancel={() => {}}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: /OpenRouter/ }));
+    fireEvent.change(screen.getByLabelText("API Key"), {
+      target: { value: "secret-key" },
+    });
+    await user.click(screen.getByRole("button", { name: "Save" }));
+
+    const preset = grokBuildProviderPresets.find(
+      (candidate) => candidate.name === "OpenRouter",
+    );
+    const settings = JSON.parse(onSubmit.mock.calls[0][0].settingsConfig);
+    const config = parseToml(settings.config) as any;
+    expect(config.model[config.models.default].api_backend).toBe(
+      preset?.apiBackend,
+    );
+  });
+
+  it("submits a complete config.toml payload and leaves api_backend to Grok", async () => {
     const user = userEvent.setup();
     const onSubmit = vi.fn();
     const { container } = render(
@@ -101,18 +129,16 @@ describe("GrokBuildProviderForm", () => {
     const settings = JSON.parse(submitted.settingsConfig);
     const config = parseToml(settings.config) as any;
 
-    expect(config.models.default).toBe("grok-4.5");
-    expect(config.model["grok-4.5"]).toEqual({
-      model: "grok-4.5",
+    expect(config.models.default).toBe("grok-4.7");
+    expect(config.model["grok-4.7"]).toEqual({
+      model: "grok-4.7",
       base_url: "https://relay.example.com/v1",
       name: "Example Relay",
       api_key: "secret-key",
-      api_backend: "responses",
-      context_window: 500000,
     });
   });
 
-  it("uses the Codex-style advanced section without redundant Grok fields", () => {
+  it("shows only the fields Grok Build reads", () => {
     const { container } = render(
       <GrokBuildProviderForm
         submitLabel="Save"
@@ -122,15 +148,20 @@ describe("GrokBuildProviderForm", () => {
     );
 
     expect(container.querySelector("#grokbuild-profile")).toBeNull();
-    expect(container.querySelector("#grokbuild-api-backend")).toBeNull();
-    expect(screen.getByText("高级选项")).toBeInTheDocument();
-    expect(container.querySelector("#grokbuild-context-window")).toHaveValue(
-      500000,
+    // 没写 api_backend 时显示 Grok 实际使用的 Chat Completions
+    expect(container.querySelector("#grokbuild-api-backend")).toHaveTextContent(
+      "OpenAI Chat Completions",
     );
-    expect(screen.getByText("上游格式")).toBeInTheDocument();
+    // 没写 context_window 时留空，由 Grok Build 按模型决定，保存时也不补写
+    expect(container.querySelector("#grokbuild-context-window")).toHaveValue(
+      null,
+    );
+    // 直连没有格式转换：不再有上游格式和高级选项
+    expect(screen.queryByText("上游格式")).toBeNull();
+    expect(screen.queryByText("高级选项")).toBeNull();
   });
 
-  it("keeps the Grok client on Responses when the upstream uses Chat", async () => {
+  it("keeps the api_backend already in config.toml", async () => {
     const user = userEvent.setup();
     const onSubmit = vi.fn();
     const configToml = `[models]
@@ -154,7 +185,6 @@ context_window = 500000
           name: "Chat Relay",
           category: "custom",
           settingsConfig: { config: configToml },
-          meta: { apiFormat: "openai_chat" },
         }}
       />,
     );
@@ -165,9 +195,8 @@ context_window = 500000
     const submitted = onSubmit.mock.calls[0][0];
     const settings = JSON.parse(submitted.settingsConfig);
     const config = parseToml(settings.config) as any;
-    expect(submitted.meta.apiFormat).toBe("openai_chat");
     const selected = config.model[config.models.default];
-    expect(selected.api_backend).toBe("responses");
+    expect(selected.api_backend).toBe("chat_completions");
     expect(selected.model).toBe("grok-4.5");
     expect(selected.base_url).toBe("https://relay.example.com/v1");
   });
@@ -241,8 +270,7 @@ context_window = 250000
 
   // #6427 复用 Codex 表单时把 Codex 专属文案原样带进了 Grok Build 表单。
   // 按 appId 分流后，Grok 表单不得再出现 Codex 字样或不适用条款（模型映射）。
-  it("uses Grok-specific copy for the model field and collapsed advanced section", async () => {
-    const user = userEvent.setup();
+  it("uses Grok-specific copy for the model field", () => {
     const configToml = `[models]
 default = "grok-4.5"
 
@@ -264,7 +292,6 @@ context_window = 500000
           name: "Chat Relay",
           category: "custom",
           settingsConfig: { config: configToml },
-          meta: { apiFormat: "openai_chat" },
         }}
       />,
     );
@@ -276,50 +303,5 @@ context_window = 500000
     expect(screen.queryByText(/Codex 默认请求的模型/)).toBeNull();
     // Grok 没有模型映射目录，不应出现"映射第一行"条款
     expect(screen.queryByText(/映射第一行/)).toBeNull();
-
-    // Chat 格式且无已配置高级值时高级区默认折叠，折叠提示也应是 Grok 版本
-    expect(
-      screen.getByText(/Anthropic Messages 协议的供应商需开启路由接管/),
-    ).toBeInTheDocument();
-    expect(screen.queryByText(/模型映射、思考能力/)).toBeNull();
-
-    await user.click(screen.getByRole("button", { name: /高级选项/ }));
-    expect(
-      screen.getByText(/把请求中的 reasoning effort 转成上游 Chat 参数/),
-    ).toBeInTheDocument();
-    expect(screen.queryByText(/Codex 的 reasoning\.effort/)).toBeNull();
-  });
-
-  it("uses Grok-specific copy for the max output tokens hint", () => {
-    const configToml = `[models]
-default = "grok-4.5"
-
-[model."grok-4.5"]
-model = "grok-4.5"
-base_url = "https://relay.example.com/v1"
-name = "Anthropic Relay"
-api_key = "secret-key"
-api_backend = "messages"
-context_window = 500000
-`;
-    render(
-      <GrokBuildProviderForm
-        providerId="anthropic-relay"
-        submitLabel="Save"
-        onSubmit={() => {}}
-        onCancel={() => {}}
-        initialData={{
-          name: "Anthropic Relay",
-          category: "custom",
-          settingsConfig: { config: configToml },
-          meta: { apiFormat: "anthropic" },
-        }}
-      />,
-    );
-
-    expect(screen.getByText(/^默认上限 8192 容易在长回答/)).toBeInTheDocument();
-    expect(
-      screen.queryByText(/Codex 不会把 model_max_output_tokens/),
-    ).toBeNull();
   });
 });

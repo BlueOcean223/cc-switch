@@ -3,12 +3,17 @@ use std::path::{Path, PathBuf};
 use serde::Deserialize;
 use serde_json::Value;
 
-use crate::session_manager::model::{SessionBlock, ToolStatus};
+use crate::session_manager::model::{ImageRef, SessionBlock, ToolStatus};
 use crate::session_manager::{SessionMessage, SessionMeta};
 
-use super::blocks::{assign_turn_ids, openai_tool_calls, tool_result_block};
+use super::blocks::{
+    assign_turn_ids, large_text_block, openai_tool_calls, parse_arguments, tool_call_block,
+    tool_result_block, ToolSource,
+};
+use super::codex_items::image_from_url;
 use super::utils::{
-    extract_text, for_each_jsonl_value, parse_timestamp_to_ms, truncate_summary, TITLE_MAX_CHARS,
+    collect_files_named, extract_text, for_each_jsonl_value, parse_timestamp_to_ms,
+    truncate_summary, JsonlSpan, TITLE_MAX_CHARS,
 };
 
 #[derive(Debug, Deserialize)]
@@ -31,6 +36,23 @@ struct GrokSessionSummary {
     updated_at: Option<Value>,
     #[serde(default)]
     last_active_at: Option<Value>,
+    /// `subagent*` / `fork` / `worktree` 等；普通会话缺省
+    #[serde(default)]
+    session_kind: Option<String>,
+    /// 显式的可见性覆盖
+    #[serde(default)]
+    hidden: Option<bool>,
+}
+
+impl GrokSessionSummary {
+    /// 与 grok-build `Summary::is_hidden` 一致：显式 `hidden` 优先，否则子代理会话不进历史列表
+    fn is_hidden(&self) -> bool {
+        self.hidden.unwrap_or_else(|| {
+            self.session_kind
+                .as_deref()
+                .is_some_and(|kind| kind.starts_with("subagent"))
+        })
+    }
 }
 
 pub fn session_roots() -> Vec<PathBuf> {
@@ -44,7 +66,7 @@ pub fn session_roots() -> Vec<PathBuf> {
 pub fn scan_sessions() -> Vec<SessionMeta> {
     let mut summaries = Vec::new();
     for root in session_roots() {
-        collect_summary_files(&root, &mut summaries);
+        collect_files_named(&root, "summary.json", &mut summaries);
     }
     summaries
         .into_iter()
@@ -52,11 +74,12 @@ pub fn scan_sessions() -> Vec<SessionMeta> {
         .collect()
 }
 
-/// `chat_history.jsonl`：`type ∈ {system, user, assistant, tool}`。
+/// `chat_history.jsonl`：每行一个 `ConversationItem`（grok-build
+/// `xai-grok-sampling-types/src/conversation.rs`），`type ∈ {system, user, assistant,
+/// tool_result, backend_tool_call, reasoning}`。记录本身不带时间戳。
 ///
 /// 会话的 sourcePath 是同目录的 `summary.json`；大内容的 Jsonl 引用指向 chat_history.jsonl
-/// 的行（`content::resolve_content_ref` 对 grokbuild 固定改读该文件）。`tool` 记录的配对字段与
-/// assistant 的 `tool_calls` 都是按 OpenAI 形状推断（待核实），缺失时 `callId` 为空串。
+/// 的行（`content::resolve_content_ref` 对 grokbuild 固定改读该文件）。
 pub fn load_messages(path: &Path) -> Result<Vec<SessionMessage>, String> {
     let session_dir = path
         .parent()
@@ -71,54 +94,200 @@ pub fn load_messages(path: &Path) -> Result<Vec<SessionMessage>, String> {
     let mut messages = Vec::new();
 
     for_each_jsonl_value(&chat_path, |span, value| {
-        let kind = value.get("type").and_then(Value::as_str).unwrap_or("");
-        let role = match kind {
-            "system" | "user" | "assistant" | "tool" => kind,
-            // Reasoning records can contain encrypted/internal state and are not
-            // conversation messages shown by Grok's own history view.
-            _ => return Ok(()),
-        };
-        let text = value.get("content").map(extract_text).unwrap_or_default();
-        let blocks = match role {
-            "tool" => vec![tool_result_block(
-                value
-                    .get("tool_call_id")
-                    .or_else(|| value.get("call_id"))
-                    .and_then(Value::as_str)
-                    .unwrap_or_default(),
-                ToolStatus::Unknown,
-                &text,
-                || Some(span.content_ref("/content")),
-            )],
-            "assistant" => {
+        let (role, blocks, injected) = match value.get("type").and_then(Value::as_str) {
+            // 开头的系统提示词，以及运行时追加的系统消息
+            Some("system") => ("system", injected_text_blocks(&value, span), true),
+            Some("user") => {
+                let human = is_human_input(value.get("synthetic_reason").and_then(Value::as_str));
+                let blocks = if human {
+                    user_blocks(&value, span)
+                } else {
+                    injected_text_blocks(&value, span)
+                };
+                ("user", blocks, !human)
+            }
+            Some("assistant") => {
+                let text = value.get("content").map(extract_text).unwrap_or_default();
                 let mut blocks = Vec::new();
                 if !text.trim().is_empty() {
                     blocks.push(SessionBlock::text(text));
                 }
+                // 官方形状是扁平的 `{id, name, arguments}`
                 blocks.extend(openai_tool_calls(value.get("tool_calls"), |pointer| {
                     Some(span.content_ref(format!("/tool_calls{pointer}")))
                 }));
-                blocks
+                ("assistant", blocks, false)
             }
-            _ if text.trim().is_empty() => Vec::new(),
-            _ => vec![SessionBlock::text(text)],
+            Some("tool_result") => ("tool", tool_result_blocks(&value, span), false),
+            Some("backend_tool_call") => ("assistant", backend_tool_blocks(&value, span), false),
+            // reasoning 含加密的内部状态，Grok 自己的历史视图也不显示
+            _ => return Ok(()),
         };
-        let ts = value
-            .get("timestamp")
-            .or_else(|| value.get("ts"))
-            .and_then(parse_timestamp_to_ms);
-        let mut message = SessionMessage::from_blocks(role, ts, blocks);
+        let mut message = SessionMessage::from_blocks(role, None, blocks);
         if message.is_empty() {
             return Ok(());
         }
-        // system prompt 属于注入内容，默认隐藏
-        message.injected = role == "system";
+        message.injected = injected;
         messages.push(message);
         Ok(())
     })?;
 
     assign_turn_ids(&mut messages);
     Ok(messages)
+}
+
+/// user 条目是否是人输入的：`synthetic_reason` 缺省即 `human`；插话（Ctrl+Enter）、父会话转来的
+/// 真人消息、`!cmd` 也算。其余（system_reminder、project_instructions、compaction_meta、
+/// task_completed 等，含将来新增的未知值）都是运行时注入的。
+fn is_human_input(synthetic_reason: Option<&str>) -> bool {
+    matches!(
+        synthetic_reason,
+        None | Some("human" | "interjection" | "parent_human_message" | "direct_bash")
+    )
+}
+
+/// 人输入的 user 条目：`content` 是 `[{type:"text",text} | {type:"image",url}]`
+fn user_blocks(value: &Value, span: JsonlSpan) -> Vec<SessionBlock> {
+    let parts = value.get("content");
+    let text = parts.map(extract_text).unwrap_or_default();
+    let mut blocks = Vec::new();
+    if !text.trim().is_empty() {
+        blocks.push(SessionBlock::text(text));
+    }
+    blocks.extend(
+        content_images(parts, "/content", span)
+            .into_iter()
+            .map(|image| SessionBlock::Image { image }),
+    );
+    blocks
+}
+
+/// 注入内容（系统提示词、system reminder、项目说明等）默认折叠，超长时只放预览。
+/// system 的 `content` 是字符串，user 的是 content part 数组。
+fn injected_text_blocks(value: &Value, span: JsonlSpan) -> Vec<SessionBlock> {
+    match value.get("content") {
+        Some(Value::String(text)) if !text.trim().is_empty() => {
+            vec![large_text_block(text.as_str(), || {
+                Some(span.content_ref("/content"))
+            })]
+        }
+        Some(Value::Array(parts)) => parts
+            .iter()
+            .enumerate()
+            .filter_map(|(i, part)| {
+                let text = part.get("text").and_then(Value::as_str)?;
+                (!text.trim().is_empty()).then(|| {
+                    large_text_block(text, || {
+                        Some(span.content_ref(format!("/content/{i}/text")))
+                    })
+                })
+            })
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// `{type:"tool_result", tool_call_id, content, images?}`：格式里没有成败状态
+fn tool_result_blocks(value: &Value, span: JsonlSpan) -> Vec<SessionBlock> {
+    let call_id = value
+        .get("tool_call_id")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let text = value.get("content").map(extract_text).unwrap_or_default();
+    let mut block = tool_result_block(call_id, ToolStatus::Unknown, &text, || {
+        Some(span.content_ref("/content"))
+    });
+    if let SessionBlock::ToolResult { images, .. } = &mut block {
+        *images = content_images(value.get("images"), "/images", span);
+    }
+    vec![block]
+}
+
+/// 服务端执行的工具（`{type:"backend_tool_call", kind:{tool_type, id, ...}}`）：
+/// web_search 的 `action` 是 search（query + sources）/ open_page（url）/ find_in_page（url + pattern），
+/// x_search 是 `{name, input}` 自定义调用，code_interpreter 带 `code`。
+fn backend_tool_blocks(value: &Value, span: JsonlSpan) -> Vec<SessionBlock> {
+    let Some(kind) = value.get("kind") else {
+        return Vec::new();
+    };
+    let id = kind.get("id").and_then(Value::as_str).unwrap_or_default();
+    let (name, input) = match kind.get("tool_type").and_then(Value::as_str) {
+        Some("web_search") => {
+            let mut action = kind.get("action").cloned().unwrap_or(Value::Null);
+            if let Some(action) = action.as_object_mut() {
+                action.remove("sources");
+            }
+            ("web_search", action)
+        }
+        Some("x_search") => (
+            kind.get("name")
+                .and_then(Value::as_str)
+                .unwrap_or("x_search"),
+            kind.get("input")
+                .map(parse_arguments)
+                .unwrap_or(Value::Null),
+        ),
+        Some("code_interpreter") => (
+            "code_interpreter",
+            serde_json::json!({ "code": kind.get("code") }),
+        ),
+        _ => return Vec::new(),
+    };
+    let mut blocks = vec![tool_call_block(
+        ToolSource::Generic,
+        id,
+        name,
+        &input,
+        || Some(span.content_ref("/kind")),
+    )];
+
+    let sources = kind
+        .pointer("/action/sources")
+        .map(web_search_sources_text)
+        .unwrap_or_default();
+    let status = match kind.get("status").and_then(Value::as_str) {
+        Some("completed") => Some(ToolStatus::Success),
+        Some("failed") => Some(ToolStatus::Error),
+        _ => None,
+    };
+    if !sources.is_empty() || status.is_some() {
+        blocks.push(tool_result_block(
+            id,
+            status.unwrap_or(ToolStatus::Unknown),
+            &sources,
+            || Some(span.content_ref(WEB_SEARCH_SOURCES_POINTER)),
+        ));
+    }
+    blocks
+}
+
+/// web_search 结果的引用位置；展开全文时按 [`web_search_sources_text`] 拼成网址列表。
+pub(crate) const WEB_SEARCH_SOURCES_POINTER: &str = "/kind/action/sources";
+
+/// web_search 的 `sources`（`[{type:"url", url}]`）→ 每行一个网址。
+pub(crate) fn web_search_sources_text(sources: &Value) -> String {
+    sources
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|source| source.get("url").and_then(Value::as_str))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// content part 数组里的图片（`{type:"image", url}`，url 是 data URL 或本地路径）
+fn content_images(parts: Option<&Value>, base: &str, span: JsonlSpan) -> Vec<ImageRef> {
+    parts
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .enumerate()
+        .filter(|(_, part)| part.get("type").and_then(Value::as_str) == Some("image"))
+        .filter_map(|(i, part)| {
+            let url = part.get("url").and_then(Value::as_str)?;
+            image_from_url(url, span, format!("{base}/{i}/url"))
+        })
+        .collect()
 }
 
 pub fn delete_session(root: &Path, path: &Path, session_id: &str) -> Result<bool, String> {
@@ -156,6 +325,8 @@ pub fn delete_session(root: &Path, path: &Path, session_id: &str) -> Result<bool
             session_dir.display()
         ));
     }
+    // 子代理会话在列表里隐藏，只能跟着父会话删；先删子会话，再删父会话目录
+    delete_subagent_sessions(root, session_dir);
     std::fs::remove_dir_all(session_dir).map_err(|e| {
         format!(
             "Failed to delete Grok Build session directory {}: {e}",
@@ -165,16 +336,61 @@ pub fn delete_session(root: &Path, path: &Path, session_id: &str) -> Result<bool
     Ok(true)
 }
 
-fn collect_summary_files(root: &Path, files: &mut Vec<PathBuf>) {
-    let Ok(entries) = std::fs::read_dir(root) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            collect_summary_files(&path, files);
-        } else if path.file_name().and_then(|name| name.to_str()) == Some("summary.json") {
-            files.push(path);
+/// 会话 `updates.jsonl` 里记下的子代理会话 id（`params.update.child_session_id`）。
+fn child_session_ids(session_dir: &Path) -> Vec<String> {
+    let mut ids = Vec::new();
+    let _ = for_each_jsonl_value(&session_dir.join("updates.jsonl"), |_, value| {
+        if let Some(id) = value
+            .pointer("/params/update/child_session_id")
+            .and_then(Value::as_str)
+        {
+            if !ids.iter().any(|known| known == id) {
+                ids.push(id.to_string());
+            }
+        }
+        Ok(())
+    });
+    ids
+}
+
+/// 会话 id 只由字母、数字和 `-` 组成（grok-build 用 UUID），拼路径前检查。
+fn is_safe_session_id(id: &str) -> bool {
+    !id.is_empty() && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+}
+
+/// 在 `root` 的各个项目目录下找子代理会话的目录：子代理的 cwd 可能和父会话不同，
+/// 不一定在同一个项目目录里。只认 summary 里 id 相同、`session_kind` 是 subagent 的。
+fn find_subagent_dir(root: &Path, id: &str) -> Option<PathBuf> {
+    std::fs::read_dir(root).ok()?.flatten().find_map(|project| {
+        let dir = project.path().join(id);
+        let summary = read_summary(&dir.join("summary.json")).ok()?;
+        let is_subagent = summary
+            .session_kind
+            .as_deref()
+            .is_some_and(|kind| kind.starts_with("subagent"));
+        (summary.info.id == id && is_subagent).then_some(dir)
+    })
+}
+
+/// 删掉 `session_dir` 记下的子代理会话，子代理自己的子代理也一起删。删不掉的只记日志：
+/// 不影响删除父会话。
+fn delete_subagent_sessions(root: &Path, session_dir: &Path) {
+    let mut pending = child_session_ids(session_dir);
+    let mut seen: Vec<String> = Vec::new();
+    while let Some(id) = pending.pop() {
+        if seen.contains(&id) || !is_safe_session_id(&id) {
+            continue;
+        }
+        seen.push(id.clone());
+        let Some(dir) = find_subagent_dir(root, &id) else {
+            continue;
+        };
+        pending.extend(child_session_ids(&dir));
+        if let Err(e) = std::fs::remove_dir_all(&dir) {
+            log::warn!(
+                "Failed to delete Grok Build subagent session {}: {e}",
+                dir.display()
+            );
         }
     }
 }
@@ -187,7 +403,7 @@ fn read_summary(path: &Path) -> Result<GrokSessionSummary, String> {
 }
 
 fn parse_summary(path: &Path) -> Option<SessionMeta> {
-    let summary = read_summary(path).ok()?;
+    let summary = read_summary(path).ok().filter(|s| !s.is_hidden())?;
     let session_id = summary.info.id;
     let title = summary
         .generated_title
@@ -228,6 +444,7 @@ fn parse_summary(path: &Path) -> Option<SessionMeta> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
     use tempfile::tempdir;
 
     #[test]
@@ -245,7 +462,7 @@ mod tests {
         )
         .expect("write summary");
         let mut files = Vec::new();
-        collect_summary_files(&sessions_dir, &mut files);
+        collect_files_named(&sessions_dir, "summary.json", &mut files);
         let sessions = files
             .iter()
             .filter_map(|path| parse_summary(path))
@@ -309,6 +526,54 @@ mod tests {
     }
 
     #[test]
+    fn delete_session_also_deletes_its_subagent_sessions() {
+        let temp = tempdir().expect("tempdir");
+        let root = temp.path().join("sessions");
+        let session = |project: &str, id: &str, kind: Option<&str>, children: &[&str]| {
+            let dir = root.join(project).join(id);
+            std::fs::create_dir_all(&dir).expect("create session dir");
+            let kind = kind
+                .map(|k| format!(r#","session_kind":"{k}""#))
+                .unwrap_or_default();
+            std::fs::write(
+                dir.join("summary.json"),
+                format!(r#"{{"info":{{"id":"{id}"}}{kind}}}"#),
+            )
+            .expect("write summary");
+            let updates: String = children
+                .iter()
+                .map(|c| {
+                    format!("{{\"params\":{{\"update\":{{\"child_session_id\":\"{c}\"}}}}}}\n")
+                })
+                .collect();
+            std::fs::write(dir.join("updates.jsonl"), updates).expect("write updates");
+            dir
+        };
+        let parent = session("p1", "parent", None, &["child-a", "child-b", "../p1"]);
+        // 子代理在另一个项目目录，还有自己的子代理
+        let child_a = session("p1", "child-a", Some("subagent"), &[]);
+        let child_b = session("p2", "child-b", Some("subagent"), &["grandchild"]);
+        let grandchild = session("p2", "grandchild", Some("subagent"), &[]);
+        // 被列为子会话但不是子代理的会话不删
+        let unrelated = session("p1", "other", None, &[]);
+        std::fs::write(
+            parent.join("updates.jsonl"),
+            std::fs::read_to_string(parent.join("updates.jsonl")).unwrap()
+                + "{\"params\":{\"update\":{\"child_session_id\":\"other\"}}}\n",
+        )
+        .unwrap();
+
+        delete_session(&root, &parent.join("summary.json"), "parent").expect("delete");
+
+        assert!(!parent.exists());
+        assert!(!child_a.exists());
+        assert!(!child_b.exists());
+        assert!(!grandchild.exists());
+        assert!(unrelated.exists());
+        assert!(root.join("p1").exists());
+    }
+
+    #[test]
     fn delete_session_rejects_remove_dir_all_target_outside_root() {
         let temp = tempdir().expect("tempdir");
         let root = temp.path().join("sessions");
@@ -326,41 +591,176 @@ mod tests {
         assert!(outside_dir.exists());
     }
 
-    #[test]
-    fn grokbuild_tool_records_become_results() {
+    fn load_chat_history(lines: &[Value]) -> Vec<SessionMessage> {
         let temp = tempdir().expect("tempdir");
         let summary_path = temp.path().join("summary.json");
         std::fs::write(&summary_path, "{}").expect("write summary placeholder");
         std::fs::write(
             temp.path().join("chat_history.jsonl"),
-            concat!(
-                "{\"type\":\"system\",\"content\":\"You are Grok.\"}\n",
-                "{\"type\":\"user\",\"content\":\"clean journal\"}\n",
-                "{\"type\":\"assistant\",\"content\":\"\",\"tool_calls\":[{\"id\":\"call_1\",\"type\":\"function\",\"function\":{\"name\":\"run_terminal_cmd\",\"arguments\":\"{\\\"command\\\":\\\"journalctl --vacuum-time=3d\\\"}\"}}]}\n",
-                "{\"type\":\"tool\",\"tool_call_id\":\"call_1\",\"content\":\"Vacuuming done\"}\n",
-                "{\"type\":\"tool\",\"content\":\"unpaired output\"}\n",
-                "{\"type\":\"assistant\",\"content\":\"freed 2.1G\"}\n"
-            ),
+            lines.iter().map(|l| format!("{l}\n")).collect::<String>(),
         )
         .expect("write chat history");
+        load_messages(&summary_path).expect("load messages")
+    }
 
-        let messages = load_messages(&summary_path).expect("load messages");
-        assert_eq!(messages.len(), 6);
+    #[test]
+    fn grokbuild_tool_results_pair_with_flat_tool_calls() {
+        // 字段形状取自 grok-build ConversationItem 与本机 chat_history.jsonl
+        let messages = load_chat_history(&[
+            json!({"type": "system", "content": "You are Grok."}),
+            json!({"type": "user", "content": [{"type": "text", "text": "clean journal"}], "prompt_index": 0}),
+            json!({"type": "reasoning", "id": "rs_1", "encrypted_content": "x", "status": "completed", "summary": []}),
+            json!({"type": "assistant", "content": "", "model_id": "grok-4.6", "tool_calls": [
+                {"id": "call_1", "name": "run_terminal_cmd", "arguments": "{\"command\":\"journalctl --vacuum-time=3d\"}"}
+            ]}),
+            json!({"type": "tool_result", "tool_call_id": "call_1", "content": "Vacuuming done"}),
+            json!({"type": "assistant", "content": "freed 2.1G"}),
+        ]);
+
+        assert_eq!(messages.len(), 5);
         assert!(messages[0].injected);
         assert_eq!(messages[0].turn_id.as_deref(), Some("t0"));
+        assert_eq!(messages[1].content, "clean journal");
         assert_eq!(
             messages[2].content,
             "[Tool: run_terminal_cmd] journalctl --vacuum-time=3d"
         );
-        let result = |i: usize| match &messages[i].blocks[0] {
+        assert_eq!(messages[3].role, "tool");
+        match &messages[3].blocks[0] {
             SessionBlock::ToolResult {
-                call_id, status, ..
-            } => (call_id.clone(), *status),
+                call_id,
+                status,
+                preview,
+                ..
+            } => {
+                assert_eq!(call_id, "call_1");
+                assert_eq!(*status, ToolStatus::Unknown);
+                assert_eq!(preview, "Vacuuming done");
+            }
             other => panic!("{other:?}"),
+        }
+        assert_eq!(messages[4].turn_id.as_deref(), Some("t1"));
+    }
+
+    #[test]
+    fn grokbuild_synthetic_user_items_are_injected_and_do_not_start_turns() {
+        let messages = load_chat_history(&[
+            json!({"type": "user", "content": [{"type": "text", "text": "first"}]}),
+            json!({"type": "user", "synthetic_reason": "project_instructions", "content": [{"type": "text", "text": "# AGENTS.md"}]}),
+            json!({"type": "user", "synthetic_reason": "system_reminder", "content": [{"type": "text", "text": "<system-reminder>todo</system-reminder>"}]}),
+            json!({"type": "assistant", "content": "ok"}),
+            json!({"type": "user", "synthetic_reason": "interjection", "content": [{"type": "text", "text": "also this"}]}),
+            json!({"type": "user", "synthetic_reason": "some_future_reason", "content": [{"type": "text", "text": "internal"}]}),
+        ]);
+
+        let flags: Vec<(bool, Option<&str>)> = messages
+            .iter()
+            .map(|m| (m.injected, m.turn_id.as_deref()))
+            .collect();
+        assert_eq!(
+            flags,
+            vec![
+                (false, Some("t1")),
+                (true, Some("t1")),
+                (true, Some("t1")),
+                (false, Some("t1")),
+                (false, Some("t2")),
+                (true, Some("t2")),
+            ]
+        );
+    }
+
+    #[test]
+    fn grokbuild_backend_web_search_becomes_tool_call_with_sources() {
+        let messages = load_chat_history(&[
+            json!({"type": "user", "content": [{"type": "text", "text": "news?"}]}),
+            json!({"type": "backend_tool_call", "kind": {
+                "tool_type": "web_search", "id": "ws_1", "status": "completed",
+                "action": {"type": "search", "query": "grok build", "sources": [
+                    {"type": "url", "url": "https://x.ai/news"},
+                    {"type": "url", "url": "https://github.com/xai-org/grok-build"}
+                ]}
+            }}),
+            json!({"type": "backend_tool_call", "kind": {
+                "tool_type": "web_search", "id": "ws_2", "status": "failed",
+                "action": {"type": "open_page", "url": "https://example.com"}
+            }}),
+        ]);
+
+        assert_eq!(messages.len(), 3);
+        assert_eq!(messages[1].role, "assistant");
+        match &messages[1].blocks[..] {
+            [SessionBlock::ToolCall { id, title, .. }, SessionBlock::ToolResult {
+                status, preview, ..
+            }] => {
+                assert_eq!(id, "ws_1");
+                assert!(title.contains("grok build"), "{title}");
+                assert_eq!(*status, ToolStatus::Success);
+                assert_eq!(
+                    preview,
+                    "https://x.ai/news\nhttps://github.com/xai-org/grok-build"
+                );
+            }
+            other => panic!("{other:?}"),
+        }
+        match &messages[2].blocks[..] {
+            [SessionBlock::ToolCall { title, .. }, SessionBlock::ToolResult { status, .. }] => {
+                assert!(title.contains("example.com"), "{title}");
+                assert_eq!(*status, ToolStatus::Error);
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn grokbuild_images_in_user_and_tool_result_items() {
+        let messages = load_chat_history(&[
+            json!({"type": "user", "content": [
+                {"type": "text", "text": "what is this"},
+                {"type": "image", "url": "data:image/png;base64,AAAABBBB"}
+            ]}),
+            json!({"type": "tool_result", "tool_call_id": "c1", "content": "read image",
+                "images": [{"type": "image", "url": "data:image/jpeg;base64,AAAA"}]}),
+        ]);
+
+        assert!(matches!(
+            &messages[0].blocks[..],
+            [SessionBlock::Text { .. }, SessionBlock::Image { image }] if image.media_type == "image/png"
+        ));
+        match &messages[1].blocks[0] {
+            SessionBlock::ToolResult { images, .. } => {
+                assert_eq!(images.len(), 1);
+                assert_eq!(images[0].media_type, "image/jpeg");
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn subagent_sessions_are_hidden_from_the_list() {
+        let temp = tempdir().expect("tempdir");
+        let write = |id: &str, extra: &str| {
+            let dir = temp.path().join("project").join(id);
+            std::fs::create_dir_all(&dir).expect("create session dir");
+            std::fs::write(
+                dir.join("summary.json"),
+                format!(r#"{{"info":{{"id":"{id}"}}{extra}}}"#),
+            )
+            .expect("write summary");
         };
-        assert_eq!(result(3), ("call_1".into(), ToolStatus::Unknown));
-        assert_eq!(result(4), (String::new(), ToolStatus::Unknown));
-        assert_eq!(messages[4].role, "tool");
-        assert_eq!(messages[5].turn_id.as_deref(), Some("t1"));
+        write("plain", "");
+        write("sub", r#","session_kind":"subagent""#);
+        write("sub-shown", r#","session_kind":"subagent","hidden":false"#);
+        write("worktree", r#","session_kind":"worktree""#);
+
+        let mut files = Vec::new();
+        collect_files_named(temp.path(), "summary.json", &mut files);
+        let mut ids: Vec<String> = files
+            .iter()
+            .filter_map(|path| parse_summary(path))
+            .map(|s| s.session_id)
+            .collect();
+        ids.sort();
+        assert_eq!(ids, vec!["plain", "sub-shown", "worktree"]);
     }
 }

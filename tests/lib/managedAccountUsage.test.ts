@@ -20,108 +20,54 @@ const provider = (
 const byId = (...list: Provider[]) =>
   Object.fromEntries(list.map((p) => [p.id, p]));
 
+const boundTo = (accountId: string): Partial<Provider> => ({
+  category: "official",
+  meta: {
+    providerType: "codex_oauth",
+    authBinding: {
+      source: "managed_account",
+      authProvider: "codex_oauth",
+      accountId,
+    },
+  },
+});
+
 describe("findManagedAccountUsers", () => {
-  const claude = byId(
-    // 指定了 a1
-    provider("bound-a1", {
-      meta: {
-        providerType: "github_copilot",
-        authBinding: {
-          source: "managed_account",
-          authProvider: "github_copilot",
-          accountId: "a1",
-        },
-      },
-    }),
-    // 旧字段 githubAccountId 指定了 a2
-    provider("legacy-a2", {
-      meta: { providerType: "github_copilot", githubAccountId: "a2" },
-    }),
-    // 没指定：跟着默认账号
-    provider("follows-default", { meta: { providerType: "github_copilot" } }),
-    // 没写 providerType 的旧卡按地址认
+  const codex = byId(
+    // 没绑定账号的官方卡用 Codex 自己的登录，不算在用托管账号
     provider(
-      "by-url",
-      {},
-      { env: { ANTHROPIC_BASE_URL: "https://api.githubcopilot.com" } },
+      "codex-official",
+      { category: "official", meta: { providerType: "codex_oauth" } },
+      { auth: {}, config: "" },
     ),
-    // 别的服务
-    provider("xai", { meta: { providerType: "xai_oauth" } }),
-    // 普通供应商
-    provider("plain", {}, { env: { ANTHROPIC_BASE_URL: "https://x.test" } }),
+    provider("bound-c1", boundTo("c1"), { auth: {}, config: "" }),
+    provider("bound-c2", boundTo("c2"), { auth: {}, config: "" }),
+    // 普通第三方供应商
+    provider(
+      "plain",
+      {},
+      { auth: { OPENAI_API_KEY: "sk-test" }, config: "" },
+    ),
   );
 
-  it("counts bound providers and default followers for the default account", () => {
-    const users = findManagedAccountUsers("github_copilot", ["a1"], "a1", {
-      claude,
-    });
-    expect(users.map((u) => [u.providerId, u.viaDefault])).toEqual([
-      ["bound-a1", false],
-      ["follows-default", true],
-      ["by-url", true],
-    ]);
-  });
-
-  it("counts only bound providers for a non-default account", () => {
-    const users = findManagedAccountUsers("github_copilot", ["a2"], "a1", {
-      claude,
-    });
-    expect(users.map((u) => u.providerId)).toEqual(["legacy-a2"]);
-  });
-
-  it("collects every provider when removing all accounts", () => {
-    const users = findManagedAccountUsers(
-      "github_copilot",
-      ["a1", "a2"],
-      "a1",
-      { claude },
-    );
-    expect(users.map((u) => u.providerId)).toEqual([
-      "bound-a1",
-      "legacy-a2",
-      "follows-default",
-      "by-url",
-    ]);
-  });
-
-  it("does not count an unbound Codex official card (it uses Codex's own login)", () => {
-    const codex = byId(
-      provider(
-        "codex-official",
-        { category: "official", meta: { providerType: "codex_oauth" } },
-        { auth: {}, config: "" },
-      ),
-      provider(
-        "codex-managed",
-        {
-          category: "official",
-          meta: {
-            providerType: "codex_oauth",
-            authBinding: {
-              source: "managed_account",
-              authProvider: "codex_oauth",
-              accountId: "c1",
-            },
-          },
-        },
-        { auth: {}, config: "" },
-      ),
-    );
-    const desktop = byId(
-      provider("desktop-chatgpt", { meta: { providerType: "codex_oauth" } }),
-    );
-
-    const users = findManagedAccountUsers("codex_oauth", ["c1"], "c1", {
-      codex,
-      "claude-desktop": desktop,
-    });
+  it("counts only the providers bound to the removed account", () => {
+    const users = findManagedAccountUsers("codex_oauth", ["c1"], { codex });
     expect(users.map((u) => [u.appId, u.providerId])).toEqual([
-      ["claude-desktop", "desktop-chatgpt"],
-      ["codex", "codex-managed"],
+      ["codex", "bound-c1"],
     ]);
+  });
+
+  it("collects every bound provider when removing all accounts", () => {
+    const users = findManagedAccountUsers("codex_oauth", ["c1", "c2"], {
+      codex,
+    });
+    expect(users.map((u) => u.providerId)).toEqual(["bound-c1", "bound-c2"]);
     expect(groupUsersByApp(users)).toEqual([
-      { appId: "claude-desktop", names: ["desktop-chatgpt"] },
-      { appId: "codex", names: ["codex-managed"] },
+      { appId: "codex", names: ["bound-c1", "bound-c2"] },
     ]);
+  });
+
+  it("finds nothing when no provider list is loaded", () => {
+    expect(findManagedAccountUsers("codex_oauth", ["c1"], {})).toEqual([]);
   });
 });

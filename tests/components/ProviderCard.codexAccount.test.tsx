@@ -33,14 +33,12 @@ vi.mock("@/components/UsageFooter", () => ({ default: () => null }));
 vi.mock("@/components/SubscriptionQuotaFooter", () => ({
   default: () => null,
 }));
-vi.mock("@/components/CopilotQuotaFooter", () => ({ default: () => null }));
 vi.mock("@/components/CodexOauthQuotaFooter", () => ({
   default: (props: unknown) => {
     codexQuotaFooterProps(props);
     return <div>codex-oauth-quota</div>;
   },
 }));
-vi.mock("@/components/XaiOauthQuotaFooter", () => ({ default: () => null }));
 
 vi.mock("@/lib/query/failover", () => ({
   useProviderHealth: () => ({ data: undefined }),
@@ -71,18 +69,13 @@ const managedProvider = (
 const authStatus = (login: string): ManagedAuthStatus => ({
   provider: "codex_oauth",
   authenticated: true,
-  default_account_id: "account-long",
   accounts: [
     {
       id: "account-long",
       provider: "codex_oauth",
       login,
-      avatar_url: null,
       authenticated_at: 0,
-      is_default: true,
-      github_domain: "",
       reauth_required: false,
-      requires_reauth: false,
     },
   ],
 });

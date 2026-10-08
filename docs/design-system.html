@@ -35,10 +35,8 @@
     --overlay: rgba(9, 9, 11, .36);
     --control-off: #888890;
 
-    /* 模式色：直连 / 路由 / 聚合 */
+    /* 强调色：当前供应商 */
     --direct-fill: #0a84ff; --direct-text: #0063c7; --direct-soft: #eaf3ff; --direct-solid: #0066cc; --direct-on: #ffffff;
-    --route-fill: #0d9488; --route-text: #06726b; --route-soft: #e7f6f4; --route-solid: #0f766e; --route-on: #ffffff;
-    --stack-fill: #7c3aed; --stack-text: #6d28d9; --stack-soft: #f2ecfe; --stack-solid: #6d28d9; --stack-on: #ffffff;
 
     /* 语义色 */
     --success: #16a34a; --success-text: #007634; --success-soft: #e8f7ee;
@@ -70,8 +68,6 @@
       --text-1: #f4f4f5; --text-2: #d0d0d8; --text-3: #b5b5bd;
       --inverse-bg: #f4f4f5; --inverse-fg: #18181b; --overlay: rgba(0, 0, 0, .55); --control-off: #6f6f77;
       --direct-fill: #4a8fd9; --direct-text: #8fb8e6; --direct-soft: rgba(74, 143, 217, 0.12); --direct-solid: #2f6db3; --direct-on: #ffffff;
-      --route-fill: #2a9d8f; --route-text: #7cc4ba; --route-soft: rgba(42, 157, 143, 0.12); --route-solid: #1f7d72; --route-on: #ffffff;
-      --stack-fill: #8b74d6; --stack-text: #b5a6e3; --stack-soft: rgba(139, 116, 214, 0.12); --stack-solid: #6a52bf; --stack-on: #ffffff;
       --success: #4ade80; --success-text: #4ade80; --success-soft: #0f2b1a;
       --warning: #fbbf24; --warning-text: #fcd34d; --warning-soft: #33260a;
       --danger: #f87171;  --danger-text: #fca5a5;  --danger-soft: #3a1414;
@@ -89,8 +85,6 @@
     --text-1: #f4f4f5; --text-2: #d0d0d8; --text-3: #b5b5bd;
     --inverse-bg: #f4f4f5; --inverse-fg: #18181b; --overlay: rgba(0, 0, 0, .55); --control-off: #6f6f77;
     --direct-fill: #4a8fd9; --direct-text: #8fb8e6; --direct-soft: rgba(74, 143, 217, 0.12); --direct-solid: #2f6db3; --direct-on: #ffffff;
-    --route-fill: #2a9d8f; --route-text: #7cc4ba; --route-soft: rgba(42, 157, 143, 0.12); --route-solid: #1f7d72; --route-on: #ffffff;
-    --stack-fill: #8b74d6; --stack-text: #b5a6e3; --stack-soft: rgba(139, 116, 214, 0.12); --stack-solid: #6a52bf; --stack-on: #ffffff;
     --success: #4ade80; --success-text: #4ade80; --success-soft: #0f2b1a;
     --warning: #fbbf24; --warning-text: #fcd34d; --warning-soft: #33260a;
     --danger: #f87171;  --danger-text: #fca5a5;  --danger-soft: #3a1414;
@@ -231,10 +225,6 @@
   .btn.quiet:hover { background: var(--bg-subtle); }
   .btn.danger { background: var(--danger); color: #fff; }
   .btn.danger:hover { filter: brightness(1.1); }
-  .btn.direct { background: var(--direct-solid); color: var(--direct-on); font-weight: 600; }
-  .btn.route { background: var(--route-solid); color: var(--route-on); font-weight: 600; }
-  .btn.stack { background: var(--stack-solid); color: var(--stack-on); font-weight: 600; }
-  .btn.direct:hover, .btn.route:hover, .btn.stack:hover { filter: brightness(1.1); }
   .btn.icon { width: 28px; height: 28px; padding: 0; color: var(--text-2); }
   .btn.icon:hover { background: var(--bg-subtle); color: var(--text-1); }
   .btn.icon.lg { width: 32px; height: 32px; }
@@ -307,13 +297,6 @@
   .seg button[aria-pressed="true"] { color: var(--text-1); }
   .seg.sm { height: 28px; border-radius: 8px; }
   .seg.sm button { padding: 0 10px; border-radius: 5px; font-size: 12px; }
-  /* 模式 tab：图标 + 文字，最小宽 96，不挂提示 */
-  .seg.modes button { min-width: 96px; padding: 0 16px; }
-  .seg.modes button[aria-pressed="true"], .seg.modes button[class^="act-"] { font-weight: 600; }
-  .seg.modes button .dot { width: 6px; height: 6px; border-radius: 50%; }
-  .seg.modes button.act-direct { color: var(--direct-text); } .seg.modes .act-direct .dot { background: var(--direct-fill); }
-  .seg.modes button.act-route { color: var(--route-text); }   .seg.modes .act-route .dot { background: var(--route-fill); }
-  .seg.modes button.act-stack { color: var(--stack-text); }   .seg.modes .act-stack .dot { background: var(--stack-fill); }
 
   /* 下划线页签 */
   .ptabs { display: flex; gap: 20px; border-bottom: 1px solid var(--border); position: relative; }
@@ -326,8 +309,6 @@
   .chip { display: inline-flex; align-items: center; gap: 4px; height: 20px; padding: 0 7px; border-radius: 9999px; font-size: 11px; line-height: 16px; font-weight: 500; white-space: nowrap; }
   .chip.outline { border: 1px solid var(--border-strong); color: var(--text-2); }
   .chip.direct { background: var(--direct-soft); color: var(--direct-text); }
-  .chip.route { background: var(--route-soft); color: var(--route-text); }
-  .chip.stack { background: var(--stack-soft); color: var(--stack-text); }
   .chip.success { background: var(--success-soft); color: var(--success-text); }
   .chip.warning { background: var(--warning-soft); color: var(--warning-text); }
   .chip.danger { background: var(--danger-soft); color: var(--danger-text); }
@@ -342,8 +323,6 @@
   }
   .pcard:hover { border-color: var(--border-strong); box-shadow: var(--shadow-sm); }
   .pcard.t-direct { border-color: var(--direct-fill); background: var(--direct-soft); box-shadow: none; }
-  .pcard.t-route { border-color: var(--route-fill); background: var(--route-soft); box-shadow: none; }
-  .pcard.t-stack { border-color: var(--stack-fill); background: var(--stack-soft); box-shadow: none; }
   .pcard .grip { width: 16px; color: var(--text-3); opacity: 0; transition: opacity var(--dur); }
   .pcard:hover .grip { opacity: 1; }
   .pcard .logo { width: 32px; height: 32px; border-radius: 8px; border: 1px solid var(--border); background: #fff; color: #171717; display: grid; place-items: center; font-weight: 700; font-size: 13px; flex-shrink: 0; }
@@ -364,8 +343,7 @@
   .notice.neutral { background: var(--bg-subtle); } .notice.neutral svg { color: var(--text-2); }
   .notice.warning { background: var(--warning-soft); } .notice.warning svg { color: var(--warning-text); }
   .notice.danger { background: var(--danger-soft); } .notice.danger svg { color: var(--danger-text); }
-  .notice.route { background: var(--route-soft); } .notice.route svg { color: var(--route-text); }
-  .notice.stack { background: var(--stack-soft); } .notice.stack svg { color: var(--stack-text); }
+  .notice.direct { background: var(--direct-soft); } .notice.direct svg { color: var(--direct-text); }
 
   /* 说明卡 HelpTip */
   .helptip { position: relative; display: inline-flex; }
@@ -412,11 +390,6 @@
   #toaster { position: fixed; bottom: 18px; left: 50%; translate: -50% 0; z-index: 60; display: flex; flex-direction: column; gap: 8px; }
   #toaster .toast { animation: tin 200ms var(--ease); }
   @keyframes tin { from { opacity: 0; transform: translateY(8px); } }
-
-  /* app 局部复原：模式行 */
-  .moderow { display: flex; align-items: center; gap: 16px; padding: 12px 0 4px; flex-wrap: wrap; }
-  .moderow .status { flex: 1; min-width: 0; font-size: 12px; color: var(--text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .moderow label { display: flex; align-items: center; gap: 6px; color: var(--text-2); }
 
   /* 侧栏复原 */
   .side-demo { width: 200px; background: var(--bg-sidebar); border: 1px solid var(--border); border-radius: var(--r-panel); padding: 8px 0; }
@@ -474,8 +447,6 @@
 <!-- 图标：lucide（与 app 同源） -->
 <svg width="0" height="0" style="position:absolute" aria-hidden="true">
   <symbol id="plug" viewBox="0 0 24 24"><path d="M12 22v-5M9 8V2M15 8V2M18 8v5a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4V8Z"/></symbol>
-  <symbol id="route" viewBox="0 0 24 24"><circle cx="6" cy="19" r="3"/><path d="M9 19h8.5a3.5 3.5 0 0 0 0-7h-11a3.5 3.5 0 0 1 0-7H15"/><circle cx="18" cy="5" r="3"/></symbol>
-  <symbol id="layers" viewBox="0 0 24 24"><path d="M12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83Z"/><path d="m22 17.65-9.17 4.16a2 2 0 0 1-1.66 0L2 17.65"/><path d="m22 12.65-9.17 4.16a2 2 0 0 1-1.66 0L2 12.65"/></symbol>
   <symbol id="shuffle" viewBox="0 0 24 24"><path d="m18 14 4 4-4 4M18 2l4 4-4 4M2 18h1.4c1.3 0 2.5-.6 3.3-1.7l6.1-8.6c.7-1.1 2-1.7 3.3-1.7H22M2 6h1.9c1.5 0 2.9.9 3.6 2.2M22 18h-5.9c-1.3 0-2.6-.7-3.3-1.8l-.5-.8"/></symbol>
   <symbol id="settings2" viewBox="0 0 24 24"><path d="M20 7h-9M14 17H5"/><circle cx="17" cy="17" r="3"/><circle cx="7" cy="7" r="3"/></symbol>
   <symbol id="plus" viewBox="0 0 24 24"><path d="M5 12h14M12 5v14"/></symbol>
@@ -497,9 +468,6 @@
   <symbol id="external" viewBox="0 0 24 24"><path d="M15 3h6v6M10 14 21 3M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></symbol>
   <symbol id="play" viewBox="0 0 24 24"><path d="M6 3l14 9-14 9V3z"/></symbol>
   <symbol id="swap" viewBox="0 0 24 24"><path d="M8 3 4 7l4 4M4 7h16M16 21l4-4-4-4M20 17H4"/></symbol>
-  <symbol id="list-plus" viewBox="0 0 24 24"><path d="M11 12H3M16 6H3M16 18H3M18 9v6M21 12h-6"/></symbol>
-  <symbol id="arrow-up" viewBox="0 0 24 24"><path d="m5 12 7-7 7 7M12 19V5"/></symbol>
-  <symbol id="arrow-down" viewBox="0 0 24 24"><path d="M12 5v14M19 12l-7 7-7-7"/></symbol>
   <symbol id="chart" viewBox="0 0 24 24"><path d="M3 3v16a2 2 0 0 0 2 2h16M18 17V9M13 17V5M8 17v-3"/></symbol>
 </svg>
 
@@ -531,7 +499,6 @@
     <a href="#overlays">菜单 · 对话框 · Toast</a>
     <a href="#data">数据展示</a>
     <span class="grp">CC Switch</span>
-    <a href="#modes">连接模式</a>
     <a href="#sidebar">侧栏</a>
     <span class="grp">规约</span>
     <a href="#principles">交互原则</a>
@@ -544,7 +511,7 @@
       <h1>CC Switch 设计系统</h1>
       <p>桌面端（Tauri + React）的视觉与交互规范。令牌直接取自 <code>src/index.css</code> 与 <code>tailwind.config.cjs</code>：
         中性黑白骨架、主题色 <strong style="color:var(--action-text)">#F97316</strong> 只落在操作色上，
-        直连 / 路由 / 聚合三种模式各有一套颜色，13px 正文、6 / 10 / 14 三档圆角，明暗双主题一一对应。</p>
+        当前供应商用一套蓝色强调色，13px 正文、6 / 10 / 14 三档圆角，明暗双主题一一对应。</p>
       <div class="meta">
         <span class="chip outline">Tauri 2 · React 18</span>
         <span class="chip outline">Tailwind 3 · Radix · shadcn/ui</span>
@@ -559,7 +526,7 @@
       <h2>色彩</h2>
       <p class="lede"><strong>骨架是中性灰，彩色只表达「能操作」和「是什么状态」。</strong>
         主题色只有一个：橙 <code>#F97316</code>，它占的是 <code>--action-*</code> 和 <code>--ring</code> 这组槽位——
-        一个视图只有一个实心橙按钮。模式色、语义色各管各的，不和主题色混用。</p>
+        一个视图只有一个实心橙按钮。强调色、语义色各管各的，不和主题色混用。</p>
 
       <h3 class="sub">主题色 · 操作色</h3>
       <div class="hero-swatch">
@@ -598,31 +565,17 @@
         <div class="sw"><div class="fill" style="background:var(--inverse-bg);color:var(--inverse-fg)">Tip</div><div class="m"><div class="name">inverse</div><div class="val">#18181B / #F4F4F5</div><div class="role">HoverTip 胶囊</div></div></div>
       </div>
 
-      <h3 class="sub">模式色</h3>
+      <h3 class="sub">强调色</h3>
       <div class="modes3">
         <div class="modecol">
-          <div class="head" style="color:var(--direct-text)"><svg class="i"><use href="#plug"/></svg>直连 direct</div>
+          <div class="head" style="color:var(--direct-text)"><svg class="i"><use href="#plug"/></svg>当前 direct</div>
           <div class="row"><i style="background:var(--direct-fill)"></i>fill<span>#0A84FF</span></div>
           <div class="row"><i style="background:var(--direct-text)"></i>text<span>#0063C7</span></div>
           <div class="row"><i style="background:var(--direct-soft)"></i>soft<span>#EAF3FF</span></div>
           <div class="row"><i style="background:var(--direct-solid)"></i>solid<span>#0066CC</span></div>
         </div>
-        <div class="modecol">
-          <div class="head" style="color:var(--route-text)"><svg class="i"><use href="#route"/></svg>路由 route</div>
-          <div class="row"><i style="background:var(--route-fill)"></i>fill<span>#0D9488</span></div>
-          <div class="row"><i style="background:var(--route-text)"></i>text<span>#06726B</span></div>
-          <div class="row"><i style="background:var(--route-soft)"></i>soft<span>#E7F6F4</span></div>
-          <div class="row"><i style="background:var(--route-solid)"></i>solid<span>#0F766E</span></div>
-        </div>
-        <div class="modecol">
-          <div class="head" style="color:var(--stack-text)"><svg class="i"><use href="#layers"/></svg>聚合 stack</div>
-          <div class="row"><i style="background:var(--stack-fill)"></i>fill<span>#7C3AED</span></div>
-          <div class="row"><i style="background:var(--stack-text)"></i>text<span>#6D28D9</span></div>
-          <div class="row"><i style="background:var(--stack-soft)"></i>soft<span>#F2ECFE</span></div>
-          <div class="row"><i style="background:var(--stack-solid)"></i>solid<span>#6D28D9</span></div>
-        </div>
       </div>
-      <p class="note">模式色只出现在：模式 tab、侧栏模式标签、当前生效的供应商卡片、模式切换的主按钮。其他地方不用。</p>
+      <p class="note">强调色只出现在：当前使用的供应商卡片、卡片上的「使用中」徽章、direct 通知条。其他地方不用。</p>
 
       <h3 class="sub">语义色</h3>
       <div class="swatches">
@@ -646,11 +599,11 @@
         <div class="typerow"><span class="tk">metric</span><span class="sz">24 / 32 · 600</span><span style="font-size:24px;line-height:32px;font-weight:600;font-variant-numeric:tabular-nums">$12.48 · 1,284,302</span></div>
         <div class="typerow"><span class="tk">page</span><span class="sz">18 / 26 · 600</span><span style="font-size:18px;line-height:26px;font-weight:600">Claude Code</span></div>
         <div class="typerow"><span class="tk">title</span><span class="sz">16 / 24 · 600</span><span style="font-size:16px;line-height:24px;font-weight:600">编辑供应商</span></div>
-        <div class="typerow"><span class="tk">section</span><span class="sz">15 / 22 · 600</span><span style="font-size:15px;line-height:22px;font-weight:600">路由设置</span></div>
+        <div class="typerow"><span class="tk">section</span><span class="sz">15 / 22 · 600</span><span style="font-size:15px;line-height:22px;font-weight:600">全局出站代理</span></div>
         <div class="typerow"><span class="tk">strong</span><span class="sz">14 / 20 · 500</span><span style="font-size:14px;font-weight:500">Anthropic 官方</span></div>
         <div class="typerow"><span class="tk">body</span><span class="sz">13 / 20 · 400</span><span>切换后 Claude Code 下一次请求就走新的供应商，不用重启终端。</span></div>
         <div class="typerow"><span class="tk">caption</span><span class="sz">12 / 18 · 400</span><span style="font-size:12px;line-height:18px;color:var(--text-2)">api.anthropic.com · 上次使用 3 分钟前</span></div>
-        <div class="typerow"><span class="tk">badge</span><span class="sz">11 / 16 · 500</span><span><span class="chip route">路由</span></span></div>
+        <div class="typerow"><span class="tk">badge</span><span class="sz">11 / 16 · 500</span><span><span class="chip direct">使用中</span></span></div>
         <div class="typerow"><span class="tk">mono</span><span class="sz">12 · ui-monospace</span><span class="mono">sk-ant-•••• · claude-sonnet-5-5 · 200 OK</span></div>
       </div>
     </section>
@@ -666,7 +619,7 @@
           <div class="spacebar"><span class="k">1.5 · 6</span><span class="bar" style="width:6px"></span>按钮内图标间距</div>
           <div class="spacebar"><span class="k">2 · 8</span><span class="bar" style="width:8px"></span>卡片列表间距</div>
           <div class="spacebar"><span class="k">3 · 12</span><span class="bar" style="width:12px"></span>卡片内边距</div>
-          <div class="spacebar"><span class="k">4 · 16</span><span class="bar" style="width:16px"></span>模式行元素间距</div>
+          <div class="spacebar"><span class="k">4 · 16</span><span class="bar" style="width:16px"></span>页头元素间距</div>
           <div class="spacebar"><span class="k">5 · 20</span><span class="bar" style="width:20px"></span>对话框内边距</div>
           <div class="spacebar"><span class="k">6 · 24</span><span class="bar" style="width:24px"></span>页面左右留白</div>
         </div>
@@ -713,8 +666,7 @@
     <section id="buttons">
       <div class="kicker">组件 / 01 · src/components/ui/button.tsx</div>
       <h2>按钮</h2>
-      <p class="lede"><strong>一个视图只有一个实心按钮。</strong>其余用描边 <code>neutral</code>（卡片上的「切换」「设为默认」）或透明 <code>quiet</code>（页头次要操作）。
-        模式色实心按钮只用于「切换到这个模式」。</p>
+      <p class="lede"><strong>一个视图只有一个实心按钮。</strong>其余用描边 <code>neutral</code>（卡片上的「切换」「设为默认」）或透明 <code>quiet</code>（页头次要操作）。</p>
       <div class="stage">
         <div class="spec"><button class="btn solid"><svg class="i"><use href="#plus"/></svg>添加供应商</button><span class="cap">solid · 主题色</span></div>
         <div class="spec"><button class="btn neutral">切换</button><span class="cap">neutral</span></div>
@@ -722,16 +674,10 @@
         <div class="spec"><button class="btn danger">删除</button><span class="cap">destructive</span></div>
         <div class="spec"><button class="btn neutral" disabled>已是默认</button><span class="cap">neutral · disabled</span></div>
       </div>
-      <h3 class="sub">模式色按钮</h3>
-      <div class="stage">
-        <button class="btn direct"><svg class="i"><use href="#plug"/></svg>改为直连</button>
-        <button class="btn route"><svg class="i"><use href="#route"/></svg>改为路由</button>
-        <button class="btn stack"><svg class="i"><use href="#layers"/></svg>改为聚合</button>
-      </div>
       <h3 class="sub">尺寸</h3>
       <div class="stage">
         <div class="spec"><button class="btn solid compact">保存</button><span class="cap">compact · 28 · 卡片 / 对话框</span></div>
-        <div class="spec"><button class="btn solid">保存</button><span class="cap">regular · 32 · 页头 / 模式切换</span></div>
+        <div class="spec"><button class="btn solid">保存</button><span class="cap">regular · 32 · 页头 / 对话框</span></div>
         <div class="spec"><button class="btn icon" data-tip="编辑"><svg class="i"><use href="#pencil"/></svg></button><span class="cap">icon-compact · 28 见方</span></div>
       </div>
     </section>
@@ -740,7 +686,7 @@
     <section id="hovertip">
       <div class="kicker">组件 / 02 · src/components/ui/hover-tip.tsx</div>
       <h2>图标按钮 · HoverTip</h2>
-      <p class="lede"><strong>工具栏、卡片操作、模式行右侧一律用纯图标按钮</strong>，文字放进 HoverTip：鼠标移上去<strong>立即</strong>出现深色胶囊，说清楚这一下会做什么。
+      <p class="lede"><strong>工具栏、卡片操作一律用纯图标按钮</strong>，文字放进 HoverTip：鼠标移上去<strong>立即</strong>出现深色胶囊，说清楚这一下会做什么。
         按钮本身仍要 <code>aria-label</code>。</p>
       <div class="stage app" style="padding-bottom:48px">
         <button class="btn icon" aria-label="编辑" data-tip="编辑供应商"><svg class="i"><use href="#pencil"/></svg></button>
@@ -754,7 +700,7 @@
       </div>
       <div class="grid2" style="margin-top:12px">
         <div class="rule"><h4>规格</h4><p>胶囊圆角 · inverse 底 · 12px / 500 · 内边距 6×12 · 距触发元素 6px · shadow-md · 默认在下方，碰边自动翻转。延迟 0，相邻按钮之间移动不再等待。</p></div>
-        <div class="rule"><h4>写法</h4><p><code>&lt;HoverTip content="切换到路由"&gt;&lt;button aria-label="路由"…/&gt;&lt;/HoverTip&gt;</code>。内容写动作（动词开头）或「名字 + 状态」，一句话，不放链接和按钮。</p></div>
+        <div class="rule"><h4>写法</h4><p><code>&lt;HoverTip content="编辑供应商"&gt;&lt;button aria-label="编辑"…/&gt;&lt;/HoverTip&gt;</code>。内容写动作（动词开头）或「名字 + 状态」，一句话，不放链接和按钮。</p></div>
       </div>
       <p class="note">HoverTip 与 HelpTip 分工：HoverTip 只报「这个按钮是什么 / 做什么」；规则和术语解释放 HelpTip 的「?」说明卡（见通知条一节）。</p>
     </section>
@@ -787,10 +733,10 @@
         <div class="spec"><button class="switch" role="switch" aria-checked="true" aria-label="禁用" disabled><i></i></button><span class="cap">disabled · 45%</span></div>
       </div>
       <div class="stage" style="margin-top:12px;gap:22px">
-        <span class="check on" onclick="this.classList.toggle('on')"><span class="box"><svg class="i"><use href="#check"/></svg></span>同步到 Claude Desktop</span>
+        <span class="check on" onclick="this.classList.toggle('on')"><span class="box"><svg class="i"><use href="#check"/></svg></span>同步到 Codex</span>
         <span class="check" onclick="this.classList.toggle('on')"><span class="box"><svg class="i"><use href="#check"/></svg></span>写入 settings.json</span>
-        <span class="check radio on"><span class="box"></span>按队列</span>
-        <span class="check radio"><span class="box"></span>按延迟</span>
+        <span class="check radio on"><span class="box"></span>跟随 Codex 登录</span>
+        <span class="check radio"><span class="box"></span>ChatGPT 账号</span>
       </div>
     </section>
 
@@ -798,7 +744,7 @@
     <section id="segmented">
       <div class="kicker">组件 / 05 · segmented-control.tsx · page-tabs.tsx</div>
       <h2>分段控件 · 页签</h2>
-      <p class="lede"><strong>分段控件</strong>是按钮组（<code>aria-pressed</code>），用在模式和页内筛选；<strong>下划线页签</strong>换整块内容。两者不混用。分段选中块是白底 + 小阴影，<em>不用</em>主题色。
+      <p class="lede"><strong>分段控件</strong>是按钮组（<code>aria-pressed</code>），用在页内筛选；<strong>下划线页签</strong>换整块内容。两者不混用。分段选中块是白底 + 小阴影，<em>不用</em>主题色。
         <strong>切换有动画：</strong>选中块和页签下划线都是单独的一块，点哪项就 200ms 滑过去（<code>src/components/ui/sliding-indicator.tsx</code>）；页面刚打开时不播，系统开了「减少动态效果」时直接跳。</p>
       <div class="stage">
         <div class="spec">
@@ -830,9 +776,7 @@
       <p class="lede">高 20、全圆角、11px / 500。用 soft 底 + text 色，不用实心彩色块。一张卡片上最多两个。</p>
       <div class="stage">
         <span class="chip outline">官方</span>
-        <span class="chip direct">直连</span>
-        <span class="chip route">路由 · 第 1 位</span>
-        <span class="chip stack">聚合</span>
+        <span class="chip direct">使用中</span>
         <span class="chip success"><span class="d"></span>正常 · 312ms</span>
         <span class="chip warning"><span class="d"></span>额度 8%</span>
         <span class="chip danger"><span class="d"></span>连接失败</span>
@@ -845,21 +789,19 @@
       <div class="kicker">组件 / 07 · providers/ProviderCard.tsx</div>
       <h2>供应商卡片</h2>
       <p class="lede">最小高 58、圆角 10。普通卡片白底细描边，hover 描边加深 + 小阴影，拖拽手柄和右侧操作只在 hover / 聚焦时出现。右侧操作<strong>全部是图标按钮</strong>（主操作 → 排序 → 编辑 → ⋯），名字由 HoverTip 报；
-        有禁用原因时改挂说明卡报原因，不叠两层提示。状态（使用中 / 路由中）是文字不是按钮，照旧写字。
-        <strong>当前生效的那张</strong>用所在模式的 soft 底 + fill 描边。</p>
+        有禁用原因时改挂说明卡报原因，不叠两层提示。状态（使用中）是文字不是按钮，照旧写字。
+        <strong>当前使用的那张</strong>用强调色 soft 底 + fill 描边。</p>
       <div class="stage col app" style="gap:8px;padding-bottom:40px">
-        <div class="pcard t-route">
+        <div class="pcard t-direct">
           <span class="grip"><svg class="i"><use href="#grip"/></svg></span>
           <span class="logo">A</span>
           <div class="body">
-            <div class="name">Anthropic 官方 <span class="chip route">路由 · 第 1 位</span></div>
+            <div class="name">Anthropic 官方</div>
             <div class="sub">api.anthropic.com · claude-sonnet-5-5</div>
           </div>
           <span class="chip success"><span class="d"></span>312ms</span>
-          <span style="display:inline-flex;align-items:center;gap:6px;font-weight:500;padding:0 4px"><span style="width:6px;height:6px;border-radius:50%;background:var(--route-fill)"></span>路由中</span>
+          <span style="display:inline-flex;align-items:center;gap:6px;font-weight:500;padding:0 4px"><span style="width:6px;height:6px;border-radius:50%;background:var(--direct-fill)"></span>使用中</span>
           <div class="acts" style="opacity:1">
-            <button class="btn icon" aria-label="上移" data-tip="上移一位" disabled style="opacity:.45"><svg class="i"><use href="#arrow-up"/></svg></button>
-            <button class="btn icon" aria-label="下移" data-tip="下移一位"><svg class="i"><use href="#arrow-down"/></svg></button>
             <button class="btn icon" aria-label="编辑" data-tip="编辑供应商"><svg class="i"><use href="#pencil"/></svg></button>
             <button class="btn icon" aria-label="更多" data-tip="更多操作"><svg class="i"><use href="#more"/></svg></button>
           </div>
@@ -872,7 +814,7 @@
             <div class="sub">openrouter.ai/api · 上次使用 2 天前</div>
           </div>
           <div class="acts">
-            <button class="btn icon" aria-label="加入队列" data-tip="加入队列"><svg class="i"><use href="#list-plus"/></svg></button>
+            <button class="btn icon" aria-label="切换" data-tip="切换"><svg class="i"><use href="#swap"/></svg></button>
             <button class="btn icon" aria-label="编辑" data-tip="编辑供应商"><svg class="i"><use href="#pencil"/></svg></button>
             <button class="btn icon" aria-label="更多" data-tip="更多操作"><svg class="i"><use href="#more"/></svg></button>
           </div>
@@ -894,13 +836,9 @@
       <h3 class="sub">主操作图标对照（ProviderCardActions.tsx · BUTTON_ICON）</h3>
       <div class="stage" style="gap:18px;padding-bottom:44px">
         <span class="spec"><button class="btn icon" data-tip="切换" aria-label="切换"><svg class="i"><use href="#swap"/></svg></button><span class="cap">切换</span></span>
-        <span class="spec"><button class="btn icon" data-tip="回到直连并使用" aria-label="回到直连并使用"><svg class="i"><use href="#plug"/></svg></button><span class="cap">回到直连并使用</span></span>
-        <span class="spec"><button class="btn icon" data-tip="路由到此" aria-label="路由到此"><svg class="i"><use href="#route"/></svg></button><span class="cap">路由到此</span></span>
-        <span class="spec"><button class="btn icon" data-tip="加入队列" aria-label="加入队列"><svg class="i"><use href="#list-plus"/></svg></button><span class="cap">加入 / 移出队列</span></span>
         <span class="spec"><button class="btn icon" data-tip="添加" aria-label="添加"><svg class="i"><use href="#plus"/></svg></button><span class="cap">添加 / 移除</span></span>
       </div>
       <p class="note">设为默认 = 星标（OpenClaw 选默认模型）、启用 / 停用 = 电源；没对上的 key 回退为圆点图标，新加按钮时在 BUTTON_ICON 里补一条。</p>
-      <p class="note">聚合页的「设为默认」不占主操作位：行上只留名单的添加 / 移除，「设为默认」在 ⋯ 菜单最前面（<code>CardPresentation.menuItems</code>），点了之后的后果用警示色写在名字下面，不能点时列出来并写原因。</p>
       <p class="note">供应商图标框固定白底深色图标，深色主题里也不反色——单色品牌图标继承浅色文字会看不见。</p>
     </section>
 
@@ -910,16 +848,16 @@
       <h2>通知条 · 说明卡</h2>
       <p class="lede">通知条圆角 10、左侧 16px 图标、soft 底，<strong>不用左边框强调色</strong>。只有一行时图标、文字、按钮整行上下居中；有第二行时图标对齐第一行。应用页顶部的通知槽按严重程度从上到下排。</p>
       <div class="stage col" style="gap:8px">
-        <div class="notice danger"><svg class="i"><use href="#circle-alert"/></svg><div class="grow"><div>路由服务没能启动</div><div class="t2">端口 15721 被占用。请求现在直连默认供应商。</div></div><button class="btn neutral compact">重试</button></div>
+        <div class="notice danger"><svg class="i"><use href="#circle-alert"/></svg><div class="grow"><div>没能写入 Codex 配置</div><div class="t2">~/.codex/config.toml 没有写入权限。当前供应商没有变化。</div></div><button class="btn neutral compact">重试</button></div>
         <div class="notice warning"><svg class="i"><use href="#alert"/></svg><div class="grow"><div>有 1 个账号需要重新登录</div><div class="t2">Codex · ChatGPT Plus 的令牌已过期</div></div><button class="btn neutral compact">去登录</button></div>
-        <div class="notice route"><svg class="i"><use href="#route"/></svg><div class="grow"><div>路由生效中 · 按队列</div><div class="t2">第 1 位不可用时自动换下一位</div></div></div>
+        <div class="notice direct"><svg class="i"><use href="#info"/></svg><div class="grow"><div>切换时保留官方登录已开启</div><div class="t2">切到第三方供应商时，auth.json 里的 ChatGPT 登录保持不变</div></div></div>
         <div class="notice neutral one"><svg class="i"><use href="#info"/></svg><div class="grow"><div>Claude Code 需要重开终端才能读到新的环境变量</div></div><button class="btn icon nclose" aria-label="关闭" data-tip="不再提示"><svg class="i"><use href="#x"/></svg></button></div>
       </div>
       <h3 class="sub">说明卡 HelpTip（「?」）</h3>
       <div class="stage" style="padding-bottom:110px;align-items:flex-start">
-        <span style="display:inline-flex;align-items:center;gap:4px">故障转移
-          <span class="helptip"><button aria-label="什么是故障转移"><svg class="i sm"><use href="#help"/></svg></button>
-            <span class="card" role="tooltip"><b>什么是故障转移</b>当前供应商连续失败时，按队列自动换到下一家，恢复后再切回来。</span></span>
+        <span style="display:inline-flex;align-items:center;gap:4px">模型映射
+          <span class="helptip"><button aria-label="什么是模型映射"><svg class="i sm"><use href="#help"/></svg></button>
+            <span class="card" role="tooltip"><b>什么是模型映射</b>为 Codex 的 /model 菜单生成模型目录，菜单里列出的就是这里填的模型。</span></span>
         </span>
         <span class="cap" style="margin-left:24px">悬停 300ms 打开 · 移开 200ms 关闭 · 点一下固定 · 只放规则和术语，不放按钮</span>
       </div>
@@ -943,13 +881,13 @@
           <div class="ov"></div>
           <div class="dialog" role="dialog" aria-label="删除供应商">
             <h4>删除「OpenRouter」？</h4>
-            <p>它在路由队列里的位置也会一起移除。这一步不能撤销。</p>
+            <p>它的配置会从 CC Switch 中删除。这一步不能撤销。</p>
             <div class="ft"><button class="btn neutral compact">取消</button><button class="btn danger compact">删除</button></div>
           </div>
         </div>
       </div>
       <div class="stage" style="margin-top:12px;padding-top:30px">
-        <div class="toast"><svg class="i"><use href="#check-circle"/></svg><span class="grow">已回到直连：Codex 现在直接连接官方。重启 Codex 后生效。</span><button class="tclose" aria-label="关闭"><svg class="i"><use href="#x"/></svg></button></div>
+        <div class="toast"><svg class="i"><use href="#check-circle"/></svg><span class="grow">已切换到 OpenAI Official。重启 Codex 后生效。</span><button class="tclose" aria-label="关闭"><svg class="i"><use href="#x"/></svg></button></div>
         <div class="toast err"><svg class="i"><use href="#circle-alert"/></svg><span class="grow">保存失败：配置文件被占用</span><button class="tact">重试</button><button class="tclose" aria-label="关闭"><svg class="i"><use href="#x"/></svg></button></div>
         <button class="btn neutral" onclick="toast()">弹一个 toast</button>
       </div>
@@ -979,45 +917,17 @@
       <p class="note">数字列右对齐、<code>tabular-nums</code>；状态码、模型名、时间用等宽；额度条 &gt;30% 绿、10–30% 琥珀、&lt;10% 红。</p>
     </section>
 
-    <!-- ================= 模式 ================= -->
-    <section id="modes">
-      <div class="kicker">CC Switch / 01 · providers/mode/ModeTabs.tsx</div>
-      <h2>连接模式</h2>
-      <p class="lede">每个应用有三种连接方式：<strong style="color:var(--direct-text)">直连</strong>（直接写配置文件）、
-        <strong style="color:var(--route-text)">路由</strong>（本地代理按队列 / 故障转移）、<strong style="color:var(--stack-text)">聚合</strong>（多家模型合并）。
-        模式 tab 保留<strong>图标 + 文字</strong>、不挂提示；同一行右侧的故障转移、路由设置是纯图标 + HoverTip。</p>
-      <div class="stage col app" style="padding-bottom:56px">
-        <div class="moderow">
-          <div class="seg modes" role="group" aria-label="连接模式" id="modeSeg">
-            <button aria-pressed="false"><svg class="i sm"><use href="#plug"/></svg>直连</button>
-            <button aria-pressed="true" class="act-route"><svg class="i sm"><use href="#route"/></svg>路由<span class="dot" role="img" aria-label="生效中"></span></button>
-            <button aria-pressed="false"><svg class="i sm"><use href="#layers"/></svg>聚合</button>
-          </div>
-          <span class="helptip" style="margin-left:-8px"><button aria-label="三种模式的区别"><svg class="i sm"><use href="#help"/></svg></button>
-            <span class="card"><b>三种模式的区别</b>直连：直接写入应用配置。<br>路由：经本地代理转发，可故障转移。<br>聚合：把多家的模型合并给一个应用。</span></span>
-          <span class="status">路由生效中 · 按队列 · Anthropic 官方</span>
-          <label data-tip="故障转移"><svg class="i"><use href="#shuffle"/></svg><button class="switch" role="switch" aria-checked="true" aria-label="故障转移" onclick="toggleSwitch(this)"><i></i></button></label>
-          <button class="btn quiet icon lg" aria-label="路由设置" data-tip="路由设置"><svg class="i"><use href="#settings2"/></svg></button>
-        </div>
-      </div>
-      <div class="grid3" style="margin-top:12px">
-        <div class="rule"><h4>看 ≠ 生效</h4><p>白底凸起 = 正在看的那段；模式色文字 + 圆点 = 生效中的那段。两者可以不同。</p></div>
-        <div class="rule"><h4>切换要确认</h4><p>看另一个模式时，底部出现模式色实心按钮「改为路由」，点了才生效。</p></div>
-        <div class="rule"><h4>颜色只在这几处</h4><p>模式 tab、侧栏模式标签、当前卡片、切换按钮。别处出现模式名用中性文字。</p></div>
-      </div>
-    </section>
-
     <!-- ================= 侧栏 ================= -->
     <section id="sidebar">
-      <div class="kicker">CC Switch / 02 · shell/Sidebar.tsx</div>
+      <div class="kicker">CC Switch / 01 · shell/Sidebar.tsx</div>
       <h2>侧栏</h2>
-      <p class="lede">宽 200（收起 72），<code>bg-sidebar</code> 底。行高 28、圆角 6，当前项 <code>bg-selected</code>。应用行右侧的小标签用模式 text 色写当前模式。</p>
+      <p class="lede">宽 200（收起 72），<code>bg-sidebar</code> 底。行高 28、圆角 6，当前项 <code>bg-selected</code>。工具行右侧的小标签用 text-3 写摘要（如今日花费）。</p>
       <div class="stage app">
         <div class="side-demo">
           <div class="gh">应用</div>
-          <div class="row on"><span class="g" style="background:#d97757">C</span>Claude Code<span class="lab" style="color:var(--route-text)">路由</span></div>
-          <div class="row"><span class="g" style="background:#111">X</span>Codex<span class="lab" style="color:var(--direct-text)">直连</span></div>
-          <div class="row"><span class="g" style="background:#4285f4">G</span>Gemini<span class="lab" style="color:var(--stack-text)">聚合</span></div>
+          <div class="row on"><span class="g" style="background:#d97757">C</span>Claude Code</div>
+          <div class="row"><span class="g" style="background:#111">X</span>Codex</div>
+          <div class="row"><span class="g" style="background:#4285f4">G</span>Gemini</div>
           <div class="gh">工具</div>
           <div class="row"><svg class="i"><use href="#chart"/></svg>用量统计<span class="lab" style="color:var(--text-3)">$12.48</span></div>
           <div class="row"><svg class="i"><use href="#settings2"/></svg>设置</div>
@@ -1031,7 +941,7 @@
       <h2>交互原则</h2>
       <div class="rules">
         <div class="rule"><h4>一个主操作</h4><p>每个视图只有一个实心主题色按钮；卡片上一律描边或图标。</p></div>
-        <div class="rule"><h4>图标 + HoverTip</h4><p>重复出现的操作（编辑、复制、删除、设置、模式）只放图标，悬停立即显示操作内容，键盘聚焦同样显示。</p></div>
+        <div class="rule"><h4>图标 + HoverTip</h4><p>重复出现的操作（编辑、复制、删除、设置）只放图标，悬停立即显示操作内容，键盘聚焦同样显示。</p></div>
         <div class="rule"><h4>状态写在原处</h4><p>额度、延迟、需要登录写在卡片副行；后果（丢失、需重启）写在按钮、确认框或 toast，不藏进说明卡。</p></div>
         <div class="rule"><h4>明暗一致</h4><p>所有颜色走 token；浅色 / 深色两套值一一对应，切换时暂停过渡。</p></div>
         <div class="rule"><h4>键盘可达</h4><p>焦点环 2px 主题色；⌘K 打开命令面板；Escape 关闭浮层；禁用按钮用 <code>aria-disabled</code> 保留悬停说明原因。</p></div>
@@ -1045,10 +955,10 @@
       <div class="dd">
         <div class="c do"><div class="lbl"><svg class="i sm"><use href="#check"/></svg>Do</div><p>主题橙只放在能点的东西上：主按钮、开关、勾选、焦点、链接。</p></div>
         <div class="c dont"><div class="lbl"><svg class="i sm"><use href="#x"/></svg>Don't</div><p>用橙色表达「注意 / 警告」状态，或给分段控件选中块、页签下划线上橙色。</p></div>
-        <div class="c do"><div class="lbl"><svg class="i sm"><use href="#check"/></svg>Do</div><p>卡片操作、工具栏用纯图标按钮，配 HoverTip + aria-label；模式 tab 这种「选哪一个」的控件保留文字。</p></div>
+        <div class="c do"><div class="lbl"><svg class="i sm"><use href="#check"/></svg>Do</div><p>卡片操作、工具栏用纯图标按钮，配 HoverTip + aria-label；分段控件这种「选哪一个」的控件保留文字。</p></div>
         <div class="c dont"><div class="lbl"><svg class="i sm"><use href="#x"/></svg>Don't</div><p>图标按钮只靠 <code>title</code> 属性提示——要等一秒多才出现，样式也和系统不一致。</p></div>
-        <div class="c do"><div class="lbl"><svg class="i sm"><use href="#check"/></svg>Do</div><p>当前生效的供应商卡片用模式 soft 底 + fill 描边。</p></div>
-        <div class="c dont"><div class="lbl"><svg class="i sm"><use href="#x"/></svg>Don't</div><p>给当前卡片再加主题色描边或实心彩色块，和模式色打架。</p></div>
+        <div class="c do"><div class="lbl"><svg class="i sm"><use href="#check"/></svg>Do</div><p>当前使用的供应商卡片用强调色 soft 底 + fill 描边。</p></div>
+        <div class="c dont"><div class="lbl"><svg class="i sm"><use href="#x"/></svg>Don't</div><p>给当前卡片再加主题色描边或实心彩色块，和强调色打架。</p></div>
         <div class="c do"><div class="lbl"><svg class="i sm"><use href="#check"/></svg>Do</div><p>数字列右对齐、等宽数字；模型名、状态码、密钥用 mono。</p></div>
         <div class="c dont"><div class="lbl"><svg class="i sm"><use href="#x"/></svg>Don't</div><p>新增 token 以外的颜色或字号（<code>text-[15px]</code>、<code>#ff8800</code>）。</p></div>
       </div>
@@ -1101,17 +1011,6 @@
     requestAnimationFrame(() => thumb.classList.add('anim'));
     if (window.ResizeObserver) new ResizeObserver(move).observe(seg);
   });
-
-  // 模式 tab：点 = 查看；生效的仍是路由
-  const modeSeg = document.getElementById('modeSeg');
-  modeSeg.querySelectorAll('button').forEach((b) => b.addEventListener('click', () => {
-    modeSeg.querySelectorAll('button').forEach((x) => {
-      const on = x === b;
-      x.setAttribute('aria-pressed', on);
-      x.querySelector('svg').style.strokeWidth = on || x.classList.contains('act-route') ? 2 : '';
-      x.style.fontWeight = on || x.classList.contains('act-route') ? 600 : '';
-    });
-  }));
 
   // 下划线页签
   document.querySelectorAll('.ptabs').forEach((tabs) => {

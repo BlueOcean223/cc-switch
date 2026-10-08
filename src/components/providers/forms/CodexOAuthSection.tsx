@@ -2,7 +2,6 @@ import React from "react";
 import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
-import { Switch } from "@/components/ui/switch";
 import {
   Select,
   SelectContent,
@@ -47,7 +46,7 @@ interface CodexOAuthSectionProps {
   onManageAccounts?: () => void;
   /** 账号选择字段标题；官方供应商可使用“登录方式” */
   selectionLabel?: string;
-  /** 空选择项文案；默认表示使用托管认证的默认账号 */
+  /** 空选择项文案；默认「跟随 Codex 登录」（不绑定账号就用 Codex 自己的登录） */
   noneOptionLabel?: string;
   /** 空选择项的补充说明；仅由明确知道其含义的调用方提供 */
   noneOptionDescription?: string;
@@ -55,23 +54,15 @@ interface CodexOAuthSectionProps {
   allowUnboundSelection?: boolean;
   /** 不绑定选项不依赖托管账号状态，可在状态加载失败时继续选择 */
   allowUnboundSelectionWithoutStatus?: boolean;
-  /** 固定展示原生 Codex 当前登录，不允许改绑 */
-  nativeLoginOnly?: boolean;
   /** 新建官方卡时不预选登录方式，要求用户明确选择 */
   requireExplicitSelection?: boolean;
-  /** 是否开启 Codex FAST mode */
-  fastModeEnabled?: boolean;
-  /** FAST mode 切换回调 */
-  onFastModeChange?: (enabled: boolean) => void;
-  /** 授权中心里最后一组的「?」向上弹 */
-  helpSide?: "top" | "bottom";
 }
 
 /**
- * Codex OAuth 认证区块
+ * ChatGPT 账号区块
  *
  * 通过 OpenAI Device Code 流程登录 ChatGPT Plus/Pro 账号，
- * 用于将 Claude Code 请求反代到 Codex 后端 API。
+ * Codex 官方卡绑定后，切换时把这个账号的登录写进 Codex 的 auth.json。
  */
 export const CodexOAuthSection: React.FC<CodexOAuthSectionProps> = ({
   className,
@@ -87,17 +78,12 @@ export const CodexOAuthSection: React.FC<CodexOAuthSectionProps> = ({
   noneOptionDescription,
   allowUnboundSelection = true,
   allowUnboundSelectionWithoutStatus = false,
-  nativeLoginOnly = false,
   requireExplicitSelection = false,
-  fastModeEnabled = false,
-  onFastModeChange,
-  helpSide,
 }) => {
   const { t, i18n } = useTranslation();
 
   const {
     accounts,
-    defaultAccountId,
     isStatusSuccess,
     isStatusError,
     hasAnyAccount,
@@ -107,17 +93,15 @@ export const CodexOAuthSection: React.FC<CodexOAuthSectionProps> = ({
     isPolling,
     isAddingAccount,
     isRemovingAccount,
-    isSettingDefaultAccount,
     addAccount,
     reauthAccount,
     retryAuth,
     removeAccount,
-    setDefaultAccount,
     cancelAuth,
     logout,
     refetchStatus,
   } = useCodexOauth();
-  const accountUsers = useManagedAccountUsers("codex_oauth", defaultAccountId);
+  const accountUsers = useManagedAccountUsers("codex_oauth");
   const [removeTarget, setRemoveTarget] =
     React.useState<ManagedAccountRemoveTarget | null>(null);
 
@@ -185,6 +169,8 @@ export const CodexOAuthSection: React.FC<CodexOAuthSectionProps> = ({
     "codexOauth.officialAccountPlaceholder",
     "请选择登录方式",
   );
+  const unboundLabel =
+    noneOptionLabel ?? t("codexOauth.noneOptionLabel", "跟随 Codex 登录");
   const accountSelectValue =
     requireExplicitSelection && !selectedAccountId
       ? "__official_account_required__"
@@ -203,7 +189,7 @@ export const CodexOAuthSection: React.FC<CodexOAuthSectionProps> = ({
             : t("codex.accountLoading", "正在加载账号…")
         : undefined) ||
       (allowUnboundSelection
-        ? (noneOptionLabel ?? t("codexOauth.useDefaultAccount", "使用默认账号"))
+        ? unboundLabel
         : t("codexOauth.selectAccountPlaceholder", "选择一个 ChatGPT 账号"));
 
   const accountSelect = (isStatusSuccess ||
@@ -217,11 +203,7 @@ export const CodexOAuthSection: React.FC<CodexOAuthSectionProps> = ({
               ? t("codexOauth.accountToUse", "使用的账号")
               : t("codexOauth.selectAccount", "选择账号"))}
         </Label>
-        <Select
-          value={accountSelectValue}
-          onValueChange={handleAccountSelect}
-          disabled={nativeLoginOnly}
-        >
+        <Select value={accountSelectValue} onValueChange={handleAccountSelect}>
           <SelectTrigger
             className="h-10 min-w-0 rounded-lg bg-surface px-3 shadow-sm"
             aria-label={
@@ -250,38 +232,37 @@ export const CodexOAuthSection: React.FC<CodexOAuthSectionProps> = ({
                 <span className="text-fg-2">{accountChoicePlaceholder}</span>
               </SelectItem>
             )}
-            {!nativeLoginOnly &&
-              accounts.map((account, index) => (
-                <React.Fragment key={account.id}>
-                  <SelectItem
-                    value={account.id}
-                    className="min-w-0 overflow-hidden py-2 pl-6 [&>span:last-child]:min-w-0 [&>span:last-child]:flex-1 [&>span:last-child]:overflow-hidden"
-                  >
-                    <div className="flex min-w-0 items-center gap-2">
-                      <span aria-hidden className="h-4 w-4 shrink-0" />
-                      <span
-                        className="min-w-0 truncate text-sm font-medium leading-5"
-                        title={account.login}
-                      >
-                        {account.login}
+            {accounts.map((account, index) => (
+              <React.Fragment key={account.id}>
+                <SelectItem
+                  value={account.id}
+                  className="min-w-0 overflow-hidden py-2 pl-6 [&>span:last-child]:min-w-0 [&>span:last-child]:flex-1 [&>span:last-child]:overflow-hidden"
+                >
+                  <div className="flex min-w-0 items-center gap-2">
+                    <span aria-hidden className="h-4 w-4 shrink-0" />
+                    <span
+                      className="min-w-0 truncate text-sm font-medium leading-5"
+                      title={account.login}
+                    >
+                      {account.login}
+                    </span>
+                    {account.reauth_required && (
+                      <span className="ml-1 inline-flex shrink-0 items-center gap-1 text-xs text-warning-text">
+                        <AlertTriangle className="h-3 w-3" />
+                        {t("codexOauth.reauthBadge", "需要重新登录")}
                       </span>
-                      {account.reauth_required && (
-                        <span className="ml-1 inline-flex shrink-0 items-center gap-1 text-xs text-warning-text">
-                          <AlertTriangle className="h-3 w-3" />
-                          {t("codexOauth.reauthBadge", "需要重新登录")}
-                        </span>
-                      )}
-                    </div>
-                  </SelectItem>
-                  {(index < accounts.length - 1 || onManageAccounts) && (
-                    <SelectSeparator
-                      data-account-divider="true"
-                      className="mx-2 my-0 bg-border/60"
-                    />
-                  )}
-                </React.Fragment>
-              ))}
-            {!nativeLoginOnly && onManageAccounts && (
+                    )}
+                  </div>
+                </SelectItem>
+                {(index < accounts.length - 1 || onManageAccounts) && (
+                  <SelectSeparator
+                    data-account-divider="true"
+                    className="mx-2 my-0 bg-border/60"
+                  />
+                )}
+              </React.Fragment>
+            ))}
+            {onManageAccounts && (
               <SelectItem value="__manage_accounts__" className="py-2 pl-6">
                 <div className="flex items-center gap-2">
                   <Plus className="h-4 w-4 shrink-0 text-fg-2" />
@@ -295,7 +276,6 @@ export const CodexOAuthSection: React.FC<CodexOAuthSectionProps> = ({
               </SelectItem>
             )}
             {allowUnboundSelection &&
-              !nativeLoginOnly &&
               (accounts.length > 0 || onManageAccounts) && (
                 <SelectSeparator className="my-1.5 bg-border" />
               )}
@@ -307,8 +287,7 @@ export const CodexOAuthSection: React.FC<CodexOAuthSectionProps> = ({
                 <div className="flex min-w-0 items-center gap-2">
                   <span aria-hidden className="h-4 w-4 shrink-0" />
                   <span className="shrink-0 text-sm font-medium leading-5">
-                    {noneOptionLabel ??
-                      t("codexOauth.useDefaultAccount", "使用默认账号")}
+                    {unboundLabel}
                   </span>
                   {noneOptionDescription && (
                     <span className="min-w-0 truncate text-sm leading-5 text-fg-2">
@@ -384,27 +363,6 @@ export const CodexOAuthSection: React.FC<CodexOAuthSectionProps> = ({
             </div>
           </div>
         )}
-
-        {onFastModeChange && (
-          <div className="flex items-center justify-between rounded-md border bg-subtle p-3">
-            <div className="space-y-1 pr-4">
-              <Label className="text-sm font-medium">
-                {t("codexOauth.fastMode", "FAST mode")}
-              </Label>
-              <p className="text-xs text-fg-2">
-                {t("codexOauth.fastModeDescription", {
-                  defaultValue:
-                    'Send service_tier="priority" for lower latency. Turn it off if the ChatGPT Codex backend rejects the parameter.',
-                })}
-              </p>
-            </div>
-            <Switch
-              checked={fastModeEnabled}
-              onCheckedChange={onFastModeChange}
-              aria-label={t("codexOauth.fastMode", "FAST mode")}
-            />
-          </div>
-        )}
       </div>
     );
   }
@@ -430,7 +388,6 @@ export const CodexOAuthSection: React.FC<CodexOAuthSectionProps> = ({
         : date
           ? [t("authCenter.signedInOn", { defaultValue: "{{date}}登录", date })]
           : [],
-      isDefault: defaultAccountId === account.id,
       needsReauth,
       users: accountUsers([account.id]),
       quota:
@@ -450,9 +407,8 @@ export const CodexOAuthSection: React.FC<CodexOAuthSectionProps> = ({
       iconName="openai"
       help={t("authCenter.group.chatgptHelp", {
         defaultValue:
-          "用于 Claude Code、Claude Desktop 的 ChatGPT 预设，以及 Codex 官方登录绑定。没指定账号的供应商用「默认」账号。",
+          "Codex 官方卡可以绑定这里的账号，切换时把账号的登录写进 Codex。",
       })}
-      helpSide={helpSide}
       accounts={rows}
       status={isStatusError ? "error" : isStatusSuccess ? "ready" : "loading"}
       statusErrorText={t("codexOauth.statusLoadFailed", {
@@ -465,10 +421,7 @@ export const CodexOAuthSection: React.FC<CodexOAuthSectionProps> = ({
       })}
       loginLabel={t("codexOauth.loginWithChatGPT", "使用 ChatGPT 登录")}
       onAdd={addAccount}
-      canReauth
       onReauth={reauthAccount}
-      onSetDefault={setDefaultAccount}
-      settingDefault={isSettingDefaultAccount}
       onRemove={(accountId, login) =>
         setRemoveTarget({ kind: "one", accountId, login })
       }
@@ -501,7 +454,6 @@ export const CodexOAuthSection: React.FC<CodexOAuthSectionProps> = ({
               )
             : []
         }
-        othersRemain={accounts.length > 1}
         pending={isRemovingAccount}
         onConfirm={confirmRemove}
         onCancel={() => setRemoveTarget(null)}

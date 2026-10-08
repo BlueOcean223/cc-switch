@@ -1,0 +1,33 @@
+{
+  "version": "5.0.0",
+  "items": [
+    {
+      "type": "removed",
+      "zh": "移除本地代理、聚合与故障转移，切换供应商只改各工具的配置文件",
+      "zh-TW": "移除本機代理、聚合與故障轉移，切換供應商只改各工具的設定檔",
+      "en": "Removed the local proxy, Aggregation and failover; switching now only rewrites each tool's config",
+      "ja": "ローカルプロキシ・集約・フェイルオーバーを廃止。切り替えは各ツールの設定ファイルのみ変更"
+    },
+    {
+      "type": "removed",
+      "zh": "移除 Claude Desktop、Copilot 和 xAI 登录",
+      "zh-TW": "移除 Claude Desktop、Copilot 和 xAI 登入",
+      "en": "Removed Claude Desktop support and GitHub Copilot / xAI sign-in",
+      "ja": "Claude Desktop 対応と Copilot・xAI のサインインを削除"
+    },
+    {
+      "type": "improve",
+      "zh": "应用内更新改从本仓库的 GitHub Releases 获取",
+      "zh-TW": "應用內更新改從本倉庫的 GitHub Releases 取得",
+      "en": "In-app updates now come from this repository's GitHub Releases",
+      "ja": "アプリ内アップデートはこのリポジトリの GitHub Releases から取得"
+    },
+    {
+      "type": "new",
+      "zh": "升级后从会话日志重建一次用量，按请求当时的价格计费",
+      "zh-TW": "升級後從工作階段記錄重建一次用量，按請求當時的價格計費",
+      "en": "Usage is rebuilt once from session logs after upgrading, priced at the rate each request was made",
+      "ja": "アップグレード後に使用量をセッションログから再構築し、リクエスト時点の価格で計算"
+    }
+  ]
+}

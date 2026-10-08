@@ -1,14 +1,11 @@
+import { parse as parseToml } from "smol-toml";
 import type { AppId } from "@/lib/api";
 import type { Provider } from "@/types";
-import { isOAuthProviderType } from "@/config/constants";
 import { resolveManagedAccountId } from "@/lib/authBinding";
 import {
   extractCodexBaseUrl,
   extractCodexExperimentalBearerToken,
-  extractCodexWireApi,
   hasExplicitNonOpenAiCodexModelProvider,
-  isCodexAnthropicWireApi,
-  isCodexChatWireApi,
 } from "@/utils/providerConfigUtils";
 
 export const CODEX_OFFICIAL_PROVIDER_ID = "codex-official";
@@ -98,88 +95,154 @@ export function isOfficialAccount(
   );
 }
 
-/**
- * 能进故障转移队列（对应后端 `provider_router::provider_supports_failover`）：
- * Codex 官方账号卡靠客户端自己的登录走路由，不能和别家轮换。
- */
-export function supportsFailover(
-  appId: AppId,
-  provider: Pick<Provider, "id" | "category" | "meta" | "settingsConfig">,
-): boolean {
-  return !supportsOfficialProxyTakeover(appId, provider);
-}
+/** 上游这几种托管登录的凭据由本地代理按请求注入，没有路由就用不了。 */
+const MANAGED_OAUTH_PROVIDER_TYPES = [
+  "github_copilot",
+  "codex_oauth",
+  "xai_oauth",
+] as const;
 
-/** Keep the UI capability rule aligned with the Rust takeover policy. */
-export function supportsOfficialProxyTakeover(
-  appId: AppId,
-  provider: Pick<Provider, "id" | "category" | "meta" | "settingsConfig">,
-): boolean {
-  const identity = resolveCodexOfficialIdentity(appId, provider);
-  if (!identity || identity === "api_key") return false;
-  if (
-    provider.id === CODEX_OFFICIAL_PROVIDER_ID ||
-    identity === "managed_account"
-  ) {
-    return true;
+const CHAT_OR_ANTHROPIC_WIRE_APIS = new Set([
+  "chat",
+  "chat_completions",
+  "chat-completions",
+  "openai_chat",
+  "openai-chat",
+  "openai_chat_completions",
+  "anthropic",
+  "anthropic_messages",
+  "anthropic-messages",
+  "messages",
+  "claude",
+]);
+
+const asTable = (value: unknown): Record<string, unknown> | undefined =>
+  value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+
+function parseConfig(config: unknown): Record<string, unknown> | undefined {
+  if (typeof config !== "string") return undefined;
+  try {
+    return asTable(parseToml(config));
+  } catch {
+    return undefined;
   }
-  return true;
+}
+
+/** Codex 配置里生效 provider 的 `wire_api`，没有时取顶层的。 */
+function codexWireApi(config: unknown): string | undefined {
+  const root = parseConfig(config);
+  if (!root) return undefined;
+  const active = root.model_provider;
+  const table =
+    typeof active === "string"
+      ? asTable(asTable(root.model_providers)?.[active])
+      : undefined;
+  const value = table?.wire_api ?? root.wire_api;
+  return typeof value === "string" ? value : undefined;
+}
+
+/** Grok Build 选中模型表的 `api_backend`（不写时 Grok 用 chat_completions）。 */
+function grokApiBackend(config: unknown): string | undefined {
+  const root = parseConfig(config);
+  const selected = asTable(root?.models)?.default;
+  if (typeof selected !== "string") return undefined;
+  const table = asTable(asTable(root?.model)?.[selected.trim()]);
+  // 和后端 `extract_model_config` 一样，缺 model 或 base_url 的表读不出来
+  if (typeof table?.model !== "string" || typeof table.base_url !== "string") {
+    return undefined;
+  }
+  const backend = table.api_backend;
+  return typeof backend === "string" && backend.trim()
+    ? backend.trim()
+    : "chat_completions";
+}
+
+/** 上游代理要转换成别的协议的 Claude 接口格式 */
+const CLAUDE_TRANSFORMED_FORMATS = new Set([
+  "openai_chat",
+  "openai_responses",
+  "gemini_native",
+]);
+
+/**
+ * Claude 卡的接口格式要不要上游代理转换，优先级照上游代理：`meta.apiFormat` > 旧版写在
+ * settings 里的 `api_format` > 旧版的 `openrouter_compat_mode`（开着就是 openai_chat），
+ * 认不出的值按 anthropic。
+ */
+function claudeNeedsTransform(
+  metaFormat: string | undefined,
+  settings: Record<string, unknown> | undefined,
+): boolean {
+  if (metaFormat !== undefined)
+    return CLAUDE_TRANSFORMED_FORMATS.has(metaFormat);
+  const legacyFormat = settings?.api_format;
+  if (typeof legacyFormat === "string") {
+    return CLAUDE_TRANSFORMED_FORMATS.has(legacyFormat);
+  }
+  const compat = settings?.openrouter_compat_mode;
+  if (typeof compat === "boolean") return compat;
+  if (typeof compat === "number") return Math.trunc(compat) !== 0;
+  if (typeof compat === "string") {
+    return ["true", "1"].includes(compat.trim().toLowerCase());
+  }
+  return false;
 }
 
 /**
- * 供应商在指定应用下是否必须开启路由接管才能正常工作（badge 与切换警告共用的权威谓词）。
- *
- * 权威信号是 `providerType`：托管 OAuth 供应商的凭据由本地代理按请求注入
- * （见 `forwarder.rs`，注入发生在转发路径上，请求必须经过代理 = 接管当前应用），
- * 且后端按 providerType 强制托管认证/格式而**无视 apiFormat**。因此 apiFormat
- * 只是可能被用户改动或旧数据缺省的次要信号，OAuth 供应商一律以 providerType 判定。
- *
- * - Claude Desktop 的普通供应商按 direct/proxy 模式判定；托管 OAuth 没有
- *   direct 逃生口（后端同样拒绝），始终需要本地路由。
- * - claude / codex / grokbuild 的托管 OAuth 同样恒需路由；非 OAuth 则按
- *   各自原生格式及完整 URL 模式判断是否需要本地处理。
+ * 这个供应商只能经过上游 CC Switch 已移除的本地路由使用（托管登录、需要格式转换的接口、
+ * 完整 URL），切换过去客户端用不了。和后端 `legacy_routing::requires_removed_routing`
+ * 是同一条规则，改一边要改另一边。
  */
-export function providerNeedsRouting(
+export function requiresRemovedRouting(
   appId: AppId,
-  provider: Provider,
+  provider: Pick<Provider, "id" | "category" | "meta" | "settingsConfig">,
 ): boolean {
   if (isOfficialAccount(appId, provider)) return false;
+  const meta = provider.meta;
+  const managedOAuth = MANAGED_OAUTH_PROVIDER_TYPES.some(
+    (kind) => kind === meta?.providerType,
+  );
+  const fullUrl = meta?.isFullUrl === true;
+  const apiFormat =
+    typeof meta?.apiFormat === "string" && meta.apiFormat.trim()
+      ? meta.apiFormat.trim()
+      : undefined;
+  const config = (provider.settingsConfig as Record<string, unknown>)?.config;
 
-  const isManagedOAuth = isOAuthProviderType(provider.meta?.providerType);
-
-  // Desktop 普通供应商由表单模式决定；托管 OAuth 的 token 只能由代理注入。
-  if (appId === "claude-desktop") {
-    return isManagedOAuth || provider.meta?.claudeDesktopMode === "proxy";
+  switch (appId) {
+    case "claude":
+      return (
+        managedOAuth ||
+        fullUrl ||
+        claudeNeedsTransform(
+          apiFormat,
+          provider.settingsConfig as Record<string, unknown>,
+        )
+      );
+    case "codex": {
+      if (managedOAuth || fullUrl) return true;
+      if (apiFormat === "openai_chat" || apiFormat === "anthropic") return true;
+      const wireApi = codexWireApi(config);
+      return (
+        wireApi !== undefined &&
+        CHAT_OR_ANTHROPIC_WIRE_APIS.has(wireApi.trim().toLowerCase())
+      );
+    }
+    case "grokbuild": {
+      if (managedOAuth || fullUrl) return true;
+      // Grok Build 自己能接 Chat Completions 和 Anthropic Messages：表里的 `api_backend`
+      // 改成对应的接口后就能直连。
+      const wanted =
+        apiFormat === "openai_chat"
+          ? "chat_completions"
+          : apiFormat === "anthropic"
+            ? "messages"
+            : undefined;
+      return wanted !== undefined && grokApiBackend(config) !== wanted;
+    }
+    default:
+      return false;
   }
-
-  if (appId !== "claude" && appId !== "codex" && appId !== "grokbuild") {
-    return false;
-  }
-
-  // 托管 OAuth：凭据由代理注入，与 apiFormat 无关，必须接管。
-  if (isManagedOAuth) return true;
-
-  if (appId === "claude") {
-    const fmt = provider.meta?.apiFormat;
-    // Claude 原生是 Anthropic 格式，任何非 anthropic 格式都需要代理转换。
-    return provider.meta?.isFullUrl === true || (!!fmt && fmt !== "anthropic");
-  }
-
-  if (appId === "codex" || appId === "grokbuild") {
-    const fmt = provider.meta?.apiFormat;
-    // Codex 原生是 Responses，仅 Chat / Anthropic 需要转换（Responses 直连）。
-    if (
-      provider.meta?.isFullUrl === true ||
-      fmt === "openai_chat" ||
-      fmt === "anthropic"
-    )
-      return true;
-    const config = (provider.settingsConfig as Record<string, unknown>)?.config;
-    return (
-      typeof config === "string" &&
-      (isCodexChatWireApi(extractCodexWireApi(config)) ||
-        isCodexAnthropicWireApi(extractCodexWireApi(config)))
-    );
-  }
-
-  return false;
 }

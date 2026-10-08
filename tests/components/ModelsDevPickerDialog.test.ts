@@ -7,6 +7,7 @@ import {
 import { normalizeModelsDevModelId } from "@/lib/modelsDev";
 import {
   getCommonModelKeys,
+  longContextTiers,
   resolveModelsDevSelection,
   toModelPricing,
 } from "@/lib/modelsDevPricing";
@@ -135,6 +136,9 @@ describe("flattenModels", () => {
     expect(newModel.normalizedId).toBe("new-model");
     expect(newModel.cacheRead).toBe(0.3);
     expect(newModel.cacheWrite).toBe(3.75);
+
+    // 没给缓存写入价时按输入价算
+    expect(entries[2].cacheWrite).toBe(1);
 
     // 没有 name 的 provider 用 id 兜底；缺失的成本字段补 0
     const bareModel = entries[1];
@@ -324,5 +328,201 @@ describe("flattenModels", () => {
       displayName: "GPT-5 Official",
       inputCostPerMillion: "1",
     });
+  });
+});
+
+describe("longContextTiers", () => {
+  it("turns context tiers into multipliers", () => {
+    // gpt-5.5 on models.dev: prompts over 272K bill input x2, output x1.5
+    expect(
+      longContextTiers({
+        input: 5,
+        output: 30,
+        cache_read: 0.5,
+        tiers: [
+          {
+            input: 10,
+            output: 45,
+            cache_read: 1,
+            tier: { type: "context", size: 272000 },
+          },
+        ],
+      }),
+    ).toEqual([
+      {
+        thresholdTokens: 272000,
+        inputMultiplier: "2",
+        outputMultiplier: "1.5",
+      },
+    ]);
+  });
+
+  it("keeps every tier, lowest threshold first", () => {
+    // qwen3-max: x2 above 32K, x2.5 above 128K
+    expect(
+      longContextTiers({
+        input: 1.2,
+        output: 6,
+        tiers: [
+          { input: 3, output: 15, tier: { type: "context", size: 128000 } },
+          { input: 2.4, output: 12, tier: { type: "context", size: 32000 } },
+        ],
+      }),
+    ).toEqual([
+      { thresholdTokens: 32000, inputMultiplier: "2", outputMultiplier: "2" },
+      {
+        thresholdTokens: 128000,
+        inputMultiplier: "2.5",
+        outputMultiplier: "2.5",
+      },
+    ]);
+  });
+
+  it("returns an empty list when models.dev has no price-changing tier", () => {
+    expect(longContextTiers({ input: 1, output: 2 })).toEqual([]);
+    expect(
+      longContextTiers({
+        input: 1,
+        output: 2,
+        tiers: [
+          { input: 1, output: 2, tier: { type: "context", size: 200000 } },
+        ],
+      }),
+    ).toEqual([]);
+  });
+
+  it("keeps the first tier of a repeated threshold", () => {
+    expect(
+      longContextTiers({
+        input: 1,
+        output: 2,
+        tiers: [
+          { input: 2, output: 3, tier: { type: "context", size: 200000 } },
+          { input: 4, output: 6, tier: { type: "context", size: 200000 } },
+        ],
+      }),
+    ).toEqual([
+      {
+        thresholdTokens: 200000,
+        inputMultiplier: "2",
+        outputMultiplier: "1.5",
+      },
+    ]);
+  });
+
+  it("drops only the tier that has no input price", () => {
+    expect(
+      longContextTiers({
+        input: 1,
+        output: 2,
+        tiers: [
+          { output: 3, tier: { type: "context", size: 128000 } },
+          { input: 2, output: 4, tier: { type: "context", size: 200000 } },
+        ],
+      }),
+    ).toEqual([
+      { thresholdTokens: 200000, inputMultiplier: "2", outputMultiplier: "2" },
+    ]);
+    // 基础输入价是 0：一档都算不出倍率，保留现有档位
+    expect(
+      longContextTiers({
+        input: 0,
+        output: 2,
+        tiers: [
+          { input: 0, output: 4, tier: { type: "context", size: 200000 } },
+        ],
+      }),
+    ).toBeUndefined();
+  });
+
+  it("prices a missing tier cache write like the tier input", () => {
+    // xAI on models.dev: no cache_write at either level
+    expect(
+      longContextTiers({
+        input: 2,
+        output: 6,
+        cache_read: 0.3,
+        tiers: [
+          {
+            input: 4,
+            output: 12,
+            cache_read: 0.6,
+            tier: { type: "context", size: 200000 },
+          },
+        ],
+      }),
+    ).toEqual([
+      { thresholdTokens: 200000, inputMultiplier: "2", outputMultiplier: "2" },
+    ]);
+  });
+
+  it("skips models with a tier one input-side multiplier cannot express", () => {
+    // a missing middle tier would misprice prompts above it
+    expect(
+      longContextTiers({
+        input: 1,
+        output: 4,
+        cache_read: 0.2,
+        tiers: [
+          {
+            input: 2,
+            output: 8,
+            cache_read: 0.4,
+            tier: { type: "context", size: 32000 },
+          },
+          {
+            input: 3,
+            output: 12,
+            cache_read: 0.4,
+            tier: { type: "context", size: 128000 },
+          },
+        ],
+      }),
+    ).toBeUndefined();
+    expect(
+      longContextTiers({
+        input: 0.1,
+        output: 0.4,
+        cache_read: 0.02,
+        tiers: [
+          {
+            input: 0.2,
+            output: 0.8,
+            cache_read: 0.2,
+            tier: { type: "context", size: 128000 },
+          },
+        ],
+      }),
+    ).toBeUndefined();
+  });
+
+  it("is passed to the synced pricing", () => {
+    const [entry] = flattenModels({
+      google: {
+        models: {
+          "gemini-2.5-pro": {
+            name: "Gemini 2.5 Pro",
+            cost: {
+              input: 1.25,
+              output: 10,
+              tiers: [
+                {
+                  input: 2.5,
+                  output: 15,
+                  tier: { type: "context", size: 200000 },
+                },
+              ],
+            },
+          },
+        },
+      },
+    });
+    expect(toModelPricing([entry])[0].longContextTiers).toEqual([
+      {
+        thresholdTokens: 200000,
+        inputMultiplier: "2",
+        outputMultiplier: "1.5",
+      },
+    ]);
   });
 });

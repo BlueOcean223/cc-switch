@@ -131,7 +131,7 @@ export function AppConfigSection({
 
   const blockTitle = (app: DirectoryAppId) => (
     <span className="flex items-center gap-2">
-      <AppGlyph app={app} size={16} badgeClassName="bg-app" />
+      <AppGlyph app={app} size={16} />
       {APP_DISPLAY_NAME[app]}
     </span>
   );

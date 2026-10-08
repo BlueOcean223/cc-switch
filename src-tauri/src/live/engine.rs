@@ -24,7 +24,7 @@ use super::patch::{LivePatch, LiveWriteError};
 
 /// 这台设备自己的状态目录：`live-state.json` 和首写备份都放在这里。
 ///
-/// 路径固定为 `get_home_dir()/.cc-switch`，和 `settings.json` 一样不跟随配置目录
+/// 路径是 `config::get_device_dir()`，和 `settings.json` 一样不跟随配置目录
 /// 覆盖：覆盖目录可能指向网盘同步目录，而写前意图和备份都是这台设备的事实。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DeviceStore {
@@ -33,7 +33,7 @@ pub struct DeviceStore {
 
 impl DeviceStore {
     pub fn for_device() -> Self {
-        Self::at(crate::config::get_home_dir().join(".cc-switch"))
+        Self::at(crate::config::get_device_dir())
     }
 
     pub fn at(root: impl Into<PathBuf>) -> Self {
@@ -108,7 +108,6 @@ pub struct Planned {
     pub file: LiveFile,
     /// 写前内容的 hash，`None` 表示文件不存在。
     pub pre: Option<String>,
-    pre_bytes: Option<Vec<u8>>,
     /// 写后内容的 hash；`None` 表示删掉这个文件。
     pub planned: Option<String>,
     bytes: Option<Vec<u8>>,
@@ -117,10 +116,6 @@ pub struct Planned {
 impl Planned {
     pub fn is_noop(&self) -> bool {
         self.pre == self.planned
-    }
-
-    pub fn pre_bytes(&self) -> Option<&[u8]> {
-        self.pre_bytes.as_deref()
     }
 }
 
@@ -139,7 +134,6 @@ pub(crate) fn plan_from(
     Ok(Planned {
         file: file.clone(),
         pre: digest(pre_bytes.as_deref()),
-        pre_bytes,
         planned: digest(bytes.as_deref()),
         bytes,
     })

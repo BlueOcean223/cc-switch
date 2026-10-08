@@ -10,6 +10,7 @@
 import { createUsageScript } from "@/types";
 import { TEMPLATE_TYPES } from "@/config/constants";
 import { extractCodexBaseUrl } from "@/utils/providerConfigUtils";
+import { piProviderBaseUrl } from "@/config/piProviderPresets";
 
 export interface CodingPlanProviderEntry {
   /** 与后端 QuotaTier 的 `codingPlanProvider` 取值对齐 */
@@ -28,8 +29,27 @@ export interface CodingPlanProviderEntry {
   pattern: RegExp;
 }
 
+/**
+ * MiniMax 的 base_url。按 host 标签边界匹配（同后端 codex_url_host_matches_any），
+ * 不认 api.minimax.cn.example.com 这类伪造后缀或出现在路径里的域名。
+ */
+export const MINIMAX_BASE_URL_PATTERN =
+  /^(?:https?:\/\/)?(?:[^/?#@]*@)?(?:[\w-]+\.)*api\.(?:minimaxi\.com|minimax\.(?:io|cn))(?=[:/?#]|$)/i;
+
+/**
+ * MiniMax 按量计费的 Key 以 `sk-api-` 开头，没有 Token Plan，只能查账户余额
+ * （官方 CLI 同样按前缀区分）。与后端 `is_minimax_pay_as_you_go_key` 一致。
+ */
+export function isMiniMaxPayAsYouGoKey(apiKey: unknown): boolean {
+  return typeof apiKey === "string" && apiKey.startsWith("sk-api-");
+}
+
 export const CODING_PLAN_PROVIDERS: readonly CodingPlanProviderEntry[] = [
-  { id: "kimi", label: "Kimi For Coding", pattern: /api\.kimi\.com\/coding/i },
+  {
+    id: "kimi",
+    label: "Kimi For Coding",
+    pattern: /api\.kimi\.(?:com|ai)\/coding/i,
+  },
   {
     id: "zhipu",
     label: "Zhipu GLM (智谱)",
@@ -46,12 +66,9 @@ export const CODING_PLAN_PROVIDERS: readonly CodingPlanProviderEntry[] = [
     pattern: /bigmodel\.cn/i,
   },
   {
-    // 按 host 标签边界匹配（同后端 codex_url_host_matches_any），不认
-    // api.minimax.cn.example.com 这类伪造后缀或出现在路径里的域名
     id: "minimax",
     label: "MiniMax",
-    pattern:
-      /^(?:https?:\/\/)?(?:[^/?#@]*@)?(?:[\w-]+\.)*api\.(?:minimaxi\.com|minimax\.(?:io|cn))(?=[:/?#]|$)/i,
+    pattern: MINIMAX_BASE_URL_PATTERN,
   },
   {
     id: "zenmux",
@@ -71,8 +88,8 @@ export const CODING_PLAN_PROVIDERS: readonly CodingPlanProviderEntry[] = [
     // OpenCode Go（$10/月订阅，三时间窗口美元额度）。用量端点
     // GET /zen/go/v1/usage 是官方第一方但未文档化的路由，只认
     // Authorization: Bearer（与推理侧 /messages 只认 x-api-key 相反）。
-    // base 分两档：/zen/go（claude/claude-desktop 直连 /messages）与
-    // /zen/go/v1（codex/opencode/pi 走 Chat），子串同时覆盖；
+    // base 分两档：/zen/go（claude 直连 /messages）与
+    // /zen/go/v1（opencode/pi 等走 Chat），子串同时覆盖；
     // Zen 按量版（/zen/v1）没有用量 API，刻意不命中。
     id: "opencode_go",
     label: "OpenCode Go",
@@ -106,12 +123,12 @@ export function detectCodingPlanProvider(
 export function extractBaseUrlForUsageDetection(
   appId: string,
   settingsConfig: Record<string, any> | undefined,
+  providerKey?: string,
 ): string | null {
   if (!settingsConfig) return null;
   let raw: unknown;
   switch (appId) {
     case "claude":
-    case "claude-desktop":
       raw = settingsConfig.env?.ANTHROPIC_BASE_URL;
       break;
     case "codex":
@@ -125,7 +142,8 @@ export function extractBaseUrlForUsageDetection(
       raw = settingsConfig.options?.baseURL;
       break;
     case "pi":
-      raw = settingsConfig.baseUrl;
+      // Pi 内置供应商的条目只写 key，地址按供应商 ID 找
+      raw = piProviderBaseUrl(providerKey, settingsConfig);
       break;
     default:
       return null;
@@ -141,7 +159,7 @@ export function extractBaseUrlForUsageDetection(
  * - Claude app 保持既有行为：命中任意 Coding Plan 供应商都注入；
  *   其余 app 仅对已验证预设注入：Codex 支持 Command Code，其他非 Claude
  *   Coding Plan 保持既有行为——
- *   五个 app 各有一份 OpenCode Go 预设、凭据形态后端全部支持，而智谱/Kimi
+ *   多个 app 各有一份 OpenCode Go 预设、凭据形态后端全部支持，而智谱/Kimi
  *   等在其他 app 的自动注入未逐一验证过，不随手扩大
  * - code 置空：Rust 端走专用 `coding_plan::get_coding_plan_quota`，不执行 JS 脚本
  */
@@ -149,6 +167,7 @@ export function injectCodingPlanUsageScript<
   T extends {
     settingsConfig?: Record<string, any>;
     meta?: Record<string, any>;
+    providerKey?: string;
   },
 >(appId: string, provider: T): T {
   if (provider.meta?.usage_script) return provider;
@@ -156,6 +175,7 @@ export function injectCodingPlanUsageScript<
   const baseUrl = extractBaseUrlForUsageDetection(
     appId,
     provider.settingsConfig,
+    provider.providerKey,
   );
   const codingPlanProvider = detectCodingPlanProvider(baseUrl);
   if (!codingPlanProvider) return provider;
@@ -169,15 +189,26 @@ export function injectCodingPlanUsageScript<
     return provider;
   }
 
+  // MiniMax 走到这里只可能是 Claude；按量计费的 Key 没有 Token Plan，改查余额
+  const env = provider.settingsConfig?.env;
+  const usageScript =
+    codingPlanProvider === "minimax" &&
+    isMiniMaxPayAsYouGoKey(env?.ANTHROPIC_AUTH_TOKEN || env?.ANTHROPIC_API_KEY)
+      ? createUsageScript({
+          enabled: true,
+          templateType: TEMPLATE_TYPES.BALANCE,
+        })
+      : createUsageScript({
+          enabled: true,
+          templateType: TEMPLATE_TYPES.TOKEN_PLAN,
+          codingPlanProvider,
+        });
+
   return {
     ...provider,
     meta: {
       ...(provider.meta ?? {}),
-      usage_script: createUsageScript({
-        enabled: true,
-        templateType: TEMPLATE_TYPES.TOKEN_PLAN,
-        codingPlanProvider,
-      }),
+      usage_script: usageScript,
     },
   };
 }

@@ -1,8 +1,8 @@
 //! 写 Gemini CLI 的 `.env` 和 `settings.json`：只替换关键字段，其余行、键和注释不碰。
 //!
-//! 写 Gemini live 的入口（切换、新增第一个供应商、编辑当前供应商、同步、统一供应商、
-//! 进入 / 退出代理）都走这里：先拿应用写锁，再经 `mode::operation` 记下 pending，两个
-//! 文件和状态在同一个操作里提交。不回填、不合并通用配置片段：用户的设置本来就留在
+//! 写 Gemini live 的入口（切换、新增第一个供应商、编辑当前供应商、同步、统一供应商）
+//! 都走这里：先拿应用写锁，再经 `mode::operation` 记下 pending，两个文件和状态在同一个
+//! 操作里提交。不回填、不合并通用配置片段：用户的设置本来就留在
 //! live 里，MCP 在 `settings.json` 里也不受影响。
 
 use crate::app_config::AppType;

@@ -2,7 +2,7 @@
 //!
 //! 提供获取、设置和测试全局代理的 Tauri 命令。
 
-use crate::proxy::http_client;
+use crate::http_client;
 use crate::store::AppState;
 use serde::Serialize;
 use std::net::{Ipv4Addr, SocketAddrV4, TcpStream};
@@ -155,28 +155,6 @@ pub async fn test_proxy_url(url: String) -> Result<ProxyTestResult, String> {
         latency_ms: latency,
         error: Some(error_msg),
     })
-}
-
-/// 获取当前出站代理状态
-///
-/// 返回当前是否启用了出站代理以及代理 URL。
-#[tauri::command]
-pub fn get_upstream_proxy_status() -> UpstreamProxyStatus {
-    let url = http_client::get_current_proxy_url();
-    UpstreamProxyStatus {
-        enabled: url.is_some(),
-        proxy_url: url,
-    }
-}
-
-/// 出站代理状态信息
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct UpstreamProxyStatus {
-    /// 是否启用代理
-    pub enabled: bool,
-    /// 代理 URL
-    pub proxy_url: Option<String>,
 }
 
 /// 检测到的代理信息

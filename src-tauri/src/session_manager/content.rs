@@ -207,6 +207,20 @@ pub fn resolve_content_ref(
             let path = jsonl_path(source)?;
             let line = read_jsonl_line(&path, *offset, *len)?;
             let value: Value = serde_json::from_slice(&line).map_err(|_| STALE.to_string())?;
+            if source.provider_id == "gemini" {
+                if let Some(text) = gemini_formatted_text(&value, pointer) {
+                    return Ok(text);
+                }
+            }
+            if source.provider_id == "grokbuild"
+                && pointer == super::providers::grokbuild::WEB_SEARCH_SOURCES_POINTER
+            {
+                if let Some(sources) = value.pointer(pointer) {
+                    return Ok(super::providers::grokbuild::web_search_sources_text(
+                        sources,
+                    ));
+                }
+            }
             extract_text(&value, pointer)
         }
         ContentRef::Sqlite {
@@ -231,22 +245,10 @@ pub fn resolve_content_ref(
             };
             let file = safe_join(root, rel_path)?;
             let bytes = read_limited(&file, MAX_TEXT_BYTES, TOO_LARGE_TEXT)?;
-            let value: Value = if source.provider_id == "gemini" {
-                // 指针按解析器还原后的 `/messages/<i>` 编号，JSONL 也要同样回放
-                std::str::from_utf8(&bytes)
-                    .ok()
-                    .and_then(super::providers::gemini::parse_session_document)
-                    .ok_or_else(|| STALE.to_string())?
-            } else {
-                serde_json::from_slice(&bytes).map_err(|_| STALE.to_string())?
-            };
-            // Gemini 多条思考合并成一个块：按解析器同一口径格式化，而不是返回 JSON
-            if source.provider_id == "gemini" && pointer.ends_with("/thoughts") {
-                if let Some(thoughts) = value
-                    .pointer(pointer)
-                    .and_then(super::providers::gemini::format_thoughts)
-                {
-                    return Ok(thoughts.text);
+            let value: Value = serde_json::from_slice(&bytes).map_err(|_| STALE.to_string())?;
+            if source.provider_id == "gemini" {
+                if let Some(text) = gemini_formatted_text(&value, pointer) {
+                    return Ok(text);
                 }
             }
             extract_text(&value, pointer)
@@ -266,6 +268,21 @@ pub fn resolve_content_ref(
             Ok(String::from_utf8_lossy(&bytes).into_owned())
         }
     }
+}
+
+/// Gemini 解析器自己拼过格式的字段按同一口径取全文，而不是返回 JSON：多条思考合并成的
+/// 一个块（`/thoughts`），以及 AnsiOutput、TodoList 等结构化的工具结果显示（`/resultDisplay`）。
+/// 旧格式整份 JSON（File）与 JSONL（含 `$patch` 补丁行）两种引用共用。
+fn gemini_formatted_text(value: &Value, pointer: &str) -> Option<String> {
+    use super::providers::gemini;
+    let target = value.pointer(pointer)?;
+    if pointer.ends_with("/thoughts") {
+        return gemini::format_thoughts(target).map(|thoughts| thoughts.text);
+    }
+    if pointer.ends_with("/resultDisplay") {
+        return gemini::format_result_display(target).map(|(text, _)| text);
+    }
+    None
 }
 
 /// Grok Build 的会话正文文件名：sourcePath 是同目录的 `summary.json`
@@ -801,13 +818,13 @@ mod tests {
         std::fs::write(&summary, "{}").unwrap();
         let output = (0..40).map(|i| format!("line {i}\n")).collect::<String>();
         let lines = [
-            json!({ "type": "user", "content": "run it" }),
-            json!({ "type": "assistant", "content": "", "tool_calls": [{ "id": "c1", "function": { "name": "bash", "arguments": "{\"command\":\"ls\"}" } }] }),
-            json!({ "type": "tool", "tool_call_id": "c1", "content": output }),
+            json!({ "type": "user", "content": [{ "type": "text", "text": "run it" }] }),
+            json!({ "type": "assistant", "content": "", "tool_calls": [{ "id": "c1", "name": "bash", "arguments": "{\"command\":\"ls\"}" }] }),
+            json!({ "type": "tool_result", "tool_call_id": "c1", "content": output }),
         ];
         std::fs::write(
             dir.join(GROK_CHAT_HISTORY),
-            lines.map(|l| format!("{l}\n")).concat(),
+            lines.iter().map(|l| format!("{l}\n")).collect::<String>(),
         )
         .unwrap();
 
@@ -823,6 +840,39 @@ mod tests {
         let mut source = file_source(root.path(), &summary);
         source.provider_id = "grokbuild".into();
         assert_eq!(resolve_content_ref(&source, &full).unwrap(), output);
+
+        // web_search 的来源展开后是网址列表，不是 JSON
+        let urls: Vec<String> = (0..30)
+            .map(|i| format!("https://example.com/{i}"))
+            .collect();
+        let search = json!({ "type": "backend_tool_call", "kind": {
+            "tool_type": "web_search", "id": "ws", "status": "completed",
+            "action": { "type": "search", "query": "q",
+                "sources": urls.iter().map(|u| json!({ "type": "url", "url": u })).collect::<Vec<_>>() }
+        }});
+        std::fs::write(
+            dir.join(GROK_CHAT_HISTORY),
+            lines
+                .iter()
+                .chain([&search])
+                .map(|l| format!("{l}\n"))
+                .collect::<String>(),
+        )
+        .unwrap();
+        let sources_ref = grokbuild::load_messages(&summary)
+            .unwrap()
+            .iter()
+            .flat_map(|m| &m.blocks)
+            .filter_map(|b| match b {
+                SessionBlock::ToolResult { call_id, full, .. } if call_id == "ws" => full.clone(),
+                _ => None,
+            })
+            .next()
+            .expect("长来源列表应带引用");
+        assert_eq!(
+            resolve_content_ref(&source, &sources_ref).unwrap(),
+            urls.join("\n")
+        );
 
         // 源不是 summary.json 时不改读别的文件
         let mut other = file_source(root.path(), &dir.join(GROK_CHAT_HISTORY));
@@ -963,43 +1013,62 @@ mod tests {
         assert!(text.starts_with(&preview));
     }
 
-    /// Gemini JSONL：`/messages/<i>` 指针按回放后的消息编号解析
+    /// Gemini JSONL：引用可以指向 `$patch` 补丁行；思考与结构化的 resultDisplay 按解析器同一口径格式化
     #[test]
-    fn gemini_jsonl_tool_output_resolves_by_replayed_index() {
+    fn gemini_jsonl_refs_resolve_patch_lines_thoughts_and_result_display() {
         use super::super::model::SessionBlock;
         use super::super::providers::gemini;
         use serde_json::json;
 
         let root = tempdir().unwrap();
-        let chats = root.path().join("hash").join("chats");
+        let chats = root.path().join("my-app").join("chats");
         std::fs::create_dir_all(&chats).unwrap();
-        let path = chats.join("session-1.jsonl");
-        let long: String = (1..=20).map(|i| format!("line {i}\n")).collect();
+        let path = chats.join("session-2026-10-07T08-30-s1.jsonl");
+        let long = "d".repeat(500);
+        let patched: String = (0..30).map(|i| format!("masked {i}\n")).collect();
+        let ansi: Vec<_> = (0..20)
+            .map(|i| json!([{ "text": format!("out {i}"), "bold": false }]))
+            .collect();
         let lines = [
-            json!({ "sessionId": "s1", "projectHash": "h" }),
-            json!({ "id": "1", "type": "user", "content": [{ "text": "hi" }] }),
-            json!({ "id": "2", "type": "gemini", "content": "", "toolCalls": [
-                { "id": "c1", "name": "run_shell_command", "args": { "command": "ls" },
-                  "status": "success", "resultDisplay": long }
+            json!({ "sessionId": "s1", "projectHash": "h1", "kind": "main" }),
+            json!({ "id": "u1", "type": "user", "content": [{ "text": "go" }] }),
+            json!({ "id": "g1", "type": "gemini", "content": "", "thoughts": [
+                { "subject": "Plan", "description": long }, { "subject": "Check", "description": "ok" }
+            ], "toolCalls": [
+                { "id": "c1", "name": "read_file", "args": {}, "status": "success",
+                  "result": [{ "functionResponse": { "id": "c1", "name": "read_file", "response": { "output": "short" } } }] },
+                { "id": "c2", "name": "run_shell_command", "args": {}, "status": "success", "resultDisplay": ansi },
             ] }),
+            json!({ "$patch": { "updates": [{ "id": "g1", "toolCalls": [{ "id": "c1",
+                "result": [{ "functionResponse": { "id": "c1", "name": "read_file", "response": { "output": patched } } }] }] }] } }),
         ];
-        let data: String = lines.iter().map(|l| format!("{l}\n")).collect();
-        std::fs::write(&path, data).unwrap();
+        std::fs::write(&path, lines.map(|l| format!("{l}\n")).concat()).unwrap();
 
         let messages = gemini::load_messages(&path).unwrap();
-        let full = messages
-            .iter()
-            .flat_map(|m| &m.blocks)
-            .find_map(|b| match b {
-                SessionBlock::ToolResult {
-                    full: Some(full), ..
-                } => Some(full.clone()),
-                _ => None,
-            })
-            .expect("长输出应带引用");
         let mut source = file_source(root.path(), &path);
         source.provider_id = "gemini".into();
-        assert_eq!(resolve_content_ref(&source, &full).unwrap(), long);
+        let mut resolved = Vec::new();
+        for block in messages.iter().flat_map(|m| &m.blocks) {
+            let full = match block {
+                SessionBlock::Thinking { full: Some(f), .. }
+                | SessionBlock::ToolResult { full: Some(f), .. } => f,
+                _ => continue,
+            };
+            assert!(matches!(full, ContentRef::Jsonl { .. }), "{full:?}");
+            resolved.push(resolve_content_ref(&source, full).unwrap());
+        }
+        let ansi_text = (0..20)
+            .map(|i| format!("out {i}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert_eq!(
+            resolved,
+            [
+                format!("**Plan**\n\n{long}\n\n**Check**\n\nok"),
+                patched,
+                ansi_text
+            ]
+        );
     }
 
     #[test]

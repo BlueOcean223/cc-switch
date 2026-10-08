@@ -18,7 +18,7 @@ const usageApiMock = vi.hoisted(() => ({
   getUsageSummary: vi.fn(),
   syncSessionUsage: vi.fn(),
   getSessionUsageLastSync: vi.fn(),
-  rebuildCodexUsage: vi.fn(),
+  rebuildSessionUsage: vi.fn(),
 }));
 
 vi.mock("react-i18next", () => ({
@@ -177,7 +177,6 @@ describe("UsageDashboard", () => {
       imported: 2,
       skipped: 0,
       filesScanned: 3,
-      suspectedDuplicates: 0,
       deferredFiles: 0,
       errors: [],
     });
@@ -467,22 +466,16 @@ describe("UsageDashboard", () => {
     expect(logsTab).toHaveFocus();
   });
 
-  it("toggles session scanning and links to routing settings from the data sources drawer", async () => {
+  it("toggles session scanning from the data sources drawer", async () => {
     const user = userEvent.setup();
     const onSessionAutoSyncEnabledChange = vi.fn();
-    const onOpenRoutingSettings = vi.fn();
-    renderDashboard({ onSessionAutoSyncEnabledChange, onOpenRoutingSettings });
+    renderDashboard({ onSessionAutoSyncEnabledChange });
 
     await user.click(screen.getByRole("button", { name: "usage.dataSources" }));
     await user.click(
       await screen.findByRole("switch", { name: "usage.sources.scanTitle" }),
     );
     expect(onSessionAutoSyncEnabledChange).toHaveBeenCalledWith(false);
-
-    await user.click(
-      screen.getByRole("button", { name: /usage.sources.editLogging/ }),
-    );
-    expect(onOpenRoutingSettings).toHaveBeenCalledTimes(1);
   });
 
   it("shows the empty state when there is no usage at all", async () => {

@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
-import { ChevronRight, Loader2 } from "lucide-react";
+import { Loader2 } from "lucide-react";
 import {
   Sheet,
   SheetBody,
@@ -12,10 +12,8 @@ import {
 import { Button } from "@/components/ui/button";
 import { HelpTip } from "@/components/ui/help-tip";
 import { Switch } from "@/components/ui/switch";
-import { useGlobalProxyConfig } from "@/lib/query/proxy";
 import { APP_DISPLAY_NAME } from "@/components/shell/AppGlyph";
 import { KNOWN_APP_TYPES } from "@/types/usage";
-import { cn } from "@/lib/utils";
 import { getResolvedLang, joinNames } from "./format";
 
 interface UsageDataSourcesSheetProps {
@@ -27,11 +25,9 @@ interface UsageDataSourcesSheetProps {
   syncedLabel?: string;
   syncing: boolean;
   onSyncNow: () => void;
-  /** 打开设置 → 本地路由（「记录请求用量」开关在那里） */
-  onOpenRoutingSettings?: () => void;
-  rebuildingCodex: boolean;
+  rebuildingUsage: boolean;
   /** 只负责打开确认框；确认框里写清后果 */
-  onRebuildCodex: () => void;
+  onRebuildUsage: () => void;
 }
 
 function SourceCard({
@@ -61,26 +57,7 @@ function SourceCard({
   );
 }
 
-function LoggingStatus() {
-  const { t } = useTranslation();
-  const { data: config, isLoading } = useGlobalProxyConfig();
-  if (isLoading || !config) {
-    return <Loader2 className="h-4 w-4 animate-spin text-fg-3" />;
-  }
-  const on = config.enableLogging;
-  return (
-    <span
-      className={cn(
-        "rounded-[5px] px-1.5 text-badge leading-5",
-        on ? "bg-success-soft text-success-text" : "bg-subtle text-fg-2",
-      )}
-    >
-      {on ? t("usage.sources.on") : t("usage.sources.off")}
-    </span>
-  );
-}
-
-/** 「数据来源」抽屉（v7 S6）：会话日志扫描、路由请求日志（只读）、Codex 用量维护。 */
+/** 「数据来源」抽屉（v7 S6）：会话日志扫描、用量重建。 */
 export function UsageDataSourcesSheet({
   open,
   onOpenChange,
@@ -89,9 +66,8 @@ export function UsageDataSourcesSheet({
   syncedLabel,
   syncing,
   onSyncNow,
-  onOpenRoutingSettings,
-  rebuildingCodex,
-  onRebuildCodex,
+  rebuildingUsage,
+  onRebuildUsage,
 }: UsageDataSourcesSheetProps) {
   const { t, i18n } = useTranslation();
   const coveredApps = joinNames(
@@ -152,50 +128,27 @@ export function UsageDataSourcesSheet({
           </SourceCard>
 
           <SourceCard
-            title={t("routingSettings.logging")}
+            title={t("usage.rebuildUsage.title")}
             help={{
-              title: t("usage.sources.loggingHelpTitle"),
-              body: t("usage.sources.loggingHelp"),
-            }}
-            trailing={open ? <LoggingStatus /> : null}
-          >
-            {onOpenRoutingSettings && (
-              <button
-                type="button"
-                className="inline-flex w-fit items-center gap-0.5 rounded-[4px] text-body font-medium text-fg-1 underline decoration-border-strong underline-offset-4 hover:decoration-fg-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                onClick={() => {
-                  onOpenChange(false);
-                  onOpenRoutingSettings();
-                }}
-              >
-                {t("usage.sources.editLogging")}
-                <ChevronRight className="h-3.5 w-3.5" />
-              </button>
-            )}
-          </SourceCard>
-
-          <SourceCard
-            title={t("usage.rebuildCodex.title")}
-            help={{
-              title: t("usage.sources.codexHelpTitle"),
-              body: t("usage.rebuildCodex.description"),
+              title: t("usage.rebuildUsage.helpTitle"),
+              body: t("usage.rebuildUsage.description"),
             }}
           >
             <p className="m-0 text-caption text-fg-2">
-              {t("usage.rebuildCodex.warning")}
+              {t("usage.rebuildUsage.warning")}
             </p>
             <div className="flex justify-end">
               <Button
                 type="button"
                 variant="neutral"
                 size="compact"
-                disabled={rebuildingCodex}
-                onClick={onRebuildCodex}
+                disabled={rebuildingUsage}
+                onClick={onRebuildUsage}
               >
-                {rebuildingCodex && (
+                {rebuildingUsage && (
                   <Loader2 className="h-3.5 w-3.5 animate-spin" />
                 )}
-                {t("usage.rebuildCodex.actionEllipsis")}
+                {t("usage.rebuildUsage.actionEllipsis")}
               </Button>
             </div>
           </SourceCard>

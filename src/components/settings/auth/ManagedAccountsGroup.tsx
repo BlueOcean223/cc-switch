@@ -31,10 +31,8 @@ import { ProviderIcon } from "@/components/ProviderIcon";
 export interface GroupAccountRow {
   id: string;
   login: string;
-  avatarUrl?: string | null;
-  /** 第二行的片段，用「·」连起来：域名、登录日期；需要重新登录时是原因 */
+  /** 第二行的片段，用「·」连起来：登录日期；需要重新登录时是原因 */
   details: React.ReactNode[];
-  isDefault: boolean;
   needsReauth: boolean;
   /** 在用这个账号的供应商（第二行末尾写「N 个供应商在用」，悬停列名字） */
   users: ManagedAccountUser[];
@@ -58,28 +56,19 @@ interface ManagedAccountsGroupProps {
   /** DOM id 前缀 */
   slug: string;
   name: string;
-  /** ProviderIcon 的图标名（githubcopilot / openai / xai） */
+  /** ProviderIcon 的图标名 */
   iconName: string;
-  /** 「?」里的说明：这个服务的账号用在哪些预设上、没指定账号时用哪个 */
+  /** 「?」里的说明：这个服务的账号用在哪里 */
   help: string;
-  helpSide?: "top" | "bottom";
   accounts: GroupAccountRow[];
   status: "loading" | "error" | "ready";
   statusErrorText: string;
   onRetryStatus: () => void;
-  /** 标题行下面的提示（Copilot 旧数据迁移失败） */
-  notice?: React.ReactNode;
   emptyText: string;
   loginLabel: string;
-  /** 「添加账号」和空状态的登录按钮（Copilot 先打开部署类型选择） */
+  /** 「添加账号」和空状态的登录按钮 */
   onAdd: () => void;
-  /** Copilot 选部署类型的那块；有它时不显示空状态那行 */
-  chooser?: React.ReactNode;
-  /** ⋯ 里有没有「重新登录」（Copilot 没有） */
-  canReauth: boolean;
   onReauth: (accountId: string) => void;
-  onSetDefault: (accountId: string) => void;
-  settingDefault: boolean;
   onRemove: (accountId: string, login: string) => void;
   onRemoveAll: () => void;
   removing: boolean;
@@ -93,7 +82,7 @@ const PILL =
 
 /**
  * 授权中心的一个服务（v7 Auth 画板）：标题行（图标、名字、「?」、添加账号、⋯ 删除全部），
- * 每个账号一行（头像、名字 + 默认 / 需要重新登录、第二行、额度、⋯），空状态，
+ * 每个账号一行（头像、名字 + 需要重新登录、第二行、额度、⋯），空状态，
  * 登录等待块。删账号走确认框（列出受影响的供应商），由调用方传进 children。
  */
 export function ManagedAccountsGroup({
@@ -101,20 +90,14 @@ export function ManagedAccountsGroup({
   name,
   iconName,
   help,
-  helpSide,
   accounts,
   status,
   statusErrorText,
   onRetryStatus,
-  notice,
   emptyText,
   loginLabel,
   onAdd,
-  chooser,
-  canReauth,
   onReauth,
-  onSetDefault,
-  settingDefault,
   onRemove,
   onRemoveAll,
   removing,
@@ -196,7 +179,7 @@ export function ManagedAccountsGroup({
   };
 
   const ready = status === "ready";
-  const showEmpty = ready && accounts.length === 0 && !busy && !chooser;
+  const showEmpty = ready && accounts.length === 0 && !busy;
 
   return (
     <section
@@ -219,7 +202,6 @@ export function ManagedAccountsGroup({
               defaultValue: "{{service}} 账号怎么用",
               service: name,
             })}
-            side={helpSide}
           >
             {help}
           </HelpTip>
@@ -272,8 +254,6 @@ export function ManagedAccountsGroup({
         )}
       </div>
 
-      {notice && <div className="px-3 pb-3">{notice}</div>}
-
       {status === "loading" && (
         <div className="flex items-center gap-2 border-t border-border py-3.5 pe-3 ps-4 text-caption text-fg-2">
           <Loader2 className="h-3.5 w-3.5 motion-safe:animate-spin" />
@@ -308,13 +288,10 @@ export function ManagedAccountsGroup({
           <AccountRow
             key={account.id}
             account={account}
-            canReauth={canReauth}
             busy={busy}
             pendingId={pendingId}
-            settingDefault={settingDefault}
             removing={removing}
             onReauth={reauth}
-            onSetDefault={onSetDefault}
             onRemove={onRemove}
           />
         ))}
@@ -342,8 +319,6 @@ export function ManagedAccountsGroup({
           </Button>
         </div>
       )}
-
-      {chooser}
 
       <div role="status">
         {busy && (
@@ -464,66 +439,41 @@ export function ManagedAccountsGroup({
   );
 }
 
-function AccountAvatar({
-  login,
-  avatarUrl,
-}: {
-  login: string;
-  avatarUrl?: string | null;
-}) {
-  const [failed, setFailed] = useState(false);
+function AccountAvatar({ login }: { login: string }) {
   return (
     <span
       aria-hidden="true"
       className="flex h-7 w-7 shrink-0 items-center justify-center overflow-hidden rounded-full border border-border bg-subtle text-caption font-semibold text-fg-2"
     >
-      {avatarUrl && !failed ? (
-        <img
-          src={avatarUrl}
-          alt=""
-          className="h-full w-full object-cover"
-          loading="lazy"
-          referrerPolicy="no-referrer"
-          onError={() => setFailed(true)}
-        />
-      ) : (
-        login.charAt(0).toUpperCase()
-      )}
+      {login.charAt(0).toUpperCase()}
     </span>
   );
 }
 
 interface AccountRowProps {
   account: GroupAccountRow;
-  canReauth: boolean;
   busy: boolean;
   pendingId: string;
-  settingDefault: boolean;
   removing: boolean;
   onReauth: (accountId: string) => void;
-  onSetDefault: (accountId: string) => void;
   onRemove: (accountId: string, login: string) => void;
 }
 
 function AccountRow({
   account,
-  canReauth,
   busy,
   pendingId,
-  settingDefault,
   removing,
   onReauth,
-  onSetDefault,
   onRemove,
 }: AccountRowProps) {
   const { t } = useTranslation();
   const subId = useId();
-  const canSetDefault = !account.isDefault && !account.needsReauth;
   const separator = " · ";
 
   return (
     <div className="flex min-h-[56px] items-center gap-3 border-t border-border py-2 pe-2.5 ps-4">
-      <AccountAvatar login={account.login} avatarUrl={account.avatarUrl} />
+      <AccountAvatar login={account.login} />
       <div className="flex min-w-0 flex-1 flex-col">
         <div className="flex min-w-0 items-center gap-1.5">
           <span
@@ -532,11 +482,6 @@ function AccountRow({
           >
             {account.login}
           </span>
-          {account.isDefault && (
-            <span className={cn(PILL, "border border-border-strong text-fg-2")}>
-              {t("authCenter.default", { defaultValue: "默认" })}
-            </span>
-          )}
           {account.needsReauth && (
             <span className={cn(PILL, "bg-danger-soft text-danger-text")}>
               {t("authCenter.needsReauth", { defaultValue: "需要重新登录" })}
@@ -564,7 +509,7 @@ function AccountRow({
 
       {!account.needsReauth && account.quota}
 
-      {account.needsReauth && canReauth && (
+      {account.needsReauth && (
         <Button
           type="button"
           variant="neutral"
@@ -597,33 +542,22 @@ function AccountRow({
           align="end"
           className="min-w-[148px] rounded-panel bg-surface p-1 shadow-v7-md"
         >
-          {canSetDefault && (
-            <DropdownMenuItem
-              disabled={settingDefault}
-              onSelect={() => onSetDefault(account.id)}
-              className="h-[30px] rounded-control px-2.5 text-body"
-            >
-              {t("authCenter.setDefault", { defaultValue: "设为默认" })}
-            </DropdownMenuItem>
-          )}
-          {canReauth && (
-            <DropdownMenuItem
-              disabled={busy}
-              onSelect={() => onReauth(account.id)}
-              className="min-h-[30px] flex-col items-start justify-center gap-0 rounded-control px-2.5 text-body data-[disabled]:opacity-100"
-            >
-              <span className={cn(busy && "text-fg-3")}>
-                {t("authCenter.reauth", { defaultValue: "重新登录" })}
+          <DropdownMenuItem
+            disabled={busy}
+            onSelect={() => onReauth(account.id)}
+            className="min-h-[30px] flex-col items-start justify-center gap-0 rounded-control px-2.5 text-body data-[disabled]:opacity-100"
+          >
+            <span className={cn(busy && "text-fg-3")}>
+              {t("authCenter.reauth", { defaultValue: "重新登录" })}
+            </span>
+            {busy && (
+              <span className="text-caption text-fg-3">
+                {t("authCenter.busyHint", {
+                  defaultValue: "先完成或取消正在进行的登录",
+                })}
               </span>
-              {busy && (
-                <span className="text-caption text-fg-3">
-                  {t("authCenter.busyHint", {
-                    defaultValue: "先完成或取消正在进行的登录",
-                  })}
-                </span>
-              )}
-            </DropdownMenuItem>
-          )}
+            )}
+          </DropdownMenuItem>
           <DropdownMenuItem
             disabled={removing}
             onSelect={() => onRemove(account.id, account.login)}

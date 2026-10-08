@@ -6,12 +6,15 @@
 use super::subscription::{
     CredentialStatus, QuotaTier, SubscriptionQuota, TIER_FIVE_HOUR, TIER_MONTHLY, TIER_WEEKLY_LIMIT,
 };
+use crate::http_client::read_json;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 // ── 供应商检测 ──────────────────────────────────────────────
 
 enum CodingPlanProvider {
-    Kimi,
+    /// Kimi For Coding，国内 base `api.kimi.com/coding`，国际 `api.kimi.ai/coding`。
+    KimiCn,
+    KimiEn,
     ZhipuCn,
     ZhipuEn,
     MiniMaxCn,
@@ -22,7 +25,7 @@ enum CodingPlanProvider {
     /// 或 `/api/coding[/v3]`（Coding Plan））。
     Volcengine,
     /// OpenCode Go（$10/月订阅，美元额度三时间窗口）。base_url 分两档：
-    /// `https://opencode.ai/zen/go`（claude/claude-desktop 直连 /messages）
+    /// `https://opencode.ai/zen/go`（claude 直连 /messages）
     /// 与 `https://opencode.ai/zen/go/v1`（codex/opencode/pi 走 Chat）。
     OpencodeGo,
     /// Command Code（Claude 使用 `/provider`，Codex 使用 `/provider/v1`）。
@@ -32,7 +35,9 @@ enum CodingPlanProvider {
 fn detect_provider(base_url: &str) -> Option<CodingPlanProvider> {
     let url = base_url.to_lowercase();
     if url.contains("api.kimi.com/coding") {
-        Some(CodingPlanProvider::Kimi)
+        Some(CodingPlanProvider::KimiCn)
+    } else if url.contains("api.kimi.ai/coding") {
+        Some(CodingPlanProvider::KimiEn)
     } else if url.contains("open.bigmodel.cn") || url.contains("bigmodel.cn") {
         Some(CodingPlanProvider::ZhipuCn)
     } else if url.contains("api.z.ai") {
@@ -55,8 +60,7 @@ fn detect_provider(base_url: &str) -> Option<CodingPlanProvider> {
     } else if url.contains("volces.com/api/plan") || url.contains("volces.com/api/coding") {
         // 仅匹配 Agent Plan（/api/plan[/v3]）与 Coding Plan（/api/coding[/v3]）
         // 入口；DouBaoSeed 按量付费走 /api/v3 与 /api/compatible，没有套餐
-        // 额度，不在此命中。用量探测本身是双 plan 自动探测（GetAFPUsage →
-        // GetCodingPlanUsage），无需在此区分两种订阅。
+        // 额度，不在此命中。两种订阅查不同接口，见 query_volcengine。
         Some(CodingPlanProvider::Volcengine)
     } else {
         None
@@ -102,6 +106,36 @@ fn parse_f64(value: &serde_json::Value) -> Option<f64> {
         .or_else(|| value.as_str().and_then(|s| s.parse().ok()))
 }
 
+fn quota_ok(tiers: Vec<QuotaTier>, plan: Option<String>) -> SubscriptionQuota {
+    SubscriptionQuota {
+        tool: "coding_plan".to_string(),
+        credential_status: CredentialStatus::Valid,
+        credential_message: plan,
+        success: true,
+        tiers,
+        extra_usage: None,
+        reset_credits: None,
+        credits_balance: None,
+        error: None,
+        queried_at: Some(now_millis()),
+    }
+}
+
+fn auth_failed(status: reqwest::StatusCode) -> SubscriptionQuota {
+    SubscriptionQuota {
+        tool: "coding_plan".to_string(),
+        credential_status: CredentialStatus::Expired,
+        credential_message: Some("Invalid API key".to_string()),
+        success: false,
+        tiers: vec![],
+        extra_usage: None,
+        reset_credits: None,
+        credits_balance: None,
+        error: Some(format!("Authentication failed (HTTP {status})")),
+        queried_at: Some(now_millis()),
+    }
+}
+
 fn make_error(msg: String) -> SubscriptionQuota {
     SubscriptionQuota {
         tool: "coding_plan".to_string(),
@@ -119,114 +153,117 @@ fn make_error(msg: String) -> SubscriptionQuota {
 
 // ── Kimi For Coding ─────────────────────────────────────────
 
-async fn query_kimi(api_key: &str) -> Result<SubscriptionQuota, String> {
-    let client = crate::proxy::http_client::get();
+async fn query_kimi(api_key: &str, is_cn: bool) -> Result<SubscriptionQuota, String> {
+    let client = crate::http_client::get();
 
+    // 与官方 CLI（MoonshotAI/kimi-code `packages/oauth/src/managed-usage.ts`）一致
+    let url = if is_cn {
+        "https://api.kimi.com/coding/v1/usages"
+    } else {
+        "https://api.kimi.ai/coding/v1/usages"
+    };
     let resp = client
-        .get("https://api.kimi.com/coding/v1/usages")
+        .get(url)
         .header("Authorization", format!("Bearer {api_key}"))
         .header("Accept", "application/json")
         .timeout(std::time::Duration::from_secs(15))
         .send()
-        .await;
-
-    let resp = match resp {
-        Ok(r) => r,
-        Err(e) => return Err(format!("Network error: {e}")),
-    };
+        .await
+        .map_err(|e| format!("Network error: {e}"))?;
 
     let status = resp.status();
     if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
-        return Ok(SubscriptionQuota {
-            tool: "coding_plan".to_string(),
-            credential_status: CredentialStatus::Expired,
-            credential_message: Some("Invalid API key".to_string()),
-            success: false,
-            tiers: vec![],
-            extra_usage: None,
-            reset_credits: None,
-            credits_balance: None,
-            error: Some(format!("Authentication failed (HTTP {status})")),
-            queried_at: Some(now_millis()),
-        });
+        return Ok(auth_failed(status));
     }
 
-    if !status.is_success() {
-        let body = resp.text().await.unwrap_or_default();
-        return Ok(make_error(format!("API error (HTTP {status}): {body}")));
-    }
-
-    // 先 bytes() 再解析：读体失败（超时/连接中断）是瞬时 → Err；拿到完整响应体
-    // 后解析失败才是确定性。reqwest 的 json() 把读体错误也包成 decode，无法区分。
-    let raw = match resp.bytes().await {
-        Ok(b) => b,
-        Err(e) => return Err(format!("Failed to read response: {e}")),
-    };
-    let body: serde_json::Value = match serde_json::from_slice(&raw) {
-        Ok(v) => v,
-        Err(e) => return Ok(make_error(format!("Failed to parse response: {e}"))),
+    let body: serde_json::Value = match read_json(resp).await? {
+        Ok(body) => body,
+        Err(error) => return Ok(make_error(error)),
     };
 
-    let mut tiers = Vec::new();
+    let Some(tiers) = parse_kimi_tiers(&body) else {
+        return Ok(make_error("Unrecognized Kimi usage response".to_string()));
+    };
 
-    // 5 小时窗口限额（优先显示）
-    if let Some(limits) = body.get("limits").and_then(|v| v.as_array()) {
-        for limit_item in limits {
-            if let Some(detail) = limit_item.get("detail") {
-                let limit = detail.get("limit").and_then(parse_f64).unwrap_or(1.0);
-                let remaining = detail.get("remaining").and_then(parse_f64).unwrap_or(0.0);
-                let resets_at = detail.get("resetTime").and_then(extract_reset_time);
+    Ok(quota_ok(tiers, None))
+}
 
-                let used = (limit - remaining).max(0.0);
-                let utilization = if limit > 0.0 {
-                    (used / limit) * 100.0
-                } else {
-                    0.0
-                };
-                tiers.push(QuotaTier {
-                    name: "five_hour".to_string(),
-                    utilization,
+/// 解析 Kimi `/coding/v1/usages` 响应，形态不认识时返回 None。
+///
+/// 当前形态（kimi-code `managed-usage.ts`，2026-09-15 起）：
+/// `usages.{limit_5h,limit_7d,limit_month_total,limit_month_code}` 各为
+/// `{used_ratio, reset_time}`，`used_ratio` 是 0–1 的已用比例，可能是数字字符串。
+/// `limit_month_code` 是月额度里编程部分的占比，没有对应的 tier，不展示。
+///
+/// 旧形态：`limits[].detail` 是 5h 窗口、`usage` 是周额度，各带 `limit`、
+/// `resetTime` 以及 `used` 或 `remaining`。用 API key 调用时平台是否已换成新形态
+/// 没有出处，两种都认。`usages` 存在但一个窗口都解析不出时也返回 None。
+fn parse_kimi_tiers(body: &serde_json::Value) -> Option<Vec<QuotaTier>> {
+    if let Some(usages) = body.get("usages").and_then(|v| v.as_object()) {
+        const WINDOWS: [(&str, &str); 3] = [
+            ("limit_5h", TIER_FIVE_HOUR),
+            ("limit_7d", TIER_WEEKLY_LIMIT),
+            ("limit_month_total", TIER_MONTHLY),
+        ];
+        let tiers = WINDOWS
+            .iter()
+            .filter_map(|(key, name)| {
+                let window = usages.get(*key)?;
+                let ratio = window
+                    .get("used_ratio")
+                    .and_then(parse_f64)
+                    .filter(|r| r.is_finite())?;
+                let resets_at = window
+                    .get("reset_time")
+                    .and_then(|v| v.as_str())
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_string);
+                // 不裁剪到 0–100，与智谱、MiniMax 一致交给 UI
+                Some(QuotaTier {
+                    name: name.to_string(),
+                    utilization: ratio * 100.0,
                     resets_at,
                     used_value_usd: None,
                     max_value_usd: None,
-                });
-            }
-        }
+                })
+            })
+            .collect::<Vec<_>>();
+        // 有 `usages` 但三个窗口都解析不出：形态变了，按不认识处理，不返回空的成功结果
+        return (!tiers.is_empty()).then_some(tiers);
     }
 
-    // 总体用量（周限额）
-    if let Some(usage) = body.get("usage") {
-        let limit = usage.get("limit").and_then(parse_f64).unwrap_or(1.0);
-        let remaining = usage.get("remaining").and_then(parse_f64).unwrap_or(0.0);
-        let resets_at = usage.get("resetTime").and_then(extract_reset_time);
-
-        let used = (limit - remaining).max(0.0);
-        let utilization = if limit > 0.0 {
-            (used / limit) * 100.0
-        } else {
-            0.0
-        };
-        tiers.push(QuotaTier {
-            name: "weekly_limit".to_string(),
-            utilization,
-            resets_at,
+    let legacy_tier = |detail: &serde_json::Value, name: &str| {
+        let limit = detail.get("limit").and_then(parse_f64).unwrap_or(1.0);
+        let used = detail.get("used").and_then(parse_f64).unwrap_or_else(|| {
+            let remaining = detail.get("remaining").and_then(parse_f64).unwrap_or(0.0);
+            (limit - remaining).max(0.0)
+        });
+        QuotaTier {
+            name: name.to_string(),
+            utilization: if limit > 0.0 {
+                (used / limit) * 100.0
+            } else {
+                0.0
+            },
+            resets_at: detail.get("resetTime").and_then(extract_reset_time),
             used_value_usd: None,
             max_value_usd: None,
-        });
-    }
+        }
+    };
 
-    Ok(SubscriptionQuota {
-        tool: "coding_plan".to_string(),
-        credential_status: CredentialStatus::Valid,
-        credential_message: None,
-        success: true,
-        tiers,
-        extra_usage: None,
-        reset_credits: None,
-        credits_balance: None,
-        error: None,
-        queried_at: Some(now_millis()),
-    })
+    let limits = body.get("limits").and_then(|v| v.as_array());
+    let usage = body.get("usage").filter(|v| v.is_object());
+    if limits.is_none() && usage.is_none() {
+        return None;
+    }
+    let mut tiers: Vec<QuotaTier> = limits
+        .into_iter()
+        .flatten()
+        .filter_map(|item| item.get("detail"))
+        .map(|detail| legacy_tier(detail, TIER_FIVE_HOUR))
+        .collect();
+    tiers.extend(usage.map(|usage| legacy_tier(usage, TIER_WEEKLY_LIMIT)));
+    Some(tiers)
 }
 
 // ── 智谱 GLM ────────────────────────────────────────────────
@@ -340,7 +377,7 @@ fn zhipu_quota_base(base_url: &str) -> &'static str {
 }
 
 async fn query_zhipu(base_url: &str, api_key: &str) -> Result<SubscriptionQuota, String> {
-    let client = crate::proxy::http_client::get();
+    let client = crate::http_client::get();
     let url = format!(
         "{}/api/monitor/usage/quota/limit",
         zhipu_quota_base(base_url)
@@ -353,43 +390,17 @@ async fn query_zhipu(base_url: &str, api_key: &str) -> Result<SubscriptionQuota,
         .header("Accept-Language", "en-US,en")
         .timeout(std::time::Duration::from_secs(15))
         .send()
-        .await;
-
-    let resp = match resp {
-        Ok(r) => r,
-        Err(e) => return Err(format!("Network error: {e}")),
-    };
+        .await
+        .map_err(|e| format!("Network error: {e}"))?;
 
     let status = resp.status();
     if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
-        return Ok(SubscriptionQuota {
-            tool: "coding_plan".to_string(),
-            credential_status: CredentialStatus::Expired,
-            credential_message: Some("Invalid API key".to_string()),
-            success: false,
-            tiers: vec![],
-            extra_usage: None,
-            reset_credits: None,
-            credits_balance: None,
-            error: Some(format!("Authentication failed (HTTP {status})")),
-            queried_at: Some(now_millis()),
-        });
+        return Ok(auth_failed(status));
     }
 
-    if !status.is_success() {
-        let body = resp.text().await.unwrap_or_default();
-        return Ok(make_error(format!("API error (HTTP {status}): {body}")));
-    }
-
-    // 先 bytes() 再解析：读体失败（超时/连接中断）是瞬时 → Err；拿到完整响应体
-    // 后解析失败才是确定性。reqwest 的 json() 把读体错误也包成 decode，无法区分。
-    let raw = match resp.bytes().await {
-        Ok(b) => b,
-        Err(e) => return Err(format!("Failed to read response: {e}")),
-    };
-    let body: serde_json::Value = match serde_json::from_slice(&raw) {
-        Ok(v) => v,
-        Err(e) => return Ok(make_error(format!("Failed to parse response: {e}"))),
+    let body: serde_json::Value = match read_json(resp).await? {
+        Ok(body) => body,
+        Err(error) => return Ok(make_error(error)),
     };
 
     Ok(zhipu_quota_from_body(&body))
@@ -421,33 +432,40 @@ fn zhipu_quota_from_body(body: &serde_json::Value) -> SubscriptionQuota {
         .and_then(|v| v.as_str())
         .map(|s| s.to_string());
 
-    SubscriptionQuota {
-        tool: "coding_plan".to_string(),
-        credential_status: CredentialStatus::Valid,
-        credential_message: level,
-        success: true,
-        tiers,
-        extra_usage: None,
-        reset_credits: None,
-        credits_balance: None,
-        error: None,
-        queried_at: Some(now_millis()),
-    }
+    quota_ok(tiers, level)
 }
 
 // ── MiniMax ─────────────────────────────────────────────────
 
-async fn query_minimax(api_key: &str, is_cn: bool) -> Result<SubscriptionQuota, String> {
-    let client = crate::proxy::http_client::get();
+/// MiniMax 业务错误码里表示 Key 无效的两个：1004（未授权/Token 不匹配）、
+/// 2049（无效的 API Key），见 platform.minimax.io/docs/api-reference/errorcode。
+pub(crate) const MINIMAX_AUTH_ERROR_CODES: [i64; 2] = [1004, 2049];
 
-    // 额度接口只在 api.minimaxi.com / api.minimax.io 有公开出处；国内新推理域名
-    // api.minimax.cn 未见该接口文档，沿用旧域名（同一账号体系与 Key）
+/// MiniMax 按量计费的 Key 以 `sk-api-` 开头，没有 Token Plan，官方 CLI 对它改查
+/// 账户余额（`selectUsageEndpoint`），余额查询见 `balance.rs`。
+pub(crate) fn is_minimax_pay_as_you_go_key(api_key: &str) -> bool {
+    api_key.starts_with("sk-api-")
+}
+
+const MINIMAX_PAY_AS_YOU_GO_KEY: &str = "This is a pay-as-you-go key (sk-api-), \
+     which has no Token Plan quota. Choose the Balance template to see the account balance";
+
+async fn query_minimax(api_key: &str, is_cn: bool) -> Result<SubscriptionQuota, String> {
+    if is_minimax_pay_as_you_go_key(api_key) {
+        return Ok(make_error(MINIMAX_PAY_AS_YOU_GO_KEY.to_string()));
+    }
+    let client = crate::http_client::get();
+
+    // 官方 CLI（MiniMax-AI/cli）的额度端点是 `{base}/v1/token_plan/remains`，国内
+    // base 为 api.minimax.cn（旧域名 api.minimaxi.com 上同一路由也在）。旧路径
+    // `/v1/api/openplatform/coding_plan/remains` 对 Token Plan Key 回
+    // "cookie is missing, log in again"。
     let api_domain = if is_cn {
-        "api.minimaxi.com"
+        "api.minimax.cn"
     } else {
         "api.minimax.io"
     };
-    let url = format!("https://{api_domain}/v1/api/openplatform/coding_plan/remains");
+    let url = format!("https://{api_domain}/v1/token_plan/remains");
 
     let resp = client
         .get(&url)
@@ -455,46 +473,25 @@ async fn query_minimax(api_key: &str, is_cn: bool) -> Result<SubscriptionQuota, 
         .header("Content-Type", "application/json")
         .timeout(std::time::Duration::from_secs(15))
         .send()
-        .await;
-
-    let resp = match resp {
-        Ok(r) => r,
-        Err(e) => return Err(format!("Network error: {e}")),
-    };
+        .await
+        .map_err(|e| format!("Network error: {e}"))?;
 
     let status = resp.status();
     if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
-        return Ok(SubscriptionQuota {
-            tool: "coding_plan".to_string(),
-            credential_status: CredentialStatus::Expired,
-            credential_message: Some("Invalid API key".to_string()),
-            success: false,
-            tiers: vec![],
-            extra_usage: None,
-            reset_credits: None,
-            credits_balance: None,
-            error: Some(format!("Authentication failed (HTTP {status})")),
-            queried_at: Some(now_millis()),
-        });
+        return Ok(auth_failed(status));
     }
 
-    if !status.is_success() {
-        let body = resp.text().await.unwrap_or_default();
-        return Ok(make_error(format!("API error (HTTP {status}): {body}")));
-    }
-
-    // 先 bytes() 再解析：读体失败（超时/连接中断）是瞬时 → Err；拿到完整响应体
-    // 后解析失败才是确定性。reqwest 的 json() 把读体错误也包成 decode，无法区分。
-    let raw = match resp.bytes().await {
-        Ok(b) => b,
-        Err(e) => return Err(format!("Failed to read response: {e}")),
-    };
-    let body: serde_json::Value = match serde_json::from_slice(&raw) {
-        Ok(v) => v,
-        Err(e) => return Ok(make_error(format!("Failed to parse response: {e}"))),
+    let body: serde_json::Value = match read_json(resp).await? {
+        Ok(body) => body,
+        Err(error) => return Ok(make_error(error)),
     };
 
-    // 检查业务级别错误
+    Ok(minimax_quota_from_body(&body))
+}
+
+/// 把 MiniMax 额度接口已解析好的 JSON 映射为 SubscriptionQuota（无网络 IO）。
+fn minimax_quota_from_body(body: &serde_json::Value) -> SubscriptionQuota {
+    // 业务错误：鉴权失败时 HTTP 仍是 200，只能看 base_resp.status_code
     if let Some(base_resp) = body.get("base_resp") {
         let status_code = base_resp
             .get("status_code")
@@ -505,75 +502,70 @@ async fn query_minimax(api_key: &str, is_cn: bool) -> Result<SubscriptionQuota, 
                 .get("status_msg")
                 .and_then(|v| v.as_str())
                 .unwrap_or("Unknown error");
-            return Ok(make_error(format!("API error (code {status_code}): {msg}")));
+            let error = make_error(format!("API error (code {status_code}): {msg}"));
+            if MINIMAX_AUTH_ERROR_CODES.contains(&status_code) {
+                return SubscriptionQuota {
+                    credential_status: CredentialStatus::Expired,
+                    credential_message: Some("Invalid API key".to_string()),
+                    ..error
+                };
+            }
+            return error;
         }
     }
 
-    // 提取纯函数便于无 mock 单元测试;新接口直接给"剩余百分比",反转为已用百分比
-    let tiers = parse_minimax_tiers(&body);
-
-    Ok(SubscriptionQuota {
-        tool: "coding_plan".to_string(),
-        credential_status: CredentialStatus::Valid,
-        credential_message: None,
-        success: true,
-        tiers,
-        extra_usage: None,
-        reset_credits: None,
-        credits_balance: None,
-        error: None,
-        queried_at: Some(now_millis()),
-    })
+    quota_ok(parse_minimax_tiers(body), None)
 }
 
 // ── ZenMux ──────────────────────────────────────────────────
 
-async fn query_zenmux(base_url: &str, api_key: &str) -> Result<SubscriptionQuota, String> {
-    let client = crate::proxy::http_client::get();
+/// 官方文档 zenmux.ai/docs/api/platform/subscription-detail.html：只接受
+/// Management API Key（在 zenmux.ai/platform/management 创建），普通 API Key 不行；
+/// 超过频率限制回 422。
+const ZENMUX_SUBSCRIPTION_URL: &str = "https://zenmux.ai/api/v1/management/subscription/detail";
+
+async fn query_zenmux(api_key: &str) -> Result<SubscriptionQuota, String> {
+    query_zenmux_at(ZENMUX_SUBSCRIPTION_URL, api_key).await
+}
+
+async fn query_zenmux_at(url: &str, api_key: &str) -> Result<SubscriptionQuota, String> {
+    let client = crate::http_client::get();
 
     let resp = client
-        .get(base_url)
+        .get(url)
         .header("Authorization", format!("Bearer {api_key}"))
         .header("Accept", "application/json")
         .timeout(std::time::Duration::from_secs(15))
         .send()
-        .await;
-
-    let resp = match resp {
-        Ok(r) => r,
-        Err(e) => return Err(format!("Network error: {e}")),
-    };
+        .await
+        .map_err(|e| format!("Network error: {e}"))?;
 
     let status = resp.status();
     if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
         return Ok(SubscriptionQuota {
             tool: "coding_plan".to_string(),
             credential_status: CredentialStatus::Expired,
-            credential_message: Some("Invalid API key".to_string()),
+            credential_message: Some("Invalid Management API key".to_string()),
             success: false,
             tiers: vec![],
             extra_usage: None,
             reset_credits: None,
             credits_balance: None,
-            error: Some(format!("Authentication failed (HTTP {status})")),
+            error: Some(format!(
+                "Authentication failed (HTTP {status}); ZenMux usage needs a Management API Key"
+            )),
             queried_at: Some(now_millis()),
         });
     }
 
-    if !status.is_success() {
-        let body = resp.text().await.unwrap_or_default();
-        return Ok(make_error(format!("API error (HTTP {status}): {body}")));
+    if status == reqwest::StatusCode::UNPROCESSABLE_ENTITY {
+        // 前端按 "rate limited" 归为瞬时失败，沿用上次成功的读数
+        return Ok(make_error(format!("Rate limited (HTTP {status})")));
     }
 
-    // 先 bytes() 再解析：读体失败（超时/连接中断）是瞬时 → Err；拿到完整响应体
-    // 后解析失败才是确定性。reqwest 的 json() 把读体错误也包成 decode，无法区分。
-    let raw = match resp.bytes().await {
-        Ok(b) => b,
-        Err(e) => return Err(format!("Failed to read response: {e}")),
-    };
-    let body: serde_json::Value = match serde_json::from_slice(&raw) {
-        Ok(v) => v,
-        Err(e) => return Ok(make_error(format!("Failed to parse response: {e}"))),
+    let body: serde_json::Value = match read_json(resp).await? {
+        Ok(body) => body,
+        Err(error) => return Ok(make_error(error)),
     };
 
     // 检查业务级别错误
@@ -644,38 +636,24 @@ async fn query_zenmux(base_url: &str, api_key: &str) -> Result<SubscriptionQuota
         .get("account_status")
         .and_then(|v| v.as_str())
         .unwrap_or("");
-    let plan_info = if !plan_tier.is_empty() {
-        format!("{plan_tier} ({account_status})")
-    } else {
-        String::new()
-    };
+    let plan_info = (!plan_tier.is_empty()).then(|| format!("{plan_tier} ({account_status})"));
 
-    Ok(SubscriptionQuota {
-        tool: "coding_plan".to_string(),
-        credential_status: CredentialStatus::Valid,
-        credential_message: if plan_info.is_empty() {
-            None
-        } else {
-            Some(plan_info)
-        },
-        success: true,
-        tiers,
-        extra_usage: None,
-        reset_credits: None,
-        credits_balance: None,
-        error: None,
-        queried_at: Some(now_millis()),
-    })
+    Ok(quota_ok(tiers, plan_info))
 }
 
-/// 从 `/coding_plan/remains` 响应中解析 MiniMax 编程套餐的额度 tier。
+/// 从 `/v1/token_plan/remains` 响应中解析 MiniMax Token Plan 的额度 tier。
 ///
-/// 新接口语义:`current_*_remaining_percent` 是"剩余百分比"(0-100),
+/// `current_*_remaining_percent` 是"剩余百分比"(0-100),
 /// `model_remains` 数组里有 `general`(编程套餐)和 `video` 等其他模型,
-/// 这里只取 `general`,跳过 video。
+/// 这里只取 `general`,跳过 video。`*_usage_count` 在新旧响应里一个是剩余次数、
+/// 一个是已用次数(官方 CLI 靠百分比反推),所以只用百分比。
 ///
-/// 5h 桶始终存在;周桶并非所有套餐都有,靠 `current_weekly_status == 1`
-/// 判定激活(无周限额套餐该字段为 3,`remaining_percent` 恒为 100,不应展示)。
+/// `current_*_status` 按官方 CLI 的注释是 1=正常、2=已用完、3=不限。5h 桶和周桶
+/// 都在 status=3 时不展示(这个窗口没有限额,`remaining_percent` 恒为 100),
+/// status=2 时展示,缺百分比则按已用 100% 计。
+///
+/// `weekly_boost_permille` 不参与计算:CLI 用它放大剩余百分比的展示值,总量也
+/// 同比放大,已用占比不变。
 fn parse_minimax_tiers(body: &serde_json::Value) -> Vec<QuotaTier> {
     let mut tiers = Vec::new();
 
@@ -693,11 +671,21 @@ fn parse_minimax_tiers(body: &serde_json::Value) -> Vec<QuotaTier> {
         return tiers;
     };
 
+    // 剩余百分比:status=3 表示该窗口不限额,不展示;status=2 表示已用完
+    let remaining =
+        |status_key: &str, percent_key: &str| match item.get(status_key).and_then(|v| v.as_i64()) {
+            Some(3) => None,
+            status => item
+                .get(percent_key)
+                .and_then(|v| v.as_f64())
+                .or((status == Some(2)).then_some(0.0)),
+        };
+
     // 5h 桶:剩余百分比 → 已用百分比
-    if let Some(remain_pct) = item
-        .get("current_interval_remaining_percent")
-        .and_then(|v| v.as_f64())
-    {
+    if let Some(remain_pct) = remaining(
+        "current_interval_status",
+        "current_interval_remaining_percent",
+    ) {
         let resets_at = item
             .get("end_time")
             .and_then(|v| v.as_i64())
@@ -711,24 +699,19 @@ fn parse_minimax_tiers(body: &serde_json::Value) -> Vec<QuotaTier> {
         });
     }
 
-    // 周桶:仅当 status=1 时激活;status=3 等表示该套餐无周限额,跳过
-    if item.get("current_weekly_status").and_then(|v| v.as_i64()) == Some(1) {
-        if let Some(remain_pct) = item
-            .get("current_weekly_remaining_percent")
-            .and_then(|v| v.as_f64())
-        {
-            let resets_at = item
-                .get("weekly_end_time")
-                .and_then(|v| v.as_i64())
-                .and_then(millis_to_iso8601);
-            tiers.push(QuotaTier {
-                name: TIER_WEEKLY_LIMIT.to_string(),
-                utilization: 100.0 - remain_pct,
-                resets_at,
-                used_value_usd: None,
-                max_value_usd: None,
-            });
-        }
+    if let Some(remain_pct) = remaining("current_weekly_status", "current_weekly_remaining_percent")
+    {
+        let resets_at = item
+            .get("weekly_end_time")
+            .and_then(|v| v.as_i64())
+            .and_then(millis_to_iso8601);
+        tiers.push(QuotaTier {
+            name: TIER_WEEKLY_LIMIT.to_string(),
+            utilization: 100.0 - remain_pct,
+            resets_at,
+            used_value_usd: None,
+            max_value_usd: None,
+        });
     }
 
     tiers
@@ -784,7 +767,7 @@ fn parse_opencode_go_tiers(body: &serde_json::Value) -> Vec<QuotaTier> {
 }
 
 async fn query_opencode_go(api_key: &str) -> Result<SubscriptionQuota, String> {
-    let client = crate::proxy::http_client::get();
+    let client = crate::http_client::get();
 
     // 用量端点只认 `Authorization: Bearer`——与推理侧 /messages 只认
     // x-api-key 正好相反，不能互换。
@@ -794,12 +777,8 @@ async fn query_opencode_go(api_key: &str) -> Result<SubscriptionQuota, String> {
         .header("Accept", "application/json")
         .timeout(std::time::Duration::from_secs(15))
         .send()
-        .await;
-
-    let resp = match resp {
-        Ok(r) => r,
-        Err(e) => return Err(format!("Network error: {e}")),
-    };
+        .await
+        .map_err(|e| format!("Network error: {e}"))?;
 
     let status = resp.status();
     // 403 EntitlementError：key 本身有效（Zen 与 Go 共用同一把 workspace
@@ -810,31 +789,11 @@ async fn query_opencode_go(api_key: &str) -> Result<SubscriptionQuota, String> {
         ));
     }
     if status == reqwest::StatusCode::UNAUTHORIZED {
-        return Ok(SubscriptionQuota {
-            tool: "coding_plan".to_string(),
-            credential_status: CredentialStatus::Expired,
-            credential_message: Some("Invalid API key".to_string()),
-            success: false,
-            tiers: vec![],
-            extra_usage: None,
-            reset_credits: None,
-            credits_balance: None,
-            error: Some(format!("Authentication failed (HTTP {status})")),
-            queried_at: Some(now_millis()),
-        });
+        return Ok(auth_failed(status));
     }
-    if !status.is_success() {
-        let body = resp.text().await.unwrap_or_default();
-        return Ok(make_error(format!("API error (HTTP {status}): {body}")));
-    }
-
-    let raw = match resp.bytes().await {
-        Ok(b) => b,
-        Err(e) => return Err(format!("Failed to read response: {e}")),
-    };
-    let body: serde_json::Value = match serde_json::from_slice(&raw) {
-        Ok(v) => v,
-        Err(e) => return Ok(make_error(format!("Failed to parse response: {e}"))),
+    let body: serde_json::Value = match read_json(resp).await? {
+        Ok(body) => body,
+        Err(error) => return Ok(make_error(error)),
     };
 
     let tiers = parse_opencode_go_tiers(&body);
@@ -844,18 +803,7 @@ async fn query_opencode_go(api_key: &str) -> Result<SubscriptionQuota, String> {
         return Ok(make_error("Unexpected usage response shape".to_string()));
     }
 
-    Ok(SubscriptionQuota {
-        tool: "coding_plan".to_string(),
-        credential_status: CredentialStatus::Valid,
-        credential_message: None,
-        success: true,
-        tiers,
-        extra_usage: None,
-        reset_credits: None,
-        credits_balance: None,
-        error: None,
-        queried_at: Some(now_millis()),
-    })
+    Ok(quota_ok(tiers, None))
 }
 
 // ── Command Code ─────────────────────────────────────────────
@@ -863,12 +811,6 @@ async fn query_opencode_go(api_key: &str) -> Result<SubscriptionQuota, String> {
 /// Command Code 的 `/alpha` 控制面接口固定在根域名；推理数据面才使用
 /// `/provider` / `/provider/v1`。不要复用 provider 的 base_url。
 const COMMAND_CODE_API_BASE: &str = "https://api.commandcode.ai";
-
-enum CommandCodeFetch {
-    Body(serde_json::Value),
-    AuthExpired,
-    Error(String),
-}
 
 fn command_code_url(base_url: &str, path: &str, params: &[(&str, &str)]) -> Result<String, String> {
     let mut url = url::Url::parse(&format!("{}{}", base_url.trim_end_matches('/'), path))
@@ -883,13 +825,14 @@ fn command_code_url(base_url: &str, path: &str, params: &[(&str, &str)]) -> Resu
 }
 
 /// `/alpha` 是官方 CLI 使用的私有路由，未公开文档化；保持宽松解析。
+/// 外层 `Err` 是瞬时失败；内层 `Err` 是要直接返回的失败结果。
 async fn fetch_command_code_json(
     client: &reqwest::Client,
     base_url: &str,
     path: &str,
     params: &[(&str, &str)],
     api_key: &str,
-) -> Result<CommandCodeFetch, String> {
+) -> Result<Result<serde_json::Value, SubscriptionQuota>, String> {
     let url = command_code_url(base_url, path, params)?;
     let response = client
         .get(url)
@@ -902,41 +845,9 @@ async fn fetch_command_code_json(
 
     let status = response.status();
     if status == reqwest::StatusCode::UNAUTHORIZED {
-        return Ok(CommandCodeFetch::AuthExpired);
+        return Ok(Err(auth_failed(status)));
     }
-
-    let raw = response
-        .bytes()
-        .await
-        .map_err(|e| format!("Failed to read response: {e}"))?;
-    if !status.is_success() {
-        let body = String::from_utf8_lossy(&raw);
-        return Ok(CommandCodeFetch::Error(format!(
-            "API error (HTTP {status}): {body}"
-        )));
-    }
-
-    match serde_json::from_slice(&raw) {
-        Ok(body) => Ok(CommandCodeFetch::Body(body)),
-        Err(e) => Ok(CommandCodeFetch::Error(format!(
-            "Failed to parse response: {e}"
-        ))),
-    }
-}
-
-fn command_code_auth_error() -> SubscriptionQuota {
-    SubscriptionQuota {
-        tool: "coding_plan".to_string(),
-        credential_status: CredentialStatus::Expired,
-        credential_message: Some("Invalid API key".to_string()),
-        success: false,
-        tiers: vec![],
-        extra_usage: None,
-        reset_credits: None,
-        credits_balance: None,
-        error: Some("Authentication failed (HTTP 401 Unauthorized)".to_string()),
-        queried_at: Some(now_millis()),
-    }
+    Ok(read_json(response).await?.map_err(make_error))
 }
 
 fn command_code_window_tier(window: Option<&serde_json::Value>, name: &str) -> Option<QuotaTier> {
@@ -1037,22 +948,11 @@ fn parse_command_code_quota(
         max_value_usd: None,
     });
 
-    SubscriptionQuota {
-        tool: "coding_plan".to_string(),
-        credential_status: CredentialStatus::Valid,
-        credential_message: plan_id,
-        success: true,
-        tiers,
-        extra_usage: None,
-        reset_credits: None,
-        credits_balance: None,
-        error: None,
-        queried_at: Some(now_millis()),
-    }
+    quota_ok(tiers, plan_id)
 }
 
 async fn query_command_code_at(base_url: &str, api_key: &str) -> Result<SubscriptionQuota, String> {
-    let client = crate::proxy::http_client::get();
+    let client = crate::http_client::get();
 
     let whoami = match fetch_command_code_json(
         &client,
@@ -1063,9 +963,8 @@ async fn query_command_code_at(base_url: &str, api_key: &str) -> Result<Subscrip
     )
     .await?
     {
-        CommandCodeFetch::Body(body) => body,
-        CommandCodeFetch::AuthExpired => return Ok(command_code_auth_error()),
-        CommandCodeFetch::Error(error) => return Ok(make_error(error)),
+        Ok(body) => body,
+        Err(failed) => return Ok(failed),
     };
 
     let org_id = whoami
@@ -1087,9 +986,8 @@ async fn query_command_code_at(base_url: &str, api_key: &str) -> Result<Subscrip
     )
     .await?
     {
-        CommandCodeFetch::Body(body) => body,
-        CommandCodeFetch::AuthExpired => return Ok(command_code_auth_error()),
-        CommandCodeFetch::Error(error) => return Ok(make_error(error)),
+        Ok(body) => body,
+        Err(failed) => return Ok(failed),
     };
 
     let subscription = match fetch_command_code_json(
@@ -1101,9 +999,8 @@ async fn query_command_code_at(base_url: &str, api_key: &str) -> Result<Subscrip
     )
     .await?
     {
-        CommandCodeFetch::Body(body) => Some(body),
-        CommandCodeFetch::AuthExpired => return Ok(command_code_auth_error()),
-        CommandCodeFetch::Error(error) => return Ok(make_error(error)),
+        Ok(body) => Some(body),
+        Err(failed) => return Ok(failed),
     };
 
     let period_start = subscription
@@ -1128,9 +1025,8 @@ async fn query_command_code_at(base_url: &str, api_key: &str) -> Result<Subscrip
     )
     .await?
     {
-        CommandCodeFetch::Body(body) => body,
-        CommandCodeFetch::AuthExpired => return Ok(command_code_auth_error()),
-        CommandCodeFetch::Error(error) => return Ok(make_error(error)),
+        Ok(body) => body,
+        Err(failed) => return Ok(failed),
     };
 
     Ok(parse_command_code_quota(
@@ -1152,11 +1048,11 @@ async fn query_command_code(api_key: &str) -> Result<SubscriptionQuota, String> 
 // `POST https://open.volcengineapi.com/?Action=...&Version=2024-01-01&Region=cn-beijing`，
 // **强制火山引擎签名 V4（AK/SK）**——实测复用推理 Bearer Key 会被网关以
 // `400 InvalidAuthorization` 拒绝（格式层拒绝，非权限问题）。因此用户需在用量查询
-// 里另填火山账号的 AccessKey ID + Secret（与推理 Key 是两套凭据）。两个 plan 用
-// 同一份 AK/SK，故鉴权类错误直接停、不再试另一个 plan。
+// 里另填火山账号的 AccessKey ID + Secret（与推理 Key 是两套凭据）。
 //
-// 自动探测：先调 `GetAFPUsage`（Agent Plan，回绝对额度 Quota/Used），未订阅再调
-// `GetCodingPlanUsage`（Coding Plan，回百分比）。
+// 按 base_url 选接口（与 ark-cli `usage plan --product` 的对应关系一致）：Agent Plan
+// （`/api/plan`）调 `GetAFPUsage`，回绝对额度 Quota/Used；Coding Plan
+// （`/api/coding`）调 `GetCodingPlanUsage`，只回百分比。
 
 /// 控制面 OpenAPI 统一网关（区别于数据面推理域名 ark.cn-beijing.volces.com）。
 const VOLCENGINE_OPENAPI_HOST: &str = "open.volcengineapi.com";
@@ -1346,7 +1242,7 @@ async fn volcengine_openapi_call(
     secret_access_key: &str,
     action: &str,
 ) -> VolcCall {
-    let client = crate::proxy::http_client::get();
+    let client = crate::http_client::get();
     // canonical query 同时用于签名与实际 URL，确保两者逐字一致（否则签名不匹配）。
     let canonical_query = volcengine_canonical_query(action, region);
     let url = format!("https://{VOLCENGINE_OPENAPI_HOST}/?{canonical_query}");
@@ -1381,6 +1277,10 @@ async fn volcengine_openapi_call(
         return VolcCall::Auth(format!(
             "Authentication failed (HTTP {status}). {VOLCENGINE_AKSK_HINT}"
         ));
+    }
+    // 408 是服务端超时，和 read_json 一样按瞬时失败处理
+    if status == reqwest::StatusCode::REQUEST_TIMEOUT {
+        return VolcCall::Transient(format!("Transient HTTP failure (HTTP {status})"));
     }
     if !status.is_success() {
         // 火山 OpenAPI 网关对签名/凭据类错误常返 4xx（多为 HTTP 400）并携带与 200
@@ -1429,8 +1329,7 @@ async fn volcengine_openapi_call(
 /// 展示 5h / 周 / 月三个窗口（与控制台一致）；`AFPDaily` 被官方控制台隐藏
 /// （其 Quota 常高于周上限，属历史默认值而非强制限额），故跳过。
 /// `Quota`/`Used` 是绝对 AFP 值，已用百分比 = Used/Quota×100；`Quota<=0` 视为
-/// 该窗口未订阅/未启用，跳过——也用于把"已鉴权但无 Agent Plan"识别为空结果，
-/// 从而回落到 Coding Plan 探测。
+/// 该窗口未订阅/未启用，跳过。没有订阅时 `Result` 为空，结果也为空。
 fn parse_afp_tiers(result: &serde_json::Value) -> Vec<QuotaTier> {
     let mut tiers = Vec::new();
     for (key, name) in [
@@ -1459,78 +1358,38 @@ fn parse_afp_tiers(result: &serde_json::Value) -> Vec<QuotaTier> {
     tiers
 }
 
-/// 把 `GetCodingPlanUsage` 的 window 标签归一到 tier 名。
+/// 把 `GetCodingPlanUsage` 的窗口标签归一到 tier 名（ark-cli 文档：session / weekly / monthly）。
 fn volcengine_coding_window(label: &str) -> Option<&'static str> {
-    match label.to_lowercase().as_str() {
-        "session" | "5h" | "fivehour" | "five_hour" | "rolling_5h" => Some(TIER_FIVE_HOUR),
-        "weekly" | "week" | "7d" => Some(TIER_WEEKLY_LIMIT),
-        "monthly" | "month" => Some(TIER_MONTHLY),
+    match label {
+        "session" => Some(TIER_FIVE_HOUR),
+        "weekly" => Some(TIER_WEEKLY_LIMIT),
+        "monthly" => Some(TIER_MONTHLY),
         _ => None,
     }
 }
 
-/// 解析 `GetCodingPlanUsage` 的 `Result` 为 tier 列表（防御式）。
+/// 解析 `GetCodingPlanUsage` 的 `Result` 为 tier 列表。
 ///
-/// 该接口官方文档未给出逐字段规格，依据官方 ark-cli 描述：回 session/weekly/
-/// monthly 窗口、**只给百分比**（已用）、重置时间是秒级。这里宽松匹配
-/// `QuotaUsage`/`Usages`/`Details` 数组及多种字段名，命中即用、未命中跳过。
+/// ark-cli 文档（`arkcli-usage-plan.md`）：`QuotaUsage` 数组，只有已用百分比
+/// `Percent`，重置时间是秒；数组为空表示没有订阅。标签字段 `Level` 和重置时间
+/// 字段 `ResetTimestamp` 来自实测响应（2026-06-21），session 没有活跃窗口时为 -1。
 fn parse_coding_plan_tiers(result: &serde_json::Value) -> Vec<QuotaTier> {
-    let mut tiers = Vec::new();
-    let arr = result
-        .get("QuotaUsage")
-        .and_then(|v| v.as_array())
-        .or_else(|| result.get("Usages").and_then(|v| v.as_array()))
-        .or_else(|| result.get("Details").and_then(|v| v.as_array()));
-    let Some(arr) = arr else { return tiers };
-
-    for item in arr {
-        // 真实字段是 `Level`（实测 2026-06-21：session/weekly/monthly）；其余作防御式 fallback。
-        let label = item
-            .get("Level")
-            .and_then(|v| v.as_str())
-            .or_else(|| item.get("Type").and_then(|v| v.as_str()))
-            .or_else(|| item.get("Period").and_then(|v| v.as_str()))
-            .or_else(|| item.get("Label").and_then(|v| v.as_str()))
-            .or_else(|| item.get("Window").and_then(|v| v.as_str()))
-            .unwrap_or("");
-        let Some(name) = volcengine_coding_window(label) else {
-            continue;
-        };
-        let utilization = item
-            .get("Percent")
-            .and_then(parse_f64)
-            .or_else(|| item.get("UsedPercent").and_then(parse_f64))
-            .or_else(|| item.get("UsagePercent").and_then(parse_f64))
-            .unwrap_or(0.0);
-        // 兼容秒/毫秒/字符串（extract_reset_time 内部已区分秒与毫秒）。
-        let resets_at = item
-            .get("ResetTime")
-            .or_else(|| item.get("ResetTimestamp"))
-            .and_then(extract_reset_time);
-        tiers.push(QuotaTier {
-            name: name.to_string(),
-            utilization,
-            resets_at,
-            used_value_usd: None,
-            max_value_usd: None,
-        });
-    }
-    tiers
-}
-
-fn volcengine_success(tiers: Vec<QuotaTier>, plan: Option<String>) -> SubscriptionQuota {
-    SubscriptionQuota {
-        tool: "coding_plan".to_string(),
-        credential_status: CredentialStatus::Valid,
-        credential_message: plan,
-        success: true,
-        tiers,
-        extra_usage: None,
-        reset_credits: None,
-        credits_balance: None,
-        error: None,
-        queried_at: Some(now_millis()),
-    }
+    let Some(items) = result.get("QuotaUsage").and_then(|v| v.as_array()) else {
+        return Vec::new();
+    };
+    items
+        .iter()
+        .filter_map(|item| {
+            let name = volcengine_coding_window(item.get("Level")?.as_str()?)?;
+            Some(QuotaTier {
+                name: name.to_string(),
+                utilization: item.get("Percent").and_then(parse_f64).unwrap_or(0.0),
+                resets_at: item.get("ResetTimestamp").and_then(extract_reset_time),
+                used_value_usd: None,
+                max_value_usd: None,
+            })
+        })
+        .collect()
 }
 
 fn volcengine_auth_error(detail: String) -> SubscriptionQuota {
@@ -1554,73 +1413,38 @@ async fn query_volcengine(
     secret_access_key: &str,
 ) -> Result<SubscriptionQuota, String> {
     let region = volcengine_region(base_url);
-    let mut soft_errors: Vec<String> = Vec::new();
-    // 2xx + 无 Error 信封但解析不出额度时，截断原始响应用于诊断（区分"真没订阅"
-    // 与"字段名/包裹层猜错"）。签名若不通会走 Auth/Soft 分支，到不了这里。
-    let mut empty_responses: Vec<String> = Vec::new();
-    let summarize = |action: &str, body: &serde_json::Value| -> String {
-        let raw: String = body.to_string().chars().take(700).collect();
-        format!("{action}={raw}")
+    let coding_plan = base_url.contains("/api/coding");
+    let (action, product) = if coding_plan {
+        ("GetCodingPlanUsage", "Coding Plan")
+    } else {
+        ("GetAFPUsage", "Agent Plan")
     };
 
-    // 1) Agent Plan：GetAFPUsage
-    match volcengine_openapi_call(&region, access_key_id, secret_access_key, "GetAFPUsage").await {
-        VolcCall::Auth(detail) => return Ok(volcengine_auth_error(detail)),
-        VolcCall::Transient(detail) => return Err(format!("GetAFPUsage: {detail}")),
-        VolcCall::Soft(detail) => soft_errors.push(format!("GetAFPUsage: {detail}")),
-        VolcCall::Body(body) => {
-            let result = body.get("Result").unwrap_or(&body);
-            let tiers = parse_afp_tiers(result);
-            if !tiers.is_empty() {
-                let plan = result
-                    .get("PlanType")
-                    .and_then(|v| v.as_str())
-                    .map(str::trim)
-                    .filter(|s| !s.is_empty())
-                    .map(|s| format!("Agent Plan {s}"));
-                return Ok(volcengine_success(tiers, plan));
-            }
-            empty_responses.push(summarize("GetAFPUsage", &body));
-        }
-    }
-
-    // 2) Coding Plan：GetCodingPlanUsage
-    match volcengine_openapi_call(
-        &region,
-        access_key_id,
-        secret_access_key,
-        "GetCodingPlanUsage",
-    )
-    .await
-    {
-        VolcCall::Auth(detail) => return Ok(volcengine_auth_error(detail)),
-        VolcCall::Transient(detail) => return Err(format!("GetCodingPlanUsage: {detail}")),
-        VolcCall::Soft(detail) => soft_errors.push(format!("GetCodingPlanUsage: {detail}")),
-        VolcCall::Body(body) => {
-            let result = body.get("Result").unwrap_or(&body);
-            let tiers = parse_coding_plan_tiers(result);
-            if !tiers.is_empty() {
-                return Ok(volcengine_success(tiers, Some("Coding Plan".to_string())));
-            }
-            empty_responses.push(summarize("GetCodingPlanUsage", &body));
-        }
-    }
-
-    if !soft_errors.is_empty() {
-        Ok(make_error(soft_errors.join("; ")))
-    } else if !empty_responses.is_empty() {
-        // 签名已通过、请求到达业务层，但响应里没有可解析的额度。带上原始响应，
-        // 便于核对真实字段名/包裹层，或确认确实未订阅。
-        Ok(make_error(format!(
-            "No active subscription found (signature OK). Raw: {}",
-            empty_responses.join(" || ")
-        )))
+    let body =
+        match volcengine_openapi_call(&region, access_key_id, secret_access_key, action).await {
+            VolcCall::Auth(detail) => return Ok(volcengine_auth_error(detail)),
+            VolcCall::Transient(detail) => return Err(format!("{action}: {detail}")),
+            VolcCall::Soft(detail) => return Ok(make_error(format!("{action}: {detail}"))),
+            VolcCall::Body(body) => body,
+        };
+    let result = body.get("Result").unwrap_or(&body);
+    let (tiers, plan) = if coding_plan {
+        (parse_coding_plan_tiers(result), Some(product.to_string()))
     } else {
-        Ok(make_error(
-            "No active Agent Plan or Coding Plan subscription found for this credential"
-                .to_string(),
-        ))
+        let plan = result
+            .get("PlanType")
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(|s| format!("{product} {s}"));
+        (parse_afp_tiers(result), plan)
+    };
+    if tiers.is_empty() {
+        return Ok(make_error(format!(
+            "No active {product} subscription found for this credential"
+        )));
     }
+    Ok(quota_ok(tiers, plan))
 }
 
 // ── 公开入口 ────────────────────────────────────────────────
@@ -1666,7 +1490,7 @@ async fn query_zhipu_team_at(
     organization_id: &str,
     project_id: &str,
 ) -> Result<SubscriptionQuota, String> {
-    let client = crate::proxy::http_client::get();
+    let client = crate::http_client::get();
     let url = format!("{quota_url_base}?type=2");
 
     let resp = client
@@ -1678,43 +1502,17 @@ async fn query_zhipu_team_at(
         .header("Accept-Language", "en-US,en")
         .timeout(std::time::Duration::from_secs(15))
         .send()
-        .await;
-
-    let resp = match resp {
-        Ok(r) => r,
-        Err(e) => return Err(format!("Network error: {e}")),
-    };
+        .await
+        .map_err(|e| format!("Network error: {e}"))?;
 
     let status = resp.status();
     if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
-        return Ok(SubscriptionQuota {
-            tool: "coding_plan".to_string(),
-            credential_status: CredentialStatus::Expired,
-            credential_message: Some("Invalid API key".to_string()),
-            success: false,
-            tiers: vec![],
-            extra_usage: None,
-            reset_credits: None,
-            credits_balance: None,
-            error: Some(format!("Authentication failed (HTTP {status})")),
-            queried_at: Some(now_millis()),
-        });
+        return Ok(auth_failed(status));
     }
 
-    if !status.is_success() {
-        let body = resp.text().await.unwrap_or_default();
-        return Ok(make_error(format!("API error (HTTP {status}): {body}")));
-    }
-
-    // 先 bytes() 再解析：读体失败（超时/连接中断）是瞬时 → Err；拿到完整响应体
-    // 后解析失败才是确定性。reqwest 的 json() 把读体错误也包成 decode，无法区分。
-    let raw = match resp.bytes().await {
-        Ok(b) => b,
-        Err(e) => return Err(format!("Failed to read response: {e}")),
-    };
-    let body: serde_json::Value = match serde_json::from_slice(&raw) {
-        Ok(v) => v,
-        Err(e) => return Ok(make_error(format!("Failed to parse response: {e}"))),
+    let body: serde_json::Value = match read_json(resp).await? {
+        Ok(body) => body,
+        Err(error) => return Ok(make_error(error)),
     };
 
     Ok(zhipu_quota_from_body(&body))
@@ -1752,6 +1550,19 @@ pub async fn get_coding_plan_quota(
         return query_zhipu_team(api_key, organization_id, project_id).await;
     }
 
+    // ZenMux：用量接口地址固定，只认用户单独填的 Management API Key，与推理配置无关。
+    if coding_plan_provider
+        .map(|p| p.eq_ignore_ascii_case("zenmux"))
+        .unwrap_or(false)
+    {
+        if api_key.trim().is_empty() {
+            return Ok(coding_plan_not_found(
+                "ZenMux usage query needs a Management API Key",
+            ));
+        }
+        return query_zenmux(api_key).await;
+    }
+
     let provider = match detect_provider(base_url) {
         Some(p) => p,
         // 域名未命中已知套餐供应商（如第三方中转站）：给出明确错误而非静默失败
@@ -1778,13 +1589,14 @@ pub async fn get_coding_plan_quota(
     }
 
     match provider {
-        CodingPlanProvider::Kimi => query_kimi(api_key).await,
+        CodingPlanProvider::KimiCn => query_kimi(api_key, true).await,
+        CodingPlanProvider::KimiEn => query_kimi(api_key, false).await,
         CodingPlanProvider::ZhipuCn | CodingPlanProvider::ZhipuEn => {
             query_zhipu(base_url, api_key).await
         }
         CodingPlanProvider::MiniMaxCn => query_minimax(api_key, true).await,
         CodingPlanProvider::MiniMaxEn => query_minimax(api_key, false).await,
-        CodingPlanProvider::ZenMux => query_zenmux(base_url, api_key).await,
+        CodingPlanProvider::ZenMux => query_zenmux(api_key).await,
         CodingPlanProvider::OpencodeGo => query_opencode_go(api_key).await,
         CodingPlanProvider::CommandCode => query_command_code(api_key).await,
         // 火山已在上面的 AK/SK 分支提前返回，此处不可达。
@@ -1797,12 +1609,12 @@ pub async fn get_coding_plan_quota(
 #[cfg(test)]
 mod tests {
     use super::{
-        detect_provider, parse_afp_tiers, parse_coding_plan_tiers, parse_command_code_quota,
-        parse_minimax_tiers, parse_opencode_go_tiers, parse_zhipu_token_tiers,
-        query_command_code_at, query_zhipu_team_at, volcengine_canonical_query,
-        volcengine_is_auth_error_code, volcengine_region, volcengine_response_error,
-        volcengine_sign, zhipu_quota_base, CodingPlanProvider, CredentialStatus, TIER_FIVE_HOUR,
-        TIER_MONTHLY, TIER_WEEKLY_LIMIT,
+        detect_provider, minimax_quota_from_body, parse_afp_tiers, parse_coding_plan_tiers,
+        parse_command_code_quota, parse_kimi_tiers, parse_minimax_tiers, parse_opencode_go_tiers,
+        parse_zhipu_token_tiers, query_command_code_at, query_zhipu_team_at,
+        volcengine_canonical_query, volcengine_is_auth_error_code, volcengine_region,
+        volcengine_response_error, volcengine_sign, zhipu_quota_base, CodingPlanProvider,
+        CredentialStatus, TIER_FIVE_HOUR, TIER_MONTHLY, TIER_WEEKLY_LIMIT,
     };
     use serde_json::json;
 
@@ -2089,6 +1901,22 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn read_json_treats_408_as_transient() {
+        ensure_no_proxy_for_loopback();
+        let (url, handle) = spawn_once_server(Some(http_response("408 Request Timeout", "slow")));
+        let resp = crate::http_client::get()
+            .get(&url)
+            .send()
+            .await
+            .expect("send");
+        let error = crate::http_client::read_json::<serde_json::Value>(resp)
+            .await
+            .expect_err("408 is transient");
+        assert_eq!(error, "Transient HTTP failure (HTTP 408 Request Timeout)");
+        handle.join().expect("server thread");
+    }
+
+    #[tokio::test]
     async fn command_code_invalid_json_is_deterministic_parse_error() {
         ensure_no_proxy_for_loopback();
         let (base_url, handle) = spawn_once_server(Some(http_response("200 OK", "not-json")));
@@ -2228,7 +2056,7 @@ mod tests {
 
     #[test]
     fn opencode_go_detects_both_base_variants_but_not_zen() {
-        // claude/claude-desktop 预设 base 是 /zen/go，codex/opencode/pi 是
+        // claude 预设 base 是 /zen/go，codex/opencode/pi 是
         // /zen/go/v1，两档都要命中；Zen 按量版（/zen/v1）无用量 API，不得命中。
         assert!(matches!(
             detect_provider("https://opencode.ai/zen/go"),
@@ -2525,6 +2353,90 @@ mod tests {
         assert_eq!(tiers[1].name, TIER_WEEKLY_LIMIT);
     }
 
+    // ── Kimi ──
+
+    #[test]
+    fn kimi_detects_cn_and_global_hosts() {
+        assert!(matches!(
+            detect_provider("https://api.kimi.com/coding/"),
+            Some(CodingPlanProvider::KimiCn)
+        ));
+        assert!(matches!(
+            detect_provider("https://api.kimi.ai/coding/v1"),
+            Some(CodingPlanProvider::KimiEn)
+        ));
+    }
+
+    #[test]
+    fn kimi_usages_ratios_map_to_tiers() {
+        // 形态按 kimi-code managed-usage 测试构造;used_ratio 可能是数字字符串
+        let body = json!({
+            "goods_version": 2,
+            "usages": {
+                "limit_5h": { "used_ratio": 0.3, "reset_time": "2026-10-07T18:00:00Z" },
+                "limit_7d": { "used_ratio": "0.2", "reset_time": "2026-10-12T00:00:00Z" },
+                "limit_month_total": { "used_ratio": 0.4, "reset_time": "2026-11-01T00:00:00Z" },
+                "limit_month_code": { "used_ratio": 0.25, "reset_time": "2026-11-01T00:00:00Z" }
+            },
+            "boosterWallet": null
+        });
+        let tiers = parse_kimi_tiers(&body).expect("recognized");
+        let summary: Vec<_> = tiers
+            .iter()
+            .map(|t| (t.name.as_str(), (t.utilization * 100.0).round() / 100.0))
+            .collect();
+        assert_eq!(
+            summary,
+            [
+                (TIER_FIVE_HOUR, 30.0),
+                (TIER_WEEKLY_LIMIT, 20.0),
+                (TIER_MONTHLY, 40.0)
+            ]
+        );
+        assert_eq!(tiers[0].resets_at.as_deref(), Some("2026-10-07T18:00:00Z"));
+    }
+
+    #[test]
+    fn kimi_usages_skip_windows_without_a_ratio() {
+        let body = json!({
+            "usages": {
+                "limit_5h": { "reset_time": "2026-10-07T18:00:00Z" },
+                "limit_7d": { "used_ratio": "abc" },
+                "limit_month_total": { "used_ratio": 1, "reset_time": "" }
+            }
+        });
+        let tiers = parse_kimi_tiers(&body).expect("recognized");
+        assert_eq!(tiers.len(), 1);
+        assert_eq!(tiers[0].name, TIER_MONTHLY);
+        assert_eq!(tiers[0].utilization, 100.0);
+        assert!(tiers[0].resets_at.is_none());
+    }
+
+    #[test]
+    fn kimi_legacy_limits_accept_used_or_remaining() {
+        let body = json!({
+            "usage": { "limit": "100", "used": "25", "resetTime": "2026-10-12T00:00:00Z" },
+            "limits": [{
+                "window": { "duration": 300, "timeUnit": "TIME_UNIT_MINUTE" },
+                "detail": { "limit": 50, "remaining": 40, "resetTime": "2026-10-07T18:00:00Z" }
+            }]
+        });
+        let tiers = parse_kimi_tiers(&body).expect("recognized");
+        assert_eq!(tiers.len(), 2);
+        assert_eq!(tiers[0].name, TIER_FIVE_HOUR);
+        assert_eq!(tiers[0].utilization, 20.0);
+        assert_eq!(tiers[1].name, TIER_WEEKLY_LIMIT);
+        assert_eq!(tiers[1].utilization, 25.0);
+    }
+
+    #[test]
+    fn kimi_unrecognized_response_is_none() {
+        assert!(parse_kimi_tiers(&json!({})).is_none());
+        assert!(parse_kimi_tiers(&json!({ "usage": null, "data": {} })).is_none());
+        assert!(parse_kimi_tiers(&json!({ "usages": {} })).is_none());
+        assert!(parse_kimi_tiers(&json!({ "usages": { "limit_5h": {} } })).is_none());
+    }
+
     // ── MiniMax ──
 
     #[test]
@@ -2679,20 +2591,89 @@ mod tests {
     }
 
     #[test]
-    fn minimax_weekly_status_2_also_skips_weekly_tier() {
-        // 防御性:除 1 之外的 status 都视为周桶未激活,跳过
+    fn minimax_interval_status_3_skips_five_hour_tier() {
         let body = json!({
             "model_remains": [{
                 "model_name": "general",
-                "current_interval_remaining_percent": 80.0,
-                "current_weekly_remaining_percent": 50.0,
-                "current_weekly_status": 2
+                "current_interval_status": 3,
+                "current_interval_remaining_percent": 100,
+                "current_weekly_status": 1,
+                "current_weekly_remaining_percent": 60
             }]
         });
         let tiers = parse_minimax_tiers(&body);
         assert_eq!(tiers.len(), 1);
-        assert_eq!(tiers[0].name, TIER_FIVE_HOUR);
-        assert_eq!(tiers[0].utilization, 20.0);
+        assert_eq!(tiers[0].name, TIER_WEEKLY_LIMIT);
+        assert_eq!(tiers[0].utilization, 40.0);
+    }
+
+    #[test]
+    fn minimax_exhausted_weekly_tier_is_shown_as_full() {
+        // status=2 是周额度已用完,必须展示;缺百分比时按已用 100% 计
+        let body = json!({
+            "model_remains": [{
+                "model_name": "general",
+                "current_interval_remaining_percent": 72,
+                "current_interval_status": 1,
+                "current_weekly_remaining_percent": 0,
+                "current_weekly_status": 2,
+                "weekly_end_time": 1_791_763_200_000_i64,
+                "weekly_boost_permille": 1500
+            }]
+        });
+        let tiers = parse_minimax_tiers(&body);
+        assert_eq!(tiers.len(), 2);
+        assert_eq!(tiers[0].utilization, 28.0);
+        assert_eq!(tiers[1].name, TIER_WEEKLY_LIMIT);
+        assert_eq!(tiers[1].utilization, 100.0);
+        assert!(tiers[1].resets_at.is_some());
+
+        let body = json!({
+            "model_remains": [{
+                "model_name": "general",
+                "current_interval_remaining_percent": 80.0,
+                "current_weekly_status": 2
+            }]
+        });
+        let tiers = parse_minimax_tiers(&body);
+        assert_eq!(tiers.len(), 2);
+        assert_eq!(tiers[1].name, TIER_WEEKLY_LIMIT);
+        assert_eq!(tiers[1].utilization, 100.0);
+    }
+
+    #[test]
+    fn minimax_weekly_tier_without_status_uses_percent() {
+        let body = json!({
+            "model_remains": [{
+                "model_name": "general",
+                "current_interval_remaining_percent": 80.0,
+                "current_weekly_remaining_percent": 50.0
+            }]
+        });
+        let tiers = parse_minimax_tiers(&body);
+        assert_eq!(tiers.len(), 2);
+        assert_eq!(tiers[1].name, TIER_WEEKLY_LIMIT);
+        assert_eq!(tiers[1].utilization, 50.0);
+    }
+
+    #[test]
+    fn minimax_auth_error_codes_mark_key_invalid() {
+        // 实测(2026-10-07,伪造 key):HTTP 200 + base_resp.status_code=1004
+        let body = json!({"base_resp":{"status_code":1004,"status_msg":"login fail: Please carry the API secret key in the 'Authorization' field of the request header"}});
+        let quota = minimax_quota_from_body(&body);
+        assert!(!quota.success);
+        assert!(matches!(quota.credential_status, CredentialStatus::Expired));
+        assert!(quota.error.unwrap().contains("code 1004"));
+
+        let body = json!({"base_resp":{"status_code":2049,"status_msg":"invalid api key"}});
+        let quota = minimax_quota_from_body(&body);
+        assert!(matches!(quota.credential_status, CredentialStatus::Expired));
+
+        // 其他业务错误不动凭据状态
+        let body = json!({"base_resp":{"status_code":1008,"status_msg":"insufficient balance"}});
+        let quota = minimax_quota_from_body(&body);
+        assert!(!quota.success);
+        assert!(matches!(quota.credential_status, CredentialStatus::Valid));
     }
 
     #[test]
@@ -2920,7 +2901,7 @@ mod tests {
     // balance / subscription 服务与本文件共用同一折叠模式，这里的用例同时充当
     // 三个服务的语义回归锚。
 
-    use super::get_coding_plan_quota;
+    use super::{get_coding_plan_quota, query_zenmux_at};
     use std::io::{Read, Write};
 
     /// 测试进程内可能有其他用例临时 set_var HTTP_PROXY（http_client 的
@@ -2934,7 +2915,7 @@ mod tests {
     }
 
     /// 起一个只服务一次连接的本地 HTTP server。`response=None` 表示读完请求
-    /// 直接断开（模拟响应前连接中断）。返回可命中 ZenMux 分支的 base_url。
+    /// 直接断开（模拟响应前连接中断）。返回的 URL 交给 `query_zenmux_at`。
     fn spawn_once_server(response: Option<String>) -> (String, std::thread::JoinHandle<()>) {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind local listener");
         let port = listener.local_addr().expect("local addr").port();
@@ -3001,16 +2982,7 @@ mod tests {
         let port = listener.local_addr().expect("local addr").port();
         drop(listener);
 
-        let result = get_coding_plan_quota(
-            &format!("http://127.0.0.1:{port}/zenmux"),
-            "k",
-            None,
-            None,
-            None,
-            None,
-            None,
-        )
-        .await;
+        let result = query_zenmux_at(&format!("http://127.0.0.1:{port}/zenmux"), "k").await;
         let err = result.expect_err("send 失败必须走 Err 通道（瞬时，前端 reject 后重试）");
         assert!(err.contains("Network error"), "err={err}");
     }
@@ -3020,7 +2992,7 @@ mod tests {
         ensure_no_proxy_for_loopback();
         let (base_url, handle) = spawn_once_server(None);
 
-        let result = get_coding_plan_quota(&base_url, "k", None, None, None, None, None).await;
+        let result = query_zenmux_at(&base_url, "k").await;
         let err = result.expect_err("响应前连接中断必须走 Err 通道（瞬时）");
         assert!(err.contains("Network error"), "err={err}");
         handle.join().expect("server thread");
@@ -3037,7 +3009,7 @@ mod tests {
                 .to_string(),
         ));
 
-        let result = get_coding_plan_quota(&base_url, "k", None, None, None, None, None).await;
+        let result = query_zenmux_at(&base_url, "k").await;
         let err = result.expect_err("读体中断必须走 Err 通道（瞬时，前端 reject 后重试）");
         assert!(err.contains("Failed to read response"), "err={err}");
         handle.join().expect("server thread");
@@ -3048,7 +3020,7 @@ mod tests {
         ensure_no_proxy_for_loopback();
         let (base_url, handle) = spawn_once_server(Some(http_response("401 Unauthorized", "{}")));
 
-        let quota = get_coding_plan_quota(&base_url, "k", None, None, None, None, None)
+        let quota = query_zenmux_at(&base_url, "k")
             .await
             .expect("鉴权失败是确定性失败，必须保持 Ok(success:false) 展示文案");
         assert!(!quota.success);
@@ -3064,7 +3036,7 @@ mod tests {
         let (base_url, handle) =
             spawn_once_server(Some(http_response("429 Too Many Requests", "slow down")));
 
-        let quota = get_coding_plan_quota(&base_url, "k", None, None, None, None, None)
+        let quota = query_zenmux_at(&base_url, "k")
             .await
             .expect("非 2xx 保持 Ok(success:false)，状态码留在文案里交前端分类");
         assert!(!quota.success);
@@ -3076,12 +3048,47 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn zenmux_422_is_reported_as_rate_limited() {
+        ensure_no_proxy_for_loopback();
+        // ZenMux 文档：超过频率限制回 422；前端靠 "rate limited" 归为瞬时
+        let (base_url, handle) =
+            spawn_once_server(Some(http_response("422 Unprocessable Entity", "{}")));
+
+        let quota = query_zenmux_at(&base_url, "k").await.expect("Ok");
+        assert!(!quota.success);
+        let err = quota.error.expect("应有错误文案");
+        assert!(err.starts_with("Rate limited (HTTP 422"), "err={err}");
+        handle.join().expect("server thread");
+    }
+
+    #[tokio::test]
+    async fn zenmux_without_management_key_is_not_found() {
+        // 显式选了 ZenMux 但没填 Management Key：不联网，引导补全
+        let quota = get_coding_plan_quota(
+            "https://zenmux.ai/api/anthropic",
+            " ",
+            None,
+            None,
+            Some("zenmux"),
+            None,
+            None,
+        )
+        .await
+        .expect("Ok");
+        assert!(matches!(
+            quota.credential_status,
+            CredentialStatus::NotFound
+        ));
+        assert!(quota.error.unwrap().contains("Management API Key"));
+    }
+
+    #[tokio::test]
     async fn deterministic_invalid_json_body_stays_ok_with_parse_error() {
         ensure_no_proxy_for_loopback();
         // 完整读到响应体但不是 JSON → is_decode → 确定性解析失败
         let (base_url, handle) = spawn_once_server(Some(http_response("200 OK", "not-json")));
 
-        let quota = get_coding_plan_quota(&base_url, "k", None, None, None, None, None)
+        let quota = query_zenmux_at(&base_url, "k")
             .await
             .expect("完整但非法的响应体是确定性失败，必须保持 Ok(success:false)");
         assert!(!quota.success);
@@ -3176,6 +3183,27 @@ mod tests {
             msg.contains("API key + organization ID + project ID"),
             "err={msg}"
         );
+    }
+
+    #[tokio::test]
+    async fn minimax_pay_as_you_go_key_points_to_the_balance_template() {
+        // sk-api- 开头的按量 Key 没有 Token Plan，不发请求，直接提示改用余额模板
+        let quota = get_coding_plan_quota(
+            "https://api.minimax.cn/anthropic",
+            "sk-api-test",
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .await
+        .expect("determinate result");
+        assert!(!quota.success);
+        assert!(quota
+            .error
+            .as_deref()
+            .is_some_and(|e| e.contains("Balance template")));
     }
 
     #[tokio::test]

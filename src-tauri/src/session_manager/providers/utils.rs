@@ -329,6 +329,55 @@ pub fn for_each_jsonl_value(
     Ok(())
 }
 
+/// 递归收集 `root` 下扩展名为 `extension` 的文件。目录不存在或读不了时什么也不加。
+pub fn collect_files_with_extension(root: &Path, extension: &str, files: &mut Vec<PathBuf>) {
+    collect_files(
+        root,
+        &|path| path.extension().and_then(|ext| ext.to_str()) == Some(extension),
+        files,
+    );
+}
+
+/// 递归收集 `root` 下文件名为 `name` 的文件。
+pub fn collect_files_named(root: &Path, name: &str, files: &mut Vec<PathBuf>) {
+    collect_files(
+        root,
+        &|path| path.file_name().and_then(|n| n.to_str()) == Some(name),
+        files,
+    );
+}
+
+/// 跟随符号链接，但每个真实目录（canonical 路径）只进一次：符号链接成环时不会重复
+/// 列出同一批会话，也不会一直扫下去。
+fn collect_files(root: &Path, keep: &dyn Fn(&Path) -> bool, files: &mut Vec<PathBuf>) {
+    collect_files_once(root, keep, files, &mut std::collections::HashSet::new());
+}
+
+fn collect_files_once(
+    dir: &Path,
+    keep: &dyn Fn(&Path) -> bool,
+    files: &mut Vec<PathBuf>,
+    visited: &mut std::collections::HashSet<PathBuf>,
+) {
+    let Ok(canonical) = std::fs::canonicalize(dir) else {
+        return;
+    };
+    if !visited.insert(canonical) {
+        return;
+    }
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            collect_files_once(&path, keep, files, visited);
+        } else if keep(&path) {
+            files.push(path);
+        }
+    }
+}
+
 pub fn path_basename(value: &str) -> Option<String> {
     let trimmed = value.trim();
     if trimmed.is_empty() {
@@ -346,6 +395,31 @@ pub fn path_basename(value: &str) -> Option<String> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[cfg(unix)]
+    #[test]
+    fn collect_files_lists_each_file_once_with_a_symlink_cycle() {
+        let root = tempfile::tempdir().unwrap();
+        let project = root.path().join("project");
+        std::fs::create_dir_all(&project).unwrap();
+        std::fs::write(project.join("a.jsonl"), "{}").unwrap();
+        // 两个环：指回自己的父目录和根目录
+        std::os::unix::fs::symlink(&project, project.join("self")).unwrap();
+        std::os::unix::fs::symlink(root.path(), project.join("up")).unwrap();
+        // 指向别处的目录链接照常读
+        let elsewhere = tempfile::tempdir().unwrap();
+        std::fs::write(elsewhere.path().join("b.jsonl"), "{}").unwrap();
+        std::os::unix::fs::symlink(elsewhere.path(), root.path().join("linked")).unwrap();
+
+        let mut files = Vec::new();
+        collect_files_with_extension(root.path(), "jsonl", &mut files);
+        let mut names: Vec<_> = files
+            .iter()
+            .map(|path| path.file_name().unwrap().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        assert_eq!(names, ["a.jsonl", "b.jsonl"]);
+    }
 
     fn meta_from_file(path: &Path) -> Option<SessionMeta> {
         let text = std::fs::read_to_string(path).ok()?;

@@ -1,7 +1,21 @@
 [
   {
+    "role": "user",
+    "ts": 1790928000000,
+    "id": "d04923d38bb0f6017037e74183378ef4",
+    "turnId": "t0",
+    "injected": true,
+    "blocks": [
+      {
+        "type": "text",
+        "text": "<session_context>\nThis is the Gemini CLI. We are setting up the context for our chat.\nToday's date is Friday, October 2, 2026.\nMy operating system is: darwin\nI'm currently working in the directory: /Users/yovinchen/Projects/demo-app\n</session_context>"
+      }
+    ]
+  },
+  {
     "role": "system",
-    "ts": 1791014400000,
+    "ts": 1790928000500,
+    "id": "a8d1c3e5-7f90-4b2d-9e4f-6a8b0c2d4e55",
     "turnId": "t0",
     "injected": true,
     "blocks": [
@@ -14,19 +28,35 @@
   },
   {
     "role": "user",
-    "ts": 1791014403000,
+    "ts": 1790928003000,
     "id": "0b6f2c1e-1d4a-4b7e-9a35-6c8d2e0f4a11",
     "turnId": "t1",
     "blocks": [
       {
         "type": "text",
         "text": "解释一下 src/main.ts 的启动流程，然后把构建跑一下。"
+      },
+      {
+        "type": "image",
+        "image": {
+          "source": {
+            "kind": "inline",
+            "content": {
+              "kind": "jsonl",
+              "offset": 859,
+              "len": 339,
+              "pointer": "/content/1/inlineData/data"
+            }
+          },
+          "mediaType": "image/png",
+          "size": 72
+        }
       }
     ]
   },
   {
     "role": "assistant",
-    "ts": 1791014409000,
+    "ts": 1790928009000,
     "id": "7c2e9a40-5b13-4f6d-8e21-0a9b3c7d1e22",
     "turnId": "t1",
     "blocks": [
@@ -41,8 +71,8 @@
         "rawName": "read_file",
         "kind": "read",
         "title": "/Users/yovinchen/Projects/demo-app/src/main.ts",
-        "inputPreview": "{\"absolute_path\": \"/Users/yovinchen/Projects/demo-app/src/main.ts\"}",
-        "inputTotalLen": 67
+        "inputPreview": "{\"absolute_path\":\"/Users/yovinchen/Projects/demo-app/src/main.ts\"}",
+        "inputTotalLen": 66
       },
       {
         "type": "tool_result",
@@ -60,8 +90,8 @@
         "kind": "shell",
         "title": "npm run build",
         "detail": "Build the project",
-        "inputPreview": "{\"command\": \"npm run build\", \"description\": \"Build the project\"}",
-        "inputTotalLen": 64
+        "inputPreview": "{\"command\":\"npm run build\",\"description\":\"Build the project\"}",
+        "inputTotalLen": 61
       },
       {
         "type": "tool_result",
@@ -71,7 +101,22 @@
         "totalLen": 119,
         "lineCount": 4,
         "truncated": false
-      },
+      }
+    ],
+    "meta": {
+      "model": "gemini-2.5-pro",
+      "inputTokens": 10342,
+      "outputTokens": 182,
+      "cacheReadTokens": 8192,
+      "reasoningTokens": 236
+    }
+  },
+  {
+    "role": "assistant",
+    "ts": 1790928021000,
+    "id": "2f4a6c8e-0b1d-4e3f-8a5c-7e9b1d3f5a77",
+    "turnId": "t1",
+    "blocks": [
       {
         "type": "text",
         "text": "`src/main.ts` 先 `await loadConfig()` 读配置，再 `createApp(config)` 创建应用并监听 `config.port`。\n\n构建失败在 `src/config.ts:18`：`port` 从环境变量读出来是字符串，需要 `Number(...)` 转换。"
@@ -79,15 +124,15 @@
     ],
     "meta": {
       "model": "gemini-2.5-pro",
-      "inputTokens": 10342,
-      "outputTokens": 418,
-      "cacheReadTokens": 8192,
-      "reasoningTokens": 236
+      "inputTokens": 11020,
+      "outputTokens": 236,
+      "cacheReadTokens": 10240
     }
   },
   {
     "role": "system",
-    "ts": 1791014490000,
+    "ts": 1790928090000,
+    "id": "c3e5a7b9-1d2f-4b6d-8f0a-2c4e6a8b0d88",
     "turnId": "t1",
     "blocks": [
       {
@@ -99,7 +144,7 @@
   },
   {
     "role": "user",
-    "ts": 1791014580000,
+    "ts": 1790928180000,
     "id": "d41f7e0a-2c6b-4a19-b8e3-5f0d1c2a9b33",
     "turnId": "t2",
     "blocks": [
@@ -111,7 +156,7 @@
   },
   {
     "role": "assistant",
-    "ts": 1791014588000,
+    "ts": 1790928188000,
     "id": "9a0c3e51-6d24-4b8f-a172-3e5f7b9d0c44",
     "turnId": "t2",
     "blocks": [
@@ -126,8 +171,8 @@
         "rawName": "replace",
         "kind": "edit",
         "title": "/Users/yovinchen/Projects/demo-app/src/config.ts",
-        "inputPreview": "{\"file_path\": \"/Users/yovinchen/Projects/demo-app/src/config.ts\", \"old_string\": \"  port: process.env.PORT ?? 3000,\", \"new_string\": \"  port: Number(process.env.PORT ?? 3000),\"}",
-        "inputTotalLen": 175,
+        "inputPreview": "{\"file_path\":\"/Users/yovinchen/Projects/demo-app/src/config.ts\",\"old_string\":\"  port: process.env.PORT ?? 3000,\",\"new_string\":\"  port: Number(process.env.PORT ?? 3000),\"}",
+        "inputTotalLen": 170,
         "diff": {
           "files": [
             {
@@ -138,16 +183,22 @@
             }
           ],
           "added": 1,
-          "removed": 1
+          "removed": 1,
+          "full": {
+            "kind": "jsonl",
+            "offset": 6887,
+            "len": 3574,
+            "pointer": "/toolCalls/0/resultDisplay/fileDiff"
+          }
         }
       },
       {
         "type": "tool_result",
         "callId": "replace-1791014588001-a7e4",
         "status": "success",
-        "preview": "Successfully modified file: /Users/yovinchen/Projects/demo-app/src/config.ts (1 replacements).",
-        "totalLen": 94,
-        "lineCount": 1,
+        "preview": "Index: config.ts\n===================================================================\n--- config.ts\tCurrent\n+++ config.ts\tProposed\n@@ -15,7 +15,7 @@\n export const loadConfig = async () => ({\n-  port: process.env.PORT ?? 3000,\n+  port: Number(process.env.PORT ?? 3000),\n });",
+        "totalLen": 272,
+        "lineCount": 9,
         "truncated": false
       },
       {
@@ -156,16 +207,16 @@
         "rawName": "google_web_search",
         "kind": "web",
         "title": "Node 22 top-level await ESM pitfalls",
-        "inputPreview": "{\"query\": \"Node 22 top-level await ESM pitfalls\"}",
-        "inputTotalLen": 49
+        "inputPreview": "{\"query\":\"Node 22 top-level await ESM pitfalls\"}",
+        "inputTotalLen": 48
       },
       {
         "type": "tool_result",
         "callId": "google_web_search-1791014590412-55b0",
         "status": "success",
-        "preview": "Search results for \"Node 22 top-level await ESM pitfalls\" returned.\n\nTop-level await only works in ES modules (\"type\": \"module\" or .mjs).",
-        "totalLen": 137,
-        "lineCount": 3,
+        "preview": "Search results for \"Node 22 top-level await ESM pitfalls\" returned.",
+        "totalLen": 67,
+        "lineCount": 1,
         "truncated": false
       },
       {
@@ -174,16 +225,16 @@
         "rawName": "write_todos",
         "kind": "todo",
         "title": "2 项",
-        "inputPreview": "{\"todos\": [{\"description\": \"Fix port type\", \"status\": \"completed\"}, {\"description\": \"Re-run build\", \"status\": \"in_progress\"}]}",
-        "inputTotalLen": 126
+        "inputPreview": "{\"todos\":[{\"description\":\"Fix port type\",\"status\":\"completed\"},{\"description\":\"Re-run build\",\"status\":\"in_progress\"}]}",
+        "inputTotalLen": 118
       },
       {
         "type": "tool_result",
         "callId": "write_todos-1791014592230-9e1c",
         "status": "success",
-        "preview": "Successfully updated the todo list.",
-        "totalLen": 35,
-        "lineCount": 1,
+        "preview": "[x] Fix port type\n[~] Re-run build",
+        "totalLen": 34,
+        "lineCount": 2,
         "truncated": false
       },
       {
@@ -192,8 +243,8 @@
         "rawName": "run_shell_command",
         "kind": "shell",
         "title": "npm run build",
-        "inputPreview": "{\"command\": \"npm run build\"}",
-        "inputTotalLen": 28
+        "inputPreview": "{\"command\":\"npm run build\"}",
+        "inputTotalLen": 27
       },
       {
         "type": "tool_result",
@@ -208,7 +259,7 @@
     "meta": {
       "model": "gemini-2.5-pro",
       "inputTokens": 12011,
-      "outputTokens": 287,
+      "outputTokens": 147,
       "reasoningTokens": 140
     }
   }

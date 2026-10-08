@@ -1,3 +1,4 @@
+use super::fields::{self, Client, TRANSPORT as TRANSPORT_FIELDS};
 use crate::app_config::{McpApps, McpServer};
 use crate::config::atomic_write_private;
 use crate::error::AppError;
@@ -6,7 +7,6 @@ use serde_json::{json, Value};
 use std::{fs, path::Path, sync::Mutex};
 
 static WRITE_LOCK: Mutex<()> = Mutex::new(());
-const TRANSPORT_FIELDS: [&str; 6] = ["command", "args", "env", "url", "headers", "type"];
 
 fn read(path: &Path) -> Result<Value, AppError> {
     let text = match fs::read_to_string(path) {
@@ -53,10 +53,12 @@ fn sync_file(path: &Path, id: &str, spec: Option<&Value>) -> Result<(), AppError
         let object = merged
             .as_object_mut()
             .ok_or_else(|| AppError::Config("Invalid MCode MCP entry".into()))?;
-        for field in TRANSPORT_FIELDS {
+        for &field in TRANSPORT_FIELDS {
             object.remove(field);
         }
-        object.extend(spec.as_object().unwrap().clone());
+        let mut spec = spec.as_object().unwrap().clone();
+        fields::retain_for(Client::Mcode, &mut spec);
+        object.extend(spec);
         object.insert("enabled".into(), json!(true));
         servers.insert(id.into(), merged);
     } else {
@@ -232,5 +234,36 @@ mod tests {
         fs::write(&path, "broken json").unwrap();
         assert!(sync_file(&path, "new", Some(&json!({"command":"node"}))).is_err());
         assert_eq!(fs::read_to_string(path).unwrap(), "broken json");
+    }
+
+    #[test]
+    fn mcode_entries_drop_fields_of_other_clients() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("mcp.json");
+        sync_file(
+            &path,
+            "a",
+            Some(&json!({
+                "type": "stdio",
+                "command": "node",
+                "timeout": 3000,
+                "trust": true,
+                "bearer_token_env_var": "TOKEN",
+                "headersHelper": "./h.sh",
+                "exposure": "all",
+                "somethingNew": 1
+            })),
+        )
+        .unwrap();
+        assert_eq!(
+            read(&path).unwrap()["mcpServers"]["a"],
+            json!({
+                "type": "stdio",
+                "command": "node",
+                "timeout": 3000,
+                "somethingNew": 1,
+                "enabled": true
+            })
+        );
     }
 }

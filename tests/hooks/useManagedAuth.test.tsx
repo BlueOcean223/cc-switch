@@ -61,18 +61,13 @@ describe("useManagedAuth", () => {
     apiMocks.authGetStatus.mockReset().mockResolvedValue({
       provider: "codex_oauth",
       authenticated: true,
-      default_account_id: "acct-1",
       accounts: [
         {
           id: "acct-1",
           provider: "codex_oauth",
           login: "user@example.com",
-          avatar_url: null,
           authenticated_at: 1,
-          is_default: true,
-          github_domain: "",
           reauth_required: false,
-          requires_reauth: false,
         },
       ],
     });
@@ -93,11 +88,7 @@ describe("useManagedAuth", () => {
     act(() => result.current.reauthAccount("acct-1"));
 
     await waitFor(() =>
-      expect(apiMocks.authStartLogin).toHaveBeenCalledWith(
-        "codex_oauth",
-        undefined,
-        "acct-1",
-      ),
+      expect(apiMocks.authStartLogin).toHaveBeenCalledWith("acct-1"),
     );
   });
 
@@ -115,12 +106,7 @@ describe("useManagedAuth", () => {
     await waitFor(() =>
       expect(apiMocks.authStartLogin).toHaveBeenCalledTimes(2),
     );
-    expect(apiMocks.authStartLogin).toHaveBeenNthCalledWith(
-      2,
-      "codex_oauth",
-      undefined,
-      "acct-1",
-    );
+    expect(apiMocks.authStartLogin).toHaveBeenNthCalledWith(2, "acct-1");
   });
 
   it("localizes a duplicate Codex account error", async () => {
@@ -166,10 +152,7 @@ describe("useManagedAuth", () => {
     act(() => result.current.cancelAuth());
 
     await waitFor(() =>
-      expect(apiMocks.authCancelLogin).toHaveBeenCalledWith(
-        "codex_oauth",
-        "device-1",
-      ),
+      expect(apiMocks.authCancelLogin).toHaveBeenCalledWith("device-1"),
     );
     expect(result.current.pollingState).toBe("idle");
   });
@@ -201,19 +184,14 @@ describe("useManagedAuth", () => {
     apiMocks.authGetStatus.mockResolvedValue({
       provider: "codex_oauth",
       authenticated: true,
-      default_account_id: "acct-1",
       accounts: [
         ...result.current.accounts,
         {
           id: "acct-2",
           provider: "codex_oauth",
           login: "other@example.com",
-          avatar_url: null,
           authenticated_at: 2,
-          is_default: false,
-          github_domain: "",
           reauth_required: false,
-          requires_reauth: false,
         },
       ],
     });
@@ -268,10 +246,7 @@ describe("useManagedAuth", () => {
     act(() => result.current.removeAccount("acct-1"));
 
     await waitFor(() =>
-      expect(apiMocks.authRemoveAccount).toHaveBeenCalledWith(
-        "codex_oauth",
-        "acct-1",
-      ),
+      expect(apiMocks.authRemoveAccount).toHaveBeenCalledWith("acct-1"),
     );
     await waitFor(() =>
       expect(toastMocks.success).toHaveBeenCalledWith("账号已移除"),

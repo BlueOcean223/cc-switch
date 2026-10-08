@@ -1,5 +1,4 @@
 import React from "react";
-import { useTranslation } from "react-i18next";
 import { CodexAuthSection, CodexConfigSection } from "./CodexConfigSections";
 import type { ProviderEditorInactiveField } from "@/lib/api/providers";
 
@@ -11,8 +10,6 @@ interface CodexConfigEditorProps {
   providerName?: string;
 
   showRemoteCompaction?: boolean;
-
-  isProxyTakeover?: boolean;
 
   onAuthChange: (value: string) => void;
 
@@ -33,7 +30,6 @@ const CodexConfigEditor: React.FC<CodexConfigEditorProps> = ({
   configValue,
   providerName,
   showRemoteCompaction,
-  isProxyTakeover = false,
   onAuthChange,
   onConfigChange,
   onAuthBlur,
@@ -41,25 +37,14 @@ const CodexConfigEditor: React.FC<CodexConfigEditorProps> = ({
   configError,
   inactiveFields,
 }) => {
-  const { t } = useTranslation();
-
   return (
     <div className="space-y-6">
-      {isProxyTakeover && (
-        <div className="p-3 bg-warning-soft border border-transparent rounded-lg">
-          <p className="text-xs text-warning-text">
-            {t("codexConfig.proxyTakeoverStorageNotice")}
-          </p>
-        </div>
-      )}
-
       {/* Auth JSON Section */}
       <CodexAuthSection
         value={authValue}
         onChange={onAuthChange}
         onBlur={onAuthBlur}
         error={authError}
-        isProxyTakeover={isProxyTakeover}
       />
 
       {/* Config TOML Section */}
@@ -69,7 +54,6 @@ const CodexConfigEditor: React.FC<CodexConfigEditorProps> = ({
         providerName={providerName}
         showRemoteCompaction={showRemoteCompaction}
         configError={configError}
-        isProxyTakeover={isProxyTakeover}
         inactiveFields={inactiveFields}
       />
     </div>

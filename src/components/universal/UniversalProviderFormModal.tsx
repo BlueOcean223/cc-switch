@@ -17,6 +17,16 @@ import {
   type UniversalProviderPreset,
 } from "@/config/universalProviderPresets";
 import { deepClone } from "@/utils/deepClone";
+import {
+  buildUniversalClaudeConfig,
+  buildUniversalCodexConfig,
+  buildUniversalGeminiConfig,
+  universalClaudeMainModel,
+  UNIVERSAL_CLAUDE_DEFAULT_MODEL,
+  UNIVERSAL_CODEX_DEFAULT_MODEL,
+  UNIVERSAL_CODEX_DEFAULT_REASONING_EFFORT,
+  UNIVERSAL_GEMINI_DEFAULT_MODEL,
+} from "./universalConfigPreview";
 
 interface UniversalProviderFormModalProps {
   isOpen: boolean;
@@ -126,64 +136,30 @@ export function UniversalProviderFormModal({
     [],
   );
 
-  // 计算 Claude 配置 JSON 预览
-  const claudeConfigJson = useMemo(() => {
-    if (!claudeEnabled) return null;
-    const model = models.claude?.model || "claude-sonnet-4-20250514";
-    const haiku = models.claude?.haikuModel || "claude-haiku-4-20250514";
-    const sonnet = models.claude?.sonnetModel || "claude-sonnet-4-20250514";
-    const opus = models.claude?.opusModel || "claude-sonnet-4-20250514";
-    return {
-      env: {
-        ANTHROPIC_BASE_URL: baseUrl,
-        ANTHROPIC_AUTH_TOKEN: apiKey,
-        ANTHROPIC_MODEL: model,
-        ANTHROPIC_DEFAULT_HAIKU_MODEL: haiku,
-        ANTHROPIC_DEFAULT_SONNET_MODEL: sonnet,
-        ANTHROPIC_DEFAULT_OPUS_MODEL: opus,
-      },
-    };
-  }, [claudeEnabled, baseUrl, apiKey, models.claude]);
-
-  // 计算 Codex 配置 JSON 预览
-  const codexConfigJson = useMemo(() => {
-    if (!codexEnabled) return null;
-    const model = models.codex?.model || "gpt-5.6-sol";
-    const reasoningEffort = models.codex?.reasoningEffort || "high";
-    // 确保 base_url 以 /v1 结尾（Codex 使用 OpenAI 兼容 API）
-    const codexBaseUrl = baseUrl.endsWith("/v1")
-      ? baseUrl
-      : `${baseUrl.replace(/\/+$/, "")}/v1`;
-    const configToml = `model_provider = "custom"
-model = "${model}"
-model_reasoning_effort = "${reasoningEffort}"
-disable_response_storage = true
-
-[model_providers.custom]
-name = "NewAPI"
-base_url = "${codexBaseUrl}"
-wire_api = "responses"
-requires_openai_auth = true`;
-    return {
-      auth: {
-        OPENAI_API_KEY: apiKey,
-      },
-      config: configToml,
-    };
-  }, [codexEnabled, baseUrl, apiKey, models.codex]);
-
-  // 计算 Gemini 配置 JSON 预览
-  const geminiConfigJson = useMemo(() => {
-    if (!geminiEnabled) return null;
-    const model = models.gemini?.model || "gemini-2.5-pro";
-    return {
-      env: {
-        GOOGLE_GEMINI_BASE_URL: baseUrl,
-        GEMINI_API_KEY: apiKey,
-        GEMINI_MODEL: model,
-      },
-    };
-  }, [geminiEnabled, baseUrl, apiKey, models.gemini]);
+  // 配置 JSON 预览：没填的模型按后端同步时的规则补全
+  const claudeConfigJson = useMemo(
+    () =>
+      claudeEnabled
+        ? buildUniversalClaudeConfig(baseUrl, apiKey, models.claude)
+        : null,
+    [claudeEnabled, baseUrl, apiKey, models.claude],
+  );
+  const codexConfigJson = useMemo(
+    () =>
+      codexEnabled
+        ? buildUniversalCodexConfig(baseUrl, apiKey, models.codex)
+        : null,
+    [codexEnabled, baseUrl, apiKey, models.codex],
+  );
+  const geminiConfigJson = useMemo(
+    () =>
+      geminiEnabled
+        ? buildUniversalGeminiConfig(baseUrl, apiKey, models.gemini)
+        : null,
+    [geminiEnabled, baseUrl, apiKey, models.gemini],
+  );
+  // Haiku / Sonnet / Opus 没填时用主模型，占位符显示实际会写入的值
+  const claudeMainModel = universalClaudeMainModel(models.claude);
 
   // 提交表单
   const handleSubmit = useCallback(() => {
@@ -539,7 +515,7 @@ requires_openai_auth = true`;
                     onChange={(e) =>
                       updateModel("claude", "model", e.target.value)
                     }
-                    placeholder="claude-sonnet-4-20250514"
+                    placeholder={UNIVERSAL_CLAUDE_DEFAULT_MODEL}
                   />
                 </div>
                 <div className="space-y-1">
@@ -549,7 +525,7 @@ requires_openai_auth = true`;
                     onChange={(e) =>
                       updateModel("claude", "haikuModel", e.target.value)
                     }
-                    placeholder="claude-haiku-4-20250514"
+                    placeholder={claudeMainModel}
                   />
                 </div>
                 <div className="space-y-1">
@@ -559,7 +535,7 @@ requires_openai_auth = true`;
                     onChange={(e) =>
                       updateModel("claude", "sonnetModel", e.target.value)
                     }
-                    placeholder="claude-sonnet-4-20250514"
+                    placeholder={claudeMainModel}
                   />
                 </div>
                 <div className="space-y-1">
@@ -569,7 +545,7 @@ requires_openai_auth = true`;
                     onChange={(e) =>
                       updateModel("claude", "opusModel", e.target.value)
                     }
-                    placeholder="claude-sonnet-4-20250514"
+                    placeholder={claudeMainModel}
                   />
                 </div>
               </div>
@@ -593,7 +569,7 @@ requires_openai_auth = true`;
                     onChange={(e) =>
                       updateModel("codex", "model", e.target.value)
                     }
-                    placeholder="gpt-5.6-sol"
+                    placeholder={UNIVERSAL_CODEX_DEFAULT_MODEL}
                   />
                 </div>
                 <div className="space-y-1">
@@ -603,7 +579,7 @@ requires_openai_auth = true`;
                     onChange={(e) =>
                       updateModel("codex", "reasoningEffort", e.target.value)
                     }
-                    placeholder="high"
+                    placeholder={UNIVERSAL_CODEX_DEFAULT_REASONING_EFFORT}
                   />
                 </div>
               </div>
@@ -626,7 +602,7 @@ requires_openai_auth = true`;
                   onChange={(e) =>
                     updateModel("gemini", "model", e.target.value)
                   }
-                  placeholder="gemini-2.5-pro"
+                  placeholder={UNIVERSAL_GEMINI_DEFAULT_MODEL}
                 />
               </div>
             </div>

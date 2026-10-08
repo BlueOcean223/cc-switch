@@ -1,7 +1,9 @@
 //! 使用统计相关命令
 
 use crate::error::AppError;
-use crate::services::model_pricing::{ModelPricingInfo, ModelsDevSyncConfig, ModelsDevSyncState};
+use crate::services::model_pricing::{
+    long_context_tiers_from_json, ModelPricingInfo, ModelsDevSyncConfig, ModelsDevSyncState,
+};
 use crate::services::usage_stats::*;
 use crate::store::AppState;
 use tauri::State;
@@ -166,9 +168,7 @@ pub async fn get_request_detail(
 /// 获取模型定价列表
 #[tauri::command]
 pub fn get_model_pricing(state: State<'_, AppState>) -> Result<Vec<ModelPricingInfo>, AppError> {
-    log::info!("获取模型定价列表");
-    state.db.ensure_model_pricing_seeded()?;
-    crate::services::model_pricing::sync_local_model_pricing(&state.db)?;
+    // 只读：内置价在启动、恢复备份时写入，覆盖文件在启动和编辑价格时应用
 
     let db = state.db.clone();
     let conn = crate::database::lock_conn!(db.conn);
@@ -189,19 +189,23 @@ pub fn get_model_pricing(state: State<'_, AppState>) -> Result<Vec<ModelPricingI
 
     let mut stmt = conn.prepare(
         "SELECT model_id, display_name, input_cost_per_million, output_cost_per_million,
-                cache_read_cost_per_million, cache_creation_cost_per_million
+                cache_read_cost_per_million, cache_creation_cost_per_million,
+                long_context_tiers
          FROM model_pricing
          ORDER BY display_name",
     )?;
 
     let rows = stmt.query_map([], |row| {
+        let model_id: String = row.get(0)?;
+        let tiers = long_context_tiers_from_json(&model_id, &row.get::<_, String>(6)?);
         Ok(ModelPricingInfo {
-            model_id: row.get(0)?,
+            model_id,
             display_name: row.get(1)?,
             input_cost_per_million: row.get(2)?,
             output_cost_per_million: row.get(3)?,
             cache_read_cost_per_million: row.get(4)?,
             cache_creation_cost_per_million: row.get(5)?,
+            long_context_tiers: (!tiers.is_empty()).then_some(tiers),
         })
     })?;
 
@@ -234,6 +238,7 @@ pub fn update_model_pricing(
             output_cost_per_million: output_cost,
             cache_read_cost_per_million: cache_read_cost,
             cache_creation_cost_per_million: cache_creation_cost,
+            long_context_tiers: None,
         },
     )?;
     Ok(())
@@ -272,16 +277,6 @@ pub fn record_models_dev_sync_result(
     crate::services::model_pricing::record_models_dev_sync_result(&state.db, synced_at, error)
 }
 
-/// 检查 Provider 使用限额
-#[tauri::command]
-pub fn check_provider_limits(
-    state: State<'_, AppState>,
-    provider_id: String,
-    app_type: String,
-) -> Result<crate::services::usage_stats::ProviderLimitStatus, AppError> {
-    state.db.check_provider_limits(&provider_id, &app_type)
-}
-
 /// 删除模型定价
 #[tauri::command]
 pub fn delete_model_pricing(state: State<'_, AppState>, model_id: String) -> Result<(), AppError> {
@@ -290,7 +285,7 @@ pub fn delete_model_pricing(state: State<'_, AppState>, model_id: String) -> Res
     Ok(())
 }
 
-/// 手动触发会话日志同步
+/// 手动触发会话日志同步。有待处理的重建标记（例如关着自动同步升级的）时改为重建。
 #[tauri::command]
 pub async fn sync_session_usage(
     state: State<'_, AppState>,
@@ -300,10 +295,10 @@ pub async fn sync_session_usage(
         .lock()
         .await;
     tauri::async_runtime::spawn_blocking(move || {
-        crate::services::session_usage::sync_all_unlocked(&db)
+        crate::services::usage_rebuild::sync_or_rebuild(&db, true)
     })
     .await
-    .map_err(|error| AppError::Message(format!("会话用量同步任务失败: {error}")))
+    .map_err(|error| AppError::Message(format!("会话用量同步任务失败: {error}")))?
 }
 
 /// 会话日志扫描（后台定时或手动同步）最近一次完成的时间，毫秒时间戳；
@@ -313,19 +308,10 @@ pub fn get_session_usage_last_sync() -> Option<i64> {
     crate::services::session_usage::last_sync_completed_at()
 }
 
-/// Codex reset 成功后，无论重导是否导入新行或返回错误，都必须通知前端刷新。
-/// 调用方应只在 reset 成功后调用，避免把未发生的数据变更误报为重建完成。
-fn finish_codex_rebuild(
-    result: Result<crate::services::session_usage::SessionSyncResult, AppError>,
-) -> Result<crate::services::session_usage::SessionSyncResult, AppError> {
-    crate::usage_events::notify_log_recorded();
-    result
-}
-
-/// 备份数据库后，仅重建 Codex session 用量。锁覆盖 backup → reset → import
-/// 整个序列，避免后台同步在清理和重导之间插入数据。
+/// 备份数据库后，按会话日志重建全部用量（见 [`crate::services::usage_rebuild`]）。
+/// 锁覆盖清理 → 重导 → 汇总整个序列，避免后台同步插在中间。
 #[tauri::command]
-pub async fn rebuild_codex_usage(
+pub async fn rebuild_session_usage(
     state: State<'_, AppState>,
 ) -> Result<crate::services::session_usage::SessionSyncResult, AppError> {
     let db = state.db.clone();
@@ -333,13 +319,10 @@ pub async fn rebuild_codex_usage(
         .lock()
         .await;
     tauri::async_runtime::spawn_blocking(move || {
-        db.backup_database_file()?;
-        db.reset_codex_usage()?;
-        let result = crate::services::session_usage_codex::sync_codex_usage(&db);
-        finish_codex_rebuild(result)
+        crate::services::usage_rebuild::rebuild_session_usage(&db)
     })
     .await
-    .map_err(|error| AppError::Message(format!("Codex 用量重建任务失败: {error}")))?
+    .map_err(|error| AppError::Message(format!("用量重建任务失败: {error}")))?
 }
 
 /// 获取数据来源分布
@@ -348,34 +331,4 @@ pub fn get_usage_data_sources(
     state: State<'_, AppState>,
 ) -> Result<Vec<crate::services::session_usage::DataSourceSummary>, AppError> {
     crate::services::session_usage::get_data_source_breakdown(&state.db)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn codex_rebuild_notifies_when_reimport_is_empty() {
-        crate::usage_events::take_test_notify_count();
-
-        let result = finish_codex_rebuild(Ok(
-            crate::services::session_usage::SessionSyncResult::default(),
-        ))
-        .expect("空重导应成功");
-
-        assert_eq!(result.imported, 0);
-        assert_eq!(crate::usage_events::take_test_notify_count(), 1);
-    }
-
-    #[test]
-    fn codex_rebuild_notifies_when_reimport_fails_after_reset() {
-        crate::usage_events::take_test_notify_count();
-
-        let result = finish_codex_rebuild(Err(AppError::Message(
-            "synthetic reimport failure".to_string(),
-        )));
-
-        assert!(result.is_err());
-        assert_eq!(crate::usage_events::take_test_notify_count(), 1);
-    }
 }

@@ -27,31 +27,20 @@ function pendingNavigation(initial: unknown) {
 }
 
 describe("parseTrayNavigation", () => {
-  it("keeps known apps, sections and intents", () => {
-    expect(
-      parseTrayNavigation({
-        app: "claude",
-        intent: "needsRoute",
-        providerId: "copilot",
-      }),
-    ).toEqual({ app: "claude", intent: "needsRoute", providerId: "copilot" });
+  it("keeps known apps and the add intent", () => {
+    expect(parseTrayNavigation({ app: "claude" })).toEqual({ app: "claude" });
     expect(parseTrayNavigation({ app: "grokbuild", intent: "add" })).toEqual({
       app: "grokbuild",
       intent: "add",
-      providerId: undefined,
-    });
-    expect(parseTrayNavigation({ section: "routing" })).toEqual({
-      section: "routing",
     });
   });
 
-  it("drops unknown targets and incomplete needs-route requests", () => {
+  it("drops unknown apps and unknown intents", () => {
     expect(parseTrayNavigation(null)).toBeNull();
     expect(parseTrayNavigation({ app: "nope" })).toBeNull();
-    expect(parseTrayNavigation({ section: "nope" })).toBeNull();
-    expect(parseTrayNavigation({ app: "codex", intent: "needsRoute" })).toEqual(
-      { app: "codex" },
-    );
+    expect(parseTrayNavigation({ app: "codex", intent: "nope" })).toEqual({
+      app: "codex",
+    });
   });
 });
 
@@ -61,11 +50,7 @@ describe("useTrayNavigation", () => {
     const onNavigate = vi.fn();
     renderHook(() => useTrayNavigation(onNavigate));
     await waitFor(() =>
-      expect(onNavigate).toHaveBeenCalledWith({
-        app: "codex",
-        intent: undefined,
-        providerId: undefined,
-      }),
+      expect(onNavigate).toHaveBeenCalledWith({ app: "codex" }),
     );
     expect(onNavigate).toHaveBeenCalledTimes(1);
   });
@@ -78,14 +63,10 @@ describe("useTrayNavigation", () => {
     await waitFor(() => expect(onNavigate).not.toHaveBeenCalled());
     await new Promise((resolve) => setTimeout(resolve, 0));
 
-    leave({ app: "claude", intent: "needsRoute", providerId: "copilot" });
+    leave({ app: "claude", intent: "add" });
     emitTauriEvent("tray-navigate", null);
     await waitFor(() =>
-      expect(onNavigate).toHaveBeenCalledWith({
-        app: "claude",
-        intent: "needsRoute",
-        providerId: "copilot",
-      }),
+      expect(onNavigate).toHaveBeenCalledWith({ app: "claude", intent: "add" }),
     );
   });
 });

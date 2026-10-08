@@ -119,17 +119,18 @@ pub fn normalize_tool(
             }
             _ => Other,
         },
+        // 2.x 把 `bash`/`task`/`apply_patch` 改名为 `shell`/`subagent`/`patch`，迁移来的旧会话保留旧名
         ToolSource::OpenCode => match raw_name {
-            "bash" => Shell,
+            "bash" | "shell" => Shell,
             "read" => Read,
             "grep" | "glob" | "list" | "ast_grep_search" | "codesearch" => Search,
-            "edit" | "patch" => Edit,
+            "edit" | "multiedit" | "patch" | "apply_patch" => Edit,
             "write" => Write,
             "webfetch" | "websearch" => Web,
-            "task" | "background_output" | "background_cancel" => Agent,
+            "task" | "subagent" | "background_output" | "background_cancel" => Agent,
             "question" => Ask,
             "todowrite" | "todoread" => Todo,
-            "invalid" => Other,
+            "invalid" | "plan_exit" => Other,
             // 待核实：OpenCode 的 MCP 工具名形如 `server_tool`（内置表之外含 `_` 的名字）
             name if name.contains('_') => {
                 let server = name.split('_').next().unwrap_or_default();

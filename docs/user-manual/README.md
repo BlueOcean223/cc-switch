@@ -1,6 +1,6 @@
 # CC Switch User Manual / 用户手册 / ユーザーマニュアル
 
-> Claude Code / Claude Desktop / Codex / Gemini CLI / OpenCode / OpenClaw / Hermes
+> Claude Code / Codex / Gemini CLI / Grok Build / OpenCode / OpenClaw / Hermes / Pi / MiniMax Code
 
 ## Language / 语言 / 言語
 
@@ -18,5 +18,5 @@
 
 ## Links
 
-- [GitHub Issues](https://github.com/farion1231/cc-switch/issues)
-- [GitHub Repository](https://github.com/farion1231/cc-switch)
+- [GitHub Issues](https://github.com/BlueOcean223/cc-switch/issues)
+- [GitHub Repository](https://github.com/BlueOcean223/cc-switch)

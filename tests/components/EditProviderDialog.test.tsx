@@ -56,7 +56,6 @@ vi.mock("@/components/providers/forms/ProviderForm", () => ({
     onSubmit,
     onSubmitReadyChange,
     onManageAuthAccounts,
-    isProxyTakeover,
   }: {
     initialData: {
       name?: string;
@@ -77,8 +76,7 @@ vi.mock("@/components/providers/forms/ProviderForm", () => ({
       iconColor?: string;
     }) => void;
     onSubmitReadyChange?: (isReady: boolean) => void;
-    onManageAuthAccounts?: (target: "codex_oauth") => void;
-    isProxyTakeover?: boolean;
+    onManageAuthAccounts?: () => void;
     appId?: string;
   }) => {
     useEffect(() => {
@@ -116,13 +114,7 @@ vi.mock("@/components/providers/forms/ProviderForm", () => ({
         <output data-testid="settings-config">
           {JSON.stringify(initialData.settingsConfig ?? {})}
         </output>
-        <output data-testid="is-proxy-takeover">
-          {isProxyTakeover ? "true" : "false"}
-        </output>
-        <button
-          type="button"
-          onClick={() => onManageAuthAccounts?.("codex_oauth")}
-        >
+        <button type="button" onClick={() => onManageAuthAccounts?.()}>
           manage-auth
         </button>
       </form>
@@ -131,8 +123,8 @@ vi.mock("@/components/providers/forms/ProviderForm", () => ({
 }));
 
 vi.mock("@/components/providers/AuthSettingsPanel", () => ({
-  AuthSettingsPanel: ({ target }: { target: string | null }) =>
-    target ? <div data-testid="auth-settings-panel">{target}</div> : null,
+  AuthSettingsPanel: ({ isOpen }: { isOpen: boolean }) =>
+    isOpen ? <div data-testid="auth-settings-panel" /> : null,
 }));
 
 import { EditProviderDialog } from "@/components/providers/EditProviderDialog";
@@ -234,7 +226,10 @@ describe("EditProviderDialog", () => {
         category: "custom",
         settingsConfig: settingsConfig as Record<string, unknown>,
       };
-      apiMocks.getEditorView.mockResolvedValue({ settings: view, inactive: [] });
+      apiMocks.getEditorView.mockResolvedValue({
+        settings: view,
+        inactive: [],
+      });
       const handleSubmit = vi.fn().mockResolvedValue(undefined);
 
       render(
@@ -303,49 +298,6 @@ describe("EditProviderDialog", () => {
     expect(handleSubmit.mock.calls[0][0].editorSave).toBeUndefined();
   });
 
-  it("代理模式下编辑 Codex 供应商也显示它自己的关键字段，不读 live 里的代理契约", async () => {
-    const provider: Provider = {
-      id: "deepseek",
-      name: "DeepSeek",
-      category: "custom",
-      settingsConfig: {
-        auth: {
-          OPENAI_API_KEY: "db-key",
-        },
-        config:
-          'model_provider = "custom"\n[model_providers.custom]\nbase_url = "https://api.deepseek.com/v1"\n',
-      },
-    };
-
-    render(
-      <EditProviderDialog
-        open
-        provider={provider}
-        onOpenChange={vi.fn()}
-        onSubmit={vi.fn()}
-        appId="codex"
-        isProxyTakeover
-      />,
-    );
-
-    await waitFor(() => {
-      expect(screen.getByTestId("is-proxy-takeover").textContent).toBe("true");
-    });
-
-    expect(apiMocks.getLiveProviderSettings).not.toHaveBeenCalled();
-    await waitFor(() => {
-      expect(
-        JSON.parse(screen.getByTestId("settings-config").textContent ?? "{}"),
-      ).toEqual(provider.settingsConfig);
-    });
-    expect(apiMocks.getEditorView).toHaveBeenCalledWith(
-      "codex",
-      provider.settingsConfig,
-      "custom",
-      provider.id,
-    );
-  });
-
   it("clears the nested auth panel before the dialog reopens", async () => {
     const provider: Provider = {
       id: "official",
@@ -361,9 +313,7 @@ describe("EditProviderDialog", () => {
     const { rerender } = render(<EditProviderDialog open {...props} />);
 
     fireEvent.click(await screen.findByRole("button", { name: "manage-auth" }));
-    expect(screen.getByTestId("auth-settings-panel")).toHaveTextContent(
-      "codex_oauth",
-    );
+    expect(screen.getByTestId("auth-settings-panel")).toBeInTheDocument();
 
     rerender(<EditProviderDialog open={false} {...props} />);
     rerender(<EditProviderDialog open {...props} />);
@@ -451,7 +401,6 @@ describe("EditProviderDialog", () => {
         models: [{ id: "model" }],
       },
       meta: {
-        isPartner: true,
         endpointAutoSelect: true,
         custom_endpoints: {
           "https://failover.example.com/v1": {
@@ -477,7 +426,7 @@ describe("EditProviderDialog", () => {
 
     await waitFor(() => expect(handleSubmit).toHaveBeenCalledTimes(1));
     expect(handleSubmit.mock.calls[0][0].provider.meta).toMatchObject({
-      isPartner: true,
+      endpointAutoSelect: true,
     });
     expect(handleSubmit.mock.calls[0][0]).not.toHaveProperty(
       "expectedSettingsConfig",

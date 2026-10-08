@@ -9,21 +9,14 @@ import {
 /**
  * 授权中心的账号被哪些供应商在用：用前端已有的供应商列表（和供应商页同一份缓存）现算。
  */
-export function useManagedAccountUsers(
-  authProvider: ManagedAuthProvider,
-  defaultAccountId: string | null,
-) {
-  const { data: claude } = useProvidersQuery("claude");
-  const { data: desktop } = useProvidersQuery("claude-desktop");
+export function useManagedAccountUsers(authProvider: ManagedAuthProvider) {
   const { data: codex } = useProvidersQuery("codex");
 
   return useCallback(
     (accountIds: readonly string[]): ManagedAccountUser[] =>
-      findManagedAccountUsers(authProvider, accountIds, defaultAccountId, {
-        claude: claude?.providers,
-        "claude-desktop": desktop?.providers,
+      findManagedAccountUsers(authProvider, accountIds, {
         codex: codex?.providers,
       }),
-    [authProvider, defaultAccountId, claude, desktop, codex],
+    [authProvider, codex],
   );
 }

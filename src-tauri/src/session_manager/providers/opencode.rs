@@ -7,8 +7,10 @@ use serde_json::Value;
 use crate::session_manager::{SessionMessage, SessionMeta};
 
 use super::blocks::assign_turn_ids;
-use super::opencode_blocks::{message_from_parts, PartLocator};
-use super::utils::{parse_timestamp_to_ms, path_basename, truncate_summary};
+use super::opencode_blocks::{message_from_parts, v2_message, PartLocator};
+use super::utils::{
+    collect_files_with_extension, parse_timestamp_to_ms, path_basename, truncate_summary,
+};
 
 const PROVIDER_ID: &str = "opencode";
 
@@ -63,6 +65,37 @@ fn sqlite_table_exists(conn: &Connection, table: &str) -> bool {
     .unwrap_or(false)
 }
 
+fn sqlite_column_exists(conn: &Connection, table: &str, column: &str) -> bool {
+    conn.prepare(&format!("SELECT {column} FROM {table} LIMIT 0"))
+        .is_ok()
+}
+
+/// 列表只要根会话：子代理会话（`parent_id` 非空）不单独列出，与官方 TUI/CLI 的 `roots: true` 一致。
+/// 归档会话照常列出（2.x 的 TUI/CLI 都不隐藏归档）。
+/// `parent_column` 是 SQL 里引用该列的写法（可带表别名）；旧库没有这一列时不过滤。
+fn roots_filter(conn: &Connection, table: &str, parent_column: &str) -> Option<String> {
+    sqlite_column_exists(conn, table, "parent_id").then(|| format!("{parent_column} IS NULL"))
+}
+
+/// 会话本身及其全部子会话的 id，父会话在前。官方删除会话时递归删除子会话。
+fn session_tree(conn: &Connection, table: &str, root: &str) -> Vec<String> {
+    let mut ids = vec![root.to_string()];
+    if !sqlite_table_exists(conn, table) || !sqlite_column_exists(conn, table, "parent_id") {
+        return ids;
+    }
+    let sql = format!(
+        "WITH RECURSIVE tree(id) AS ( \
+             SELECT ?1 UNION SELECT s.id FROM {table} s JOIN tree ON s.parent_id = tree.id) \
+         SELECT id FROM tree WHERE id != ?1"
+    );
+    if let Ok(mut stmt) = conn.prepare(&sql) {
+        if let Ok(rows) = stmt.query_map([root], |row| row.get::<_, String>(0)) {
+            ids.extend(rows.flatten());
+        }
+    }
+    ids
+}
+
 /// Read the V1→V2 migration marker timestamp (`migration.v1-v2`) from the `kv` table.
 fn get_v2_migration_marker_ts(conn: &Connection) -> Option<i64> {
     if !sqlite_table_exists(conn, "kv") {
@@ -114,7 +147,7 @@ fn scan_sessions_json() -> Vec<SessionMeta> {
     }
 
     let mut json_files = Vec::new();
-    collect_json_files(&session_dir, &mut json_files);
+    collect_files_with_extension(&session_dir, "json", &mut json_files);
 
     let mut sessions = Vec::new();
     for path in json_files {
@@ -194,10 +227,15 @@ fn parse_sqlite_session_row(
 }
 
 fn scan_sessions_sqlite_v1(conn: &Connection, db_display: &str) -> Vec<SessionMeta> {
-    let sql = "SELECT id, COALESCE(title, ''), directory, time_created, time_updated \
-               FROM session ORDER BY time_updated DESC";
+    let roots = roots_filter(conn, "session", "parent_id")
+        .map(|filter| format!("WHERE {filter} "))
+        .unwrap_or_default();
+    let sql = format!(
+        "SELECT id, COALESCE(title, ''), directory, time_created, time_updated \
+         FROM session {roots}ORDER BY time_updated DESC"
+    );
 
-    let mut stmt = match conn.prepare(sql) {
+    let mut stmt = match conn.prepare(&sql) {
         Ok(s) => s,
         Err(_) => return Vec::new(),
     };
@@ -211,17 +249,22 @@ fn scan_sessions_sqlite_v1(conn: &Connection, db_display: &str) -> Vec<SessionMe
 }
 
 fn scan_sessions_sqlite_v2(conn: &Connection, db_display: &str) -> Vec<SessionMeta> {
-    let sql = "SELECT s.id, \
-                      COALESCE(s.title, ''), \
-                      s.directory, \
-                      s.time_created, \
-                      MAX(s.time_updated, COALESCE(MAX(m.time_updated), s.time_updated)) AS last_active_at \
-               FROM session_v2 s \
-               LEFT JOIN session_message m ON m.session_id = s.id \
-               GROUP BY s.id \
-               ORDER BY last_active_at DESC";
+    let roots = roots_filter(conn, "session_v2", "s.parent_id")
+        .map(|filter| format!("WHERE {filter} "))
+        .unwrap_or_default();
+    let sql = format!(
+        "SELECT s.id, \
+                COALESCE(s.title, ''), \
+                s.directory, \
+                s.time_created, \
+                MAX(s.time_updated, COALESCE(MAX(m.time_updated), s.time_updated)) AS last_active_at \
+         FROM session_v2 s \
+         LEFT JOIN session_message m ON m.session_id = s.id \
+         {roots}GROUP BY s.id \
+         ORDER BY last_active_at DESC"
+    );
 
-    let mut stmt = match conn.prepare(sql) {
+    let mut stmt = match conn.prepare(&sql) {
         Ok(s) => s,
         Err(_) => return Vec::new(),
     };
@@ -236,12 +279,17 @@ fn scan_sessions_sqlite_v2(conn: &Connection, db_display: &str) -> Vec<SessionMe
     // Include V1 sessions for mixed V1/V2 databases (e.g. user tested 2.x beta then continued on 1.x)
     if sqlite_table_exists(conn, "session") {
         if let Some(marker_ts) = get_v2_migration_marker_ts(conn) {
-            let v1_sql = "SELECT id, COALESCE(title, ''), directory, time_created, time_updated \
-                          FROM session \
-                          WHERE NOT EXISTS (SELECT 1 FROM session_v2 WHERE session_v2.id = session.id) \
-                            AND time_updated > ?1 \
-                          ORDER BY time_updated DESC";
-            if let Ok(mut v1_stmt) = conn.prepare(v1_sql) {
+            let roots = roots_filter(conn, "session", "session.parent_id")
+                .map(|filter| format!("AND {filter} "))
+                .unwrap_or_default();
+            let v1_sql = format!(
+                "SELECT id, COALESCE(title, ''), directory, time_created, time_updated \
+                 FROM session \
+                 WHERE NOT EXISTS (SELECT 1 FROM session_v2 WHERE session_v2.id = session.id) \
+                   AND time_updated > ?1 \
+                   {roots}ORDER BY time_updated DESC"
+            );
+            if let Ok(mut v1_stmt) = conn.prepare(&v1_sql) {
                 if let Ok(rows) =
                     v1_stmt.query_map([marker_ts], |row| parse_sqlite_session_row(row, db_display))
                 {
@@ -267,7 +315,7 @@ pub fn load_messages(path: &Path) -> Result<Vec<SessionMessage>, String> {
         .ok_or_else(|| "Cannot determine storage root from message path".to_string())?;
 
     let mut msg_files = Vec::new();
-    collect_json_files(path, &mut msg_files);
+    collect_files_with_extension(path, "json", &mut msg_files);
 
     // (created_ts, message_id, message)
     let mut entries: Vec<(i64, String, SessionMessage)> = Vec::new();
@@ -291,7 +339,7 @@ pub fn load_messages(path: &Path) -> Result<Vec<SessionMessage>, String> {
 
         // storage/part/{messageID}/ 下的 part 文件；part id 按时间递增，按文件名排序即生成顺序
         let mut part_files = Vec::new();
-        collect_json_files(&storage.join("part").join(msg_id), &mut part_files);
+        collect_files_with_extension(&storage.join("part").join(msg_id), "json", &mut part_files);
         part_files.sort();
         let parts: Vec<(PartLocator, Value)> = part_files
             .iter()
@@ -467,55 +515,10 @@ fn load_messages_sqlite_v2(
         let Ok(msg_value) = serde_json::from_str::<Value>(&data) else {
             continue;
         };
-        if !matches!(msg_type.as_str(), "user" | "assistant" | "system") {
-            continue;
-        }
-
-        // user 优先取 `text`；其余取 `content[]`（结构同 v1 parts），最后退回 `text`
-        let text_part = |text: &str| {
-            (
-                PartLocator::Sqlite {
-                    table: "session_message",
-                    id: row_id.clone(),
-                    base: String::new(),
-                },
-                serde_json::json!({ "type": "text", "text": text }),
-            )
-        };
-        let parts: Vec<(PartLocator, Value)> = match (
-            msg_type.as_str(),
-            msg_value.get("text").and_then(Value::as_str),
-            msg_value.get("content"),
-        ) {
-            ("user" | "system", Some(text), _) => vec![text_part(text)],
-            (_, _, Some(Value::Array(items))) if msg_type != "system" => items
-                .iter()
-                .enumerate()
-                .map(|(i, item)| {
-                    (
-                        PartLocator::Sqlite {
-                            table: "session_message",
-                            id: row_id.clone(),
-                            base: format!("/content/{i}"),
-                        },
-                        item.clone(),
-                    )
-                })
-                .collect(),
-            (_, _, Some(Value::String(text))) if msg_type == "user" => vec![text_part(text)],
-            (_, Some(text), _) => vec![text_part(text)],
-            _ => Vec::new(),
-        };
-
-        let message = message_from_parts(
-            &msg_type,
-            Some(row_id.clone()),
-            Some(ts),
-            &msg_value,
-            &parts,
-        );
-        if !message.is_empty() {
-            messages.push(message);
+        if let Some(message) = v2_message(&row_id, &msg_type, ts, &msg_value) {
+            if !message.is_empty() {
+                messages.push(message);
+            }
         }
     }
 
@@ -530,9 +533,64 @@ pub fn delete_session(storage: &Path, path: &Path, session_id: &str) -> Result<b
             path.display()
         ));
     }
+    if !is_safe_id(session_id) {
+        return Err(format!("Invalid OpenCode session ID: {session_id:?}"));
+    }
+    // 子会话随父会话一起删除（官方 `Session.remove` 递归删除）
+    for child in child_session_ids_json(storage, session_id) {
+        if !is_safe_id(&child) {
+            log::warn!("跳过 id 不合法的 OpenCode 子会话: {child:?}");
+            continue;
+        }
+        delete_session_files(storage, &storage.join("message").join(&child), &child)?;
+    }
+    delete_session_files(storage, path, session_id)
+}
 
+/// OpenCode 自己写的 id 只含字母、数字、`_`、`-`（`ses_…`、`msg_…`）。id 来自磁盘上的
+/// JSON，进入删除路径前要校验：空串、`..`、绝对路径会让 `Path::join` 指到预期目录之外。
+fn is_safe_id(id: &str) -> bool {
+    !id.is_empty()
+        && id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+}
+
+/// 文件存储里 `parentID` 指向 `root` 的全部后代会话 id。
+fn child_session_ids_json(storage: &Path, root: &str) -> Vec<String> {
+    let mut files = Vec::new();
+    collect_files_with_extension(&storage.join("session"), "json", &mut files);
+    let mut children: HashMap<String, Vec<String>> = HashMap::new();
+    for path in files {
+        let Some(value) = read_json(&path) else {
+            continue;
+        };
+        if let (Some(id), Some(parent)) = (
+            value.get("id").and_then(Value::as_str),
+            value.get("parentID").and_then(Value::as_str),
+        ) {
+            children
+                .entry(parent.to_string())
+                .or_default()
+                .push(id.to_string());
+        }
+    }
+    let mut ids = Vec::new();
+    let mut queue = vec![root.to_string()];
+    while let Some(parent) = queue.pop() {
+        for child in children.remove(&parent).unwrap_or_default() {
+            if child != root && !ids.contains(&child) {
+                queue.push(child.clone());
+                ids.push(child);
+            }
+        }
+    }
+    ids
+}
+
+fn delete_session_files(storage: &Path, path: &Path, session_id: &str) -> Result<bool, String> {
     let mut message_files = Vec::new();
-    collect_json_files(path, &mut message_files);
+    collect_files_with_extension(path, "json", &mut message_files);
 
     let mut message_ids = Vec::new();
     for message_path in &message_files {
@@ -545,7 +603,11 @@ pub fn delete_session(storage: &Path, path: &Path, session_id: &str) -> Result<b
             Err(_) => continue,
         };
         if let Some(message_id) = value.get("id").and_then(Value::as_str) {
-            message_ids.push(message_id.to_string());
+            if is_safe_id(message_id) {
+                message_ids.push(message_id.to_string());
+            } else {
+                log::warn!("跳过 id 不合法的 OpenCode 消息: {message_id:?}");
+            }
         }
     }
 
@@ -569,6 +631,15 @@ pub fn delete_session(storage: &Path, path: &Path, session_id: &str) -> Result<b
         )
     })?;
 
+    // 整个目录删除前再确认它就是 `storage/message/<会话 id>`。
+    if path.parent() != Some(storage.join("message").as_path())
+        || path.file_name().and_then(|name| name.to_str()) != Some(session_id)
+    {
+        return Err(format!(
+            "Refusing to delete {}: not an OpenCode message directory",
+            path.display()
+        ));
+    }
     remove_dir_all_if_exists(path).map_err(|e| {
         format!(
             "Failed to delete OpenCode message directory {}: {e}",
@@ -617,69 +688,26 @@ pub fn delete_session_sqlite(session_id: &str, source: &str) -> Result<bool, Str
         .unchecked_transaction()
         .map_err(|e| format!("Failed to begin transaction: {e}"))?;
 
-    let deleted = match schema {
+    // 子会话随父会话一起删除（官方 `Session.remove` 递归删除），否则会成为列表里看不到的孤儿
+    let mut deleted = 0;
+    match schema {
         OpenCodeSchema::V2 => {
-            tx.execute(
-                "DELETE FROM session_message WHERE session_id = ?1",
-                [session_id],
-            )
-            .map_err(|e| format!("Failed to delete OpenCode V2 messages: {e}"))?;
-
-            // Best-effort cleanup of auxiliary V2 tables whose schema may evolve
-            for child in [
-                "session_pending",
-                "session_inbox",
-                "instruction_entry",
-                "instruction_state",
-            ] {
-                if sqlite_table_exists(&tx, child) {
-                    let _ = tx.execute(
-                        &format!("DELETE FROM {child} WHERE session_id = ?1"),
-                        [session_id],
-                    );
+            let mut ids = session_tree(&tx, "session_v2", session_id);
+            for id in session_tree(&tx, "session", session_id) {
+                if !ids.contains(&id) {
+                    ids.push(id);
                 }
             }
-            if sqlite_table_exists(&tx, "event_sequence") {
-                let _ = tx.execute(
-                    "DELETE FROM event_sequence WHERE aggregate_id = ?1",
-                    [session_id],
-                );
+            for id in &ids {
+                deleted += delete_session_rows_v2(&tx, id)?;
             }
-            let mut deleted_count = tx
-                .execute("DELETE FROM session_v2 WHERE id = ?1", [session_id])
-                .map_err(|e| format!("Failed to delete OpenCode V2 session: {e}"))?;
-
-            // Also clean up legacy V1 tables if present (for mixed databases or migrated sessions)
-            if sqlite_table_exists(&tx, "session") {
-                if sqlite_table_exists(&tx, "part") {
-                    tx.execute("DELETE FROM part WHERE session_id = ?1", [session_id])
-                        .map_err(|e| format!("Failed to delete OpenCode parts: {e}"))?;
-                }
-                if sqlite_table_exists(&tx, "message") {
-                    tx.execute("DELETE FROM message WHERE session_id = ?1", [session_id])
-                        .map_err(|e| format!("Failed to delete OpenCode messages: {e}"))?;
-                }
-                let v1_deleted = tx
-                    .execute("DELETE FROM session WHERE id = ?1", [session_id])
-                    .map_err(|e| format!("Failed to delete OpenCode legacy session: {e}"))?;
-                deleted_count += v1_deleted;
-            }
-
-            deleted_count
         }
         OpenCodeSchema::V1 => {
-            if sqlite_table_exists(&tx, "part") {
-                tx.execute("DELETE FROM part WHERE session_id = ?1", [session_id])
-                    .map_err(|e| format!("Failed to delete OpenCode parts: {e}"))?;
+            for id in session_tree(&tx, "session", session_id) {
+                deleted += delete_session_rows_v1(&tx, &id)?;
             }
-            if sqlite_table_exists(&tx, "message") {
-                tx.execute("DELETE FROM message WHERE session_id = ?1", [session_id])
-                    .map_err(|e| format!("Failed to delete OpenCode messages: {e}"))?;
-            }
-            tx.execute("DELETE FROM session WHERE id = ?1", [session_id])
-                .map_err(|e| format!("Failed to delete OpenCode session: {e}"))?
         }
-    };
+    }
 
     tx.commit()
         .map_err(|e| format!("Failed to commit session deletion: {e}"))?;
@@ -687,11 +715,75 @@ pub fn delete_session_sqlite(session_id: &str, source: &str) -> Result<bool, Str
     Ok(deleted > 0)
 }
 
+/// 删除一个 V2 会话的行；混合库里同 id 的 V1 行一并删除。返回删掉的会话行数。
+fn delete_session_rows_v2(tx: &Connection, session_id: &str) -> Result<usize, String> {
+    tx.execute(
+        "DELETE FROM session_message WHERE session_id = ?1",
+        [session_id],
+    )
+    .map_err(|e| format!("Failed to delete OpenCode V2 messages: {e}"))?;
+
+    // Best-effort cleanup of auxiliary V2 tables whose schema may evolve
+    for child in [
+        "session_pending",
+        "session_inbox",
+        "instruction_entry",
+        "instruction_state",
+    ] {
+        if sqlite_table_exists(tx, child) {
+            let _ = tx.execute(
+                &format!("DELETE FROM {child} WHERE session_id = ?1"),
+                [session_id],
+            );
+        }
+    }
+    // 事件日志：`event` 靠外键级联删除，但连接默认没开 foreign_keys，要显式删
+    for table in ["event", "event_sequence"] {
+        if sqlite_table_exists(tx, table) {
+            let _ = tx.execute(
+                &format!("DELETE FROM {table} WHERE aggregate_id = ?1"),
+                [session_id],
+            );
+        }
+    }
+    let mut deleted = tx
+        .execute("DELETE FROM session_v2 WHERE id = ?1", [session_id])
+        .map_err(|e| format!("Failed to delete OpenCode V2 session: {e}"))?;
+
+    // Also clean up legacy V1 tables if present (for mixed databases or migrated sessions)
+    if sqlite_table_exists(tx, "session") {
+        deleted += delete_session_rows_v1(tx, session_id)?;
+    }
+    Ok(deleted)
+}
+
+/// 删除一个 V1 会话的 part / message / session 行，返回删掉的会话行数。
+fn delete_session_rows_v1(tx: &Connection, session_id: &str) -> Result<usize, String> {
+    if sqlite_table_exists(tx, "part") {
+        tx.execute("DELETE FROM part WHERE session_id = ?1", [session_id])
+            .map_err(|e| format!("Failed to delete OpenCode parts: {e}"))?;
+    }
+    if sqlite_table_exists(tx, "message") {
+        tx.execute("DELETE FROM message WHERE session_id = ?1", [session_id])
+            .map_err(|e| format!("Failed to delete OpenCode messages: {e}"))?;
+    }
+    tx.execute("DELETE FROM session WHERE id = ?1", [session_id])
+        .map_err(|e| format!("Failed to delete OpenCode session: {e}"))
+}
+
 fn parse_session(storage: &Path, path: &Path) -> Option<SessionMeta> {
     let data = std::fs::read_to_string(path).ok()?;
     let value: Value = serde_json::from_str(&data).ok()?;
 
     let session_id = value.get("id").and_then(Value::as_str)?.to_string();
+    // 子代理会话不单独列出（同 SQLite 的 `parent_id IS NULL`）
+    if value
+        .get("parentID")
+        .and_then(Value::as_str)
+        .is_some_and(|parent| !parent.is_empty())
+    {
+        return None;
+    }
     let title = value
         .get("title")
         .and_then(Value::as_str)
@@ -752,7 +844,7 @@ fn get_first_user_summary(storage: &Path, session_id: &str) -> Option<String> {
     }
 
     let mut msg_files = Vec::new();
-    collect_json_files(&msg_dir, &mut msg_files);
+    collect_files_with_extension(&msg_dir, "json", &mut msg_files);
 
     // Collect user messages with timestamps for ordering
     let mut user_msgs: Vec<(i64, String)> = Vec::new();
@@ -822,7 +914,7 @@ fn collect_parts_text(part_dir: &Path) -> String {
     }
 
     let mut parts = Vec::new();
-    collect_json_files(part_dir, &mut parts);
+    collect_files_with_extension(part_dir, "json", &mut parts);
 
     let mut texts = Vec::new();
     for part_path in &parts {
@@ -843,30 +935,10 @@ fn collect_parts_text(part_dir: &Path) -> String {
     texts.join("\n")
 }
 
-fn collect_json_files(root: &Path, files: &mut Vec<PathBuf>) {
-    if !root.exists() {
-        return;
-    }
-
-    let entries = match std::fs::read_dir(root) {
-        Ok(entries) => entries,
-        Err(_) => return,
-    };
-
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            collect_json_files(&path, files);
-        } else if path.extension().and_then(|ext| ext.to_str()) == Some("json") {
-            files.push(path);
-        }
-    }
-}
-
 fn find_session_file(storage: &Path, session_id: &str) -> Option<PathBuf> {
     let session_root = storage.join("session");
     let mut files = Vec::new();
-    collect_json_files(&session_root, &mut files);
+    collect_files_with_extension(&session_root, "json", &mut files);
     let expected = format!("{session_id}.json");
 
     files
@@ -893,6 +965,7 @@ fn remove_dir_all_if_exists(path: &Path) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::session_manager::model::{EventKind, SessionBlock};
     use rusqlite::Connection;
     use std::sync::{Mutex, OnceLock};
     use tempfile::tempdir;
@@ -908,10 +981,12 @@ mod tests {
             PRAGMA foreign_keys = ON;
             CREATE TABLE session (
                 id TEXT PRIMARY KEY,
+                parent_id TEXT,
                 title TEXT NOT NULL,
                 directory TEXT NOT NULL,
                 time_created INTEGER NOT NULL,
-                time_updated INTEGER NOT NULL
+                time_updated INTEGER NOT NULL,
+                time_archived INTEGER
             );
             CREATE TABLE message (
                 id TEXT PRIMARY KEY,
@@ -982,9 +1057,29 @@ mod tests {
             r#"{"id":"project-123"}"#,
         )
         .expect("write project file");
+        // 子代理会话：不单独列出，随父会话删除
+        let child_file = session_dir.join("ses_child.json");
+        let child_message_dir = storage.join("message").join("ses_child");
+        std::fs::create_dir_all(&child_message_dir).expect("create child message dir");
+        std::fs::write(
+            &child_file,
+            format!(
+                r#"{{"id":"ses_child","parentID":"{session_id}","projectID":"{project_id}","directory":"/tmp/project","time":{{"created":1,"updated":2}}}}"#
+            ),
+        )
+        .expect("write child session file");
+        std::fs::write(
+            child_message_dir.join("msg_c.json"),
+            r#"{"id":"msg_c","sessionID":"ses_child","role":"user"}"#,
+        )
+        .expect("write child message file");
+        assert!(parse_session(storage, &child_file).is_none());
+        assert!(parse_session(storage, &session_file).is_some());
 
         delete_session(storage, &message_dir, session_id).expect("delete session");
 
+        assert!(!child_file.exists());
+        assert!(!child_message_dir.exists());
         assert!(!session_file.exists());
         assert!(!message_dir.exists());
         assert!(!session_diff.exists());
@@ -993,6 +1088,55 @@ mod tests {
             .join("project")
             .join(format!("{project_id}.json"))
             .exists());
+    }
+
+    #[test]
+    fn delete_session_ignores_unsafe_child_and_message_ids() {
+        let temp = tempdir().expect("tempdir");
+        let storage = temp.path();
+        let session_dir = storage.join("session").join("project-1");
+        std::fs::create_dir_all(&session_dir).unwrap();
+        let message_dir = storage.join("message").join("ses_parent");
+        std::fs::create_dir_all(&message_dir).unwrap();
+        std::fs::write(
+            session_dir.join("ses_parent.json"),
+            r#"{"id":"ses_parent","projectID":"project-1","time":{"created":1,"updated":2}}"#,
+        )
+        .unwrap();
+        // 被改坏的子会话 id，以及一条 id 是 ".." 的消息
+        for (index, bad) in ["", "..", "/tmp/x"].iter().enumerate() {
+            std::fs::write(
+                session_dir.join(format!("bad_{index}.json")),
+                serde_json::json!({ "id": bad, "parentID": "ses_parent" }).to_string(),
+            )
+            .unwrap();
+        }
+        std::fs::write(message_dir.join("msg_bad.json"), r#"{"id":".."}"#).unwrap();
+        // 其他会话的消息和 part 必须完好
+        let other_messages = storage.join("message").join("ses_other");
+        std::fs::create_dir_all(&other_messages).unwrap();
+        std::fs::write(other_messages.join("msg_o.json"), r#"{"id":"msg_o"}"#).unwrap();
+        let other_part = storage.join("part").join("msg_o");
+        std::fs::create_dir_all(&other_part).unwrap();
+
+        delete_session(storage, &message_dir, "ses_parent").expect("delete");
+
+        assert!(!message_dir.exists());
+        assert!(other_messages.join("msg_o.json").exists());
+        assert!(other_part.exists());
+        assert!(storage.join("session").exists());
+        assert!(storage.join("part").exists());
+    }
+
+    #[test]
+    fn delete_session_rejects_unsafe_session_ids() {
+        let temp = tempdir().expect("tempdir");
+        let storage = temp.path();
+        for bad in ["", ".."] {
+            let path = storage.join("message").join(bad);
+            assert!(delete_session(storage, &path, bad).is_err(), "{bad:?}");
+        }
+        assert!(temp.path().exists());
     }
 
     #[test]
@@ -1074,6 +1218,11 @@ mod tests {
             ("ses_2", "Named Session", "/tmp/project-b", 1_771_061_950_000_i64, 1_771_061_955_000_i64),
         )
         .expect("insert session 2");
+        conn.execute(
+            "INSERT INTO session (id, parent_id, title, directory, time_created, time_updated) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            ("ses_child", "ses_1", "Subagent", "/tmp/project-a", 1_771_061_953_100_i64, 1_771_061_999_000_i64),
+        )
+        .expect("insert child session");
         drop(conn);
 
         let sessions = scan_sessions_sqlite();
@@ -1200,6 +1349,23 @@ mod tests {
             ("prt_1", "ses_1", "msg_1", 1000_i64, r#"{"type":"text","text":"Hello"}"#),
         )
         .expect("insert part");
+        for (id, parent) in [("ses_child", "ses_1"), ("ses_grandchild", "ses_child")] {
+            conn.execute(
+                "INSERT INTO session (id, parent_id, title, directory, time_created, time_updated) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                (id, parent, "Subagent", "/tmp/project-a", 1000_i64, 3000_i64),
+            )
+            .expect("insert child session");
+            conn.execute(
+                "INSERT INTO message (id, session_id, time_created, data) VALUES (?1, ?2, ?3, ?4)",
+                (format!("msg_{id}"), id, 1000_i64, r#"{"role":"user"}"#),
+            )
+            .expect("insert child message");
+        }
+        conn.execute(
+            "INSERT INTO session (id, title, directory, time_created, time_updated) VALUES (?1, ?2, ?3, ?4, ?5)",
+            ("ses_other", "Other", "/tmp/project-a", 1000_i64, 3000_i64),
+        )
+        .expect("insert unrelated session");
         drop(conn);
 
         let source = format!("sqlite:{}:ses_1", db_path.display());
@@ -1232,6 +1398,15 @@ mod tests {
         assert_eq!(remaining_sessions, 0);
         assert_eq!(remaining_messages, 0);
         assert_eq!(remaining_parts, 0);
+        let left: Vec<String> = conn
+            .prepare("SELECT id FROM session")
+            .and_then(|mut stmt| stmt.query_map([], |row| row.get(0))?.collect())
+            .expect("list sessions");
+        assert_eq!(left, ["ses_other"]);
+        let child_messages: i64 = conn
+            .query_row("SELECT COUNT(*) FROM message", [], |row| row.get(0))
+            .expect("count child messages");
+        assert_eq!(child_messages, 0);
 
         #[allow(deprecated)]
         if let Some(value) = original_xdg {
@@ -1285,10 +1460,13 @@ mod tests {
             PRAGMA foreign_keys = ON;
             CREATE TABLE session_v2 (
                 id TEXT PRIMARY KEY,
+                parent_id TEXT,
+                fork_session_id TEXT,
                 title TEXT,
                 directory TEXT NOT NULL,
                 time_created INTEGER NOT NULL,
-                time_updated INTEGER NOT NULL
+                time_updated INTEGER NOT NULL,
+                time_archived INTEGER
             );
             CREATE TABLE session_message (
                 id TEXT PRIMARY KEY,
@@ -1299,6 +1477,18 @@ mod tests {
                 time_created INTEGER NOT NULL,
                 time_updated INTEGER NOT NULL,
                 FOREIGN KEY(session_id) REFERENCES session_v2(id) ON DELETE CASCADE
+            );
+            CREATE TABLE event_sequence (
+                aggregate_id TEXT PRIMARY KEY,
+                seq INTEGER NOT NULL
+            );
+            CREATE TABLE event (
+                id TEXT PRIMARY KEY,
+                aggregate_id TEXT NOT NULL,
+                seq INTEGER NOT NULL,
+                type TEXT NOT NULL,
+                data TEXT NOT NULL,
+                FOREIGN KEY(aggregate_id) REFERENCES event_sequence(aggregate_id) ON DELETE CASCADE
             );
             ",
         )
@@ -1334,6 +1524,17 @@ mod tests {
             ("ses_v2_2", "V2 Named Session", "/tmp/project-v2-b", 1_500_i64, 2_500_i64),
         )
         .expect("insert v2 session 2");
+        // 子代理会话不列出；归档会话照常列出
+        conn.execute(
+            "INSERT INTO session_v2 (id, parent_id, title, directory, time_created, time_updated) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            ("ses_v2_child", "ses_v2_1", "Find configs (@explore subagent)", "/tmp/project-v2-a", 1_600_i64, 9_000_i64),
+        )
+        .expect("insert v2 child session");
+        conn.execute(
+            "INSERT INTO session_v2 (id, title, directory, time_created, time_updated, time_archived) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            ("ses_v2_arch", "Archived", "/tmp/project-v2-c", 1_000_i64, 1_200_i64, 1_300_i64),
+        )
+        .expect("insert v2 archived session");
         // Message in ses_v2_1 has a newer time_updated (3_000) so ses_v2_1 should sort first
         conn.execute(
             "INSERT INTO session_message (id, session_id, type, seq, data, time_created, time_updated) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
@@ -1350,7 +1551,8 @@ mod tests {
             std::env::remove_var("XDG_DATA_HOME");
         }
 
-        assert_eq!(sessions.len(), 2);
+        assert_eq!(sessions.len(), 3);
+        assert_eq!(sessions[2].session_id, "ses_v2_arch");
         assert_eq!(sessions[0].session_id, "ses_v2_1");
         assert_eq!(sessions[0].title.as_deref(), Some("project-v2-a"));
         assert_eq!(sessions[0].last_active_at, Some(3_000));
@@ -1386,7 +1588,7 @@ mod tests {
                 "ses_v2_1",
                 "assistant",
                 2_i64,
-                r#"{"content":[{"type":"reasoning","text":"thinking"},{"type":"tool","name":"shell","id":"call_1"},{"type":"text","text":"All done in V2"}]}"#,
+                r#"{"content":[{"type":"reasoning","text":"thinking"},{"type":"tool","name":"shell","id":"call_1","state":{"status":"completed","input":{"command":"ls"},"content":[{"type":"text","text":"a.txt"}]},"time":{"created":2100}},{"type":"text","text":"All done in V2"}]}"#,
                 2000_i64,
                 2500_i64,
             ),
@@ -1394,7 +1596,7 @@ mod tests {
         .expect("insert assistant message");
         conn.execute(
             "INSERT INTO session_message (id, session_id, type, seq, data, time_created, time_updated) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-            ("msg_3", "ses_v2_1", "compaction", 3_i64, r#"{"status":"completed"}"#, 2600_i64, 2600_i64),
+            ("msg_3", "ses_v2_1", "compaction", 3_i64, r#"{"status":"completed","summary":"Goal: say hello"}"#, 2600_i64, 2600_i64),
         )
         .expect("insert compaction message");
         drop(conn);
@@ -1402,13 +1604,21 @@ mod tests {
         let source = format!("sqlite:{}:ses_v2_1", db_path.display());
         let messages = load_messages_sqlite(&source).expect("load v2 sqlite messages");
 
-        assert_eq!(messages.len(), 2);
+        assert_eq!(messages.len(), 3);
         assert_eq!(messages[0].role, "user");
         assert_eq!(messages[0].content, "Hello V2");
         assert_eq!(messages[0].ts, Some(1000));
         assert_eq!(messages[1].role, "assistant");
-        assert_eq!(messages[1].content, "[Tool: shell] shell\n\nAll done in V2");
+        assert_eq!(
+            messages[1].content,
+            "[Tool: shell] ls\n\na.txt\n\nAll done in V2"
+        );
         assert_eq!(messages[1].ts, Some(2000));
+        assert_eq!(messages[2].role, "system");
+        assert!(matches!(
+            &messages[2].blocks[..],
+            [SessionBlock::Event { kind: EventKind::Compaction, text: Some(t), .. }] if t == "Goal: say hello"
+        ));
     }
 
     #[test]
@@ -1438,6 +1648,38 @@ mod tests {
             ("msg_1", "ses_v2_1", "user", 1_i64, r#"{"text":"Hello"}"#, 1000_i64, 1000_i64),
         )
         .expect("insert message");
+        for (id, parent) in [
+            ("ses_v2_child", "ses_v2_1"),
+            ("ses_v2_grandchild", "ses_v2_child"),
+        ] {
+            conn.execute(
+                "INSERT INTO session_v2 (id, parent_id, title, directory, time_created, time_updated) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                (id, parent, "Subagent", "/tmp/project-a", 1000_i64, 3000_i64),
+            )
+            .expect("insert child session");
+            conn.execute(
+                "INSERT INTO session_message (id, session_id, type, seq, data, time_created, time_updated) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                (format!("msg_{id}"), id, "user", 1_i64, r#"{"text":"Task"}"#, 1000_i64, 1000_i64),
+            )
+            .expect("insert child message");
+        }
+        conn.execute(
+            "INSERT INTO session_v2 (id, title, directory, time_created, time_updated) VALUES (?1, ?2, ?3, ?4, ?5)",
+            ("ses_v2_other", "Other", "/tmp/project-a", 1000_i64, 3000_i64),
+        )
+        .expect("insert unrelated session");
+        for id in ["ses_v2_1", "ses_v2_child", "ses_v2_other"] {
+            conn.execute(
+                "INSERT INTO event_sequence (aggregate_id, seq) VALUES (?1, 1)",
+                [id],
+            )
+            .expect("insert event_sequence");
+            conn.execute(
+                "INSERT INTO event (id, aggregate_id, seq, type, data) VALUES (?1, ?2, 1, 'session.created', '{}')",
+                (format!("evt_{id}"), id),
+            )
+            .expect("insert event");
+        }
         drop(conn);
 
         let source = format!("sqlite:{}:ses_v2_1", db_path.display());
@@ -1462,6 +1704,21 @@ mod tests {
 
         assert_eq!(remaining_sessions, 0);
         assert_eq!(remaining_messages, 0);
+        let ids = |sql: &str| -> Vec<String> {
+            conn.prepare(sql)
+                .and_then(|mut stmt| stmt.query_map([], |row| row.get(0))?.collect())
+                .expect("list ids")
+        };
+        assert_eq!(ids("SELECT id FROM session_v2"), ["ses_v2_other"]);
+        assert_eq!(
+            ids("SELECT DISTINCT session_id FROM session_message"),
+            Vec::<String>::new()
+        );
+        assert_eq!(ids("SELECT aggregate_id FROM event"), ["ses_v2_other"]);
+        assert_eq!(
+            ids("SELECT aggregate_id FROM event_sequence"),
+            ["ses_v2_other"]
+        );
 
         if let Some(value) = original_xdg {
             std::env::set_var("XDG_DATA_HOME", value);

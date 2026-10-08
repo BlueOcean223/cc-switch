@@ -113,7 +113,7 @@ interface ImportReport {
 
 /**
  * MCP 全局页（v7）：页头 + 应用矩阵 + 添加 / 编辑抽屉。
- * 以这里为准写进勾选的应用；不支持的应用（Claude Desktop、OpenClaw）没有列。
+ * 以这里为准写进勾选的应用；不支持的应用（OpenClaw）没有列。
  */
 const UnifiedMcpPanel: React.FC<UnifiedMcpPanelProps> = ({
   onInteractionBlockedChange,
@@ -782,6 +782,15 @@ const UnifiedMcpPanel: React.FC<UnifiedMcpPanelProps> = ({
                             scopeKind={scope.kind}
                             noun={noun}
                             disabled={controlsDisabled}
+                            // Grok 默认还读 ~/.claude.json 的 MCP，只关这一列挡不住
+                            help={
+                              app === "grokbuild"
+                                ? {
+                                    title: t("mcpPage.grokHelpTitle"),
+                                    body: t("mcpPage.grokHelp"),
+                                  }
+                                : undefined
+                            }
                             onEnableRest={() => void handleBulk(app, true)}
                             onDisableAll={() => void handleBulk(app, false)}
                           />

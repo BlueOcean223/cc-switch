@@ -84,6 +84,7 @@ pub fn set_app_config_dir_to_store(
         Some(p) => {
             let trimmed = p.trim();
             if !trimmed.is_empty() {
+                ensure_not_foreign_data_dir(&resolve_path(trimmed))?;
                 store.set(STORE_KEY_APP_CONFIG_DIR, Value::String(trimmed.to_string()));
                 log::info!("已将 app_config_dir 写入 Store: {trimmed}");
             } else {
@@ -103,6 +104,26 @@ pub fn set_app_config_dir_to_store(
 
     refresh_app_config_dir_override(app);
     Ok(())
+}
+
+/// 拒绝指向上游 CC Switch（或别的应用）数据目录的覆盖：ccs-lite 迁移它的库会让
+/// 上游打不开，见 `database::lineage`。
+fn ensure_not_foreign_data_dir(dir: &std::path::Path) -> Result<(), AppError> {
+    let lineage = crate::database::lineage::classify_file(&dir.join("cc-switch.db"))?;
+    match lineage {
+        Some(lineage) if !lineage.is_fork() => Err(AppError::localized(
+            "settings.appConfigDir.upstreamDataDir",
+            format!(
+                "{} 是上游 CC Switch 的数据目录，ccs-lite 不能使用它。请选择其他目录。",
+                dir.display()
+            ),
+            format!(
+                "{} is an upstream CC Switch data directory; ccs-lite cannot use it. Choose another directory.",
+                dir.display()
+            ),
+        )),
+        _ => Ok(()),
+    }
 }
 
 /// 解析路径，支持 ~ 开头的相对路径
@@ -132,4 +153,39 @@ pub fn migrate_app_config_dir_from_settings(app: &tauri::AppHandle) -> Result<()
 
     let _ = refresh_app_config_dir_override(app);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rusqlite::Connection;
+
+    fn make_db(dir: &std::path::Path, setup: &str) {
+        let conn = Connection::open(dir.join("cc-switch.db")).unwrap();
+        conn.execute_batch(setup).unwrap();
+    }
+
+    #[test]
+    fn data_dir_override_rejects_upstream_data_dirs() {
+        let empty = tempfile::tempdir().unwrap();
+        assert!(ensure_not_foreign_data_dir(empty.path()).is_ok());
+
+        let upstream = tempfile::tempdir().unwrap();
+        make_db(
+            upstream.path(),
+            "CREATE TABLE providers (id TEXT); PRAGMA user_version = 19;",
+        );
+        let err = ensure_not_foreign_data_dir(upstream.path()).unwrap_err();
+        assert!(err.to_string().contains("上游"), "{err}");
+
+        let fork = tempfile::tempdir().unwrap();
+        make_db(
+            fork.path(),
+            &format!(
+                "CREATE TABLE providers (id TEXT); PRAGMA user_version = 21; PRAGMA application_id = {};",
+                crate::database::lineage::FORK_APPLICATION_ID
+            ),
+        );
+        assert!(ensure_not_foreign_data_dir(fork.path()).is_ok());
+    }
 }

@@ -80,7 +80,7 @@ Codex 自己按"供应商标签"（一个叫 `model_provider` 的字段）给会
 "合并抽屉"需要把一部分官方会话的标签从 `openai` 改成 `custom`（这一步叫**迁移**，且是**可选的、需要你主动勾选**）。而**任何一次改写之前，CC Switch 都会先把原文件原封不动地复制一份**到这里：
 
 ```text
-~/.cc-switch/backups/codex-official-history-unify-v1/<时间戳>/
+~/.ccs-lite/backups/codex-official-history-unify-v1/<时间戳>/
 ```
 
 这份备份，就是日后"按备份精确还原"的唯一依据。它让整个过程变得**可逆**：你随时可以关掉开关，把当初迁进来的官方会话精确地翻回 `openai` 抽屉。
@@ -116,7 +116,7 @@ Codex 自己按"供应商标签"（一个叫 `model_provider` 的字段）给会
 
   > 开启后，官方订阅与第三方将共用同一个会话历史列表。注意：跨供应商继续旧会话时，可能因对方后端无法解密 encrypted_content 推理内容而失败。
   >
-  > 可选择同时把现有官方会话历史迁入共享列表（迁移前自动备份到 ~/.cc-switch/backups，关闭开关时可选择恢复）。
+  > 可选择同时把现有官方会话历史迁入共享列表（迁移前自动备份到 ~/.ccs-lite/backups，关闭开关时可选择恢复）。
 
 - **复选框**：同时迁入现有官方会话历史
 - **确认按钮**：我已了解，继续开启
@@ -147,7 +147,7 @@ Codex 自己按"供应商标签"（一个叫 `model_provider` 的字段）给会
    ③ 索引数据库 state_5.sqlite 同步在一个事务里把标签改过来
 ```
 
-- **备份位置**：`~/.cc-switch/backups/codex-official-history-unify-v1/<时间戳>/`，每次迁移生成一个带时间戳的"代际目录"，内含 `jsonl/`（会话副本）、`state/`（索引库副本）、`meta.json`（记录这次迁移属于哪个 Codex 目录）。
+- **备份位置**：`~/.ccs-lite/backups/codex-official-history-unify-v1/<时间戳>/`，每次迁移生成一个带时间戳的"代际目录"，内含 `jsonl/`（会话副本）、`state/`（索引库副本）、`meta.json`（记录这次迁移属于哪个 Codex 目录）。
 - **改的是什么**：只有 `model_provider` 这一个字段值。你的对话内容、推理内容、所有正文**原样保留**。
 - **删的是什么**：**什么都没删**。备份是"复制"，改写是"原子替换同一个文件"，全程没有任何删除会话或索引的动作。文件在任何时刻都是完整的（要么是旧内容、要么是新内容，绝不会是空或半截）。
 
@@ -184,7 +184,7 @@ Codex 自己按"供应商标签"（一个叫 `model_provider` 的字段）给会
 
 ```text
 ① 先把当前现场再复制一份到独立的还原备份目录
-   ~/.cc-switch/backups/codex-official-history-unify-restore-v1/<时间戳>/
+   ~/.ccs-lite/backups/codex-official-history-unify-restore-v1/<时间戳>/
    （还原本身也先备份，所以还原也不会丢数据）
 ② 翻遍所有迁移备份代际，找出"当初标签是 openai"的会话 id，组成一份"账本"
 ③ 只对【既在账本里、当前又仍是 custom】的会话，把标签改回 "openai"
@@ -218,7 +218,7 @@ Codex 自己按"供应商标签"（一个叫 `model_provider` 的字段）给会
 |---|---|---|---|
 | **A** 没勾迁移 | 官方老会话不在统一列表 | 全在，仍带 `openai` 标签 | 重开并勾迁移，或关开关 |
 | **B** 跨供应商续聊失败 | 续不上 / 报错 | 文件完好，只是密文跨后端解不开 | 回原供应商续；只看内容直接读 jsonl |
-| **C** 路由接管 / 注入被拒 | 没迁也没还原 | 迁移被安全跳过，文件没动 | 退出接管 → 重启重试；或直接关开关 |
+| **C** 注入被拒 | 没迁也没还原 | 迁移被安全跳过，文件没动 | 整理掉冲突路由 → 重启重试；或直接关开关 |
 | **D** 还原后新会话没回官方 | 开启期间新会话不在官方 | 在 `custom` 抽屉，设计上不动 | 切第三方供应商即可见 |
 | **E** 提示"没有可恢复备份" | 还原"失败" | 通常压根没迁移过，会话在原抽屉 | 关开关官方会话自动复现 |
 | **F** 提示"开关已重新开启，跳过还原" | 还原被拒 | 防数据撕裂，啥也没改 | 先彻底关开关再还原 |
@@ -250,16 +250,14 @@ Codex 自己按"供应商标签"（一个叫 `model_provider` 的字段）给会
 
 **现象**：你开启并勾了迁移，但官方老会话既没进统一列表、关开关想还原也提示没东西可还原（或者关闭弹窗里压根没出现还原复选框，参见场景 E）。你怀疑迁移过程中把会话搞丢了。
 
-**真相**：迁移根本**没执行**，所以也不可能弄丢——你的会话一个字都没被改。CC Switch 在迁移前有一道安全闸门：它会检查 Codex 的 live 配置（`~/.codex/config.toml`）此刻是否**真的**路由到了共享 `custom` 抽屉，只有真路由过去了才迁移。以下两种情况会判定"还没统一"（内部原因码 `live_not_unified`），于是**主动跳过迁移、保留你的开关和迁移意愿、等条件满足后再迁**：
+**真相**：迁移根本**没执行**，所以也不可能弄丢——你的会话一个字都没被改。CC Switch 在迁移前有一道安全闸门：它会检查 Codex 的 live 配置（`~/.codex/config.toml`）此刻是否**真的**路由到了共享 `custom` 抽屉，只有真路由过去了才迁移。以下情况会判定"还没统一"（内部原因码 `live_not_unified`），于是**主动跳过迁移、保留你的开关和迁移意愿、等条件满足后再迁**：
 
-- **路由接管期间**：CC Switch 的本地路由接管了 live 配置，接管期的 live 不带统一路由标记。
 - **注入被拒**：你的 `config.toml` 已有手工指定的 `model_provider`，或已存在一张形态不同的 `[model_providers.custom]` 表（可能带第三方地址）。为避免把官方流量错误路由到第三方后端，CC Switch 宁可不注入、不迁移。
 
 跳过迁移 = 不碰任何会话文件。**没迁，等于没动，谈不上丢。** 这是"安全延后"，不是"失败丢数据"。
 
 **怎么办**：
-- 退出路由接管 → **重启 CC Switch**：启动时会自动重试迁移（你的迁移意愿一直保留着）。
-- 检查 `~/.codex/config.toml`：若有你手工写的冲突路由，整理掉冲突后再开开关。
+- 检查 `~/.codex/config.toml`：若有你手工写的冲突路由，整理掉冲突后**重启 CC Switch**：启动时会自动重试迁移（你的迁移意愿一直保留着）。
 - 实在不想折腾：直接关开关，官方会话仍以 `openai` 抽屉正常显示，毫发无损。
 
 ### 场景 D：关了开关并还原，但"开启期间新聊的会话"没回官方 → 以为"新会话丢了"
@@ -285,7 +283,7 @@ Codex 自己按"供应商标签"（一个叫 `model_provider` 的字段）给会
 
 这三种情况下，没有任何会话被删除。
 
-**怎么办**：用文末命令统计 `~/.codex/sessions/` 里的会话文件总数，确认文件都在；再看 `~/.cc-switch/backups/` 里有没有 `codex-official-history-unify-v1` 目录——如果连这个目录都没有，说明你从没触发过迁移，会话一直在原抽屉。
+**怎么办**：用文末命令统计 `~/.codex/sessions/` 里的会话文件总数，确认文件都在；再看 `~/.ccs-lite/backups/` 里有没有 `codex-official-history-unify-v1` 目录——如果连这个目录都没有，说明你从没触发过迁移，会话一直在原抽屉。
 
 ### 场景 F：还原被拒，提示"统一会话历史开关已重新开启，已跳过还原"
 
@@ -305,8 +303,8 @@ Codex 自己按"供应商标签"（一个叫 `model_provider` 的字段）给会
 
 ### 最简单的方式：用文件管理器直接打开（完全不用命令行）
 
-- **macOS（Finder）**：按 `Cmd + Shift + G`，粘贴 `~/.codex/sessions` 回车，就能看到一堆 `.jsonl` 会话文件和它们的修改时间；备份目录粘贴 `~/.cc-switch/backups`。
-- **Windows（文件资源管理器）**：在地址栏粘贴 `%USERPROFILE%\.codex\sessions` 回车，就能看到会话文件夹和里面的 `.jsonl`；备份目录粘贴 `%USERPROFILE%\.cc-switch\backups`。
+- **macOS（Finder）**：按 `Cmd + Shift + G`，粘贴 `~/.codex/sessions` 回车，就能看到一堆 `.jsonl` 会话文件和它们的修改时间；备份目录粘贴 `~/.ccs-lite/backups`。
+- **Windows（文件资源管理器）**：在地址栏粘贴 `%USERPROFILE%\.codex\sessions` 回车，就能看到会话文件夹和里面的 `.jsonl`；备份目录粘贴 `%USERPROFILE%\.ccs-lite\backups`。
 
 **只要你能在这里看到一批 `.jsonl` 文件，就证明会话数据完好无损地在硬盘上。** 文件数量、修改时间，比任何文字都直观。
 
@@ -317,8 +315,8 @@ Codex 自己按"供应商标签"（一个叫 `model_provider` 的字段）给会
 | **会话正文（核心）** | `~/.codex/sessions/`（含按日期分的子目录，递归） | 每个会话一个 `.jsonl` 文本文件，**这就是你的对话内容** |
 | **归档会话** | `~/.codex/archived_sessions/` | 同为 `.jsonl` |
 | **会话索引数据库** | `~/.codex/state_5.sqlite` | `threads` 表的 `model_provider` 列就是"抽屉标签"，**它才是续聊列表真正读取的归类来源** |
-| **迁移备份**（开启迁移时自动产生） | `~/.cc-switch/backups/codex-official-history-unify-v1/<时间戳>/` | 内含 `jsonl/`、`state/`、`meta.json` |
-| **还原备份**（点还原时自动产生） | `~/.cc-switch/backups/codex-official-history-unify-restore-v1/<时间戳>/` | 还原前的安全副本 |
+| **迁移备份**（开启迁移时自动产生） | `~/.ccs-lite/backups/codex-official-history-unify-v1/<时间戳>/` | 内含 `jsonl/`、`state/`、`meta.json` |
+| **还原备份**（点还原时自动产生） | `~/.ccs-lite/backups/codex-official-history-unify-restore-v1/<时间戳>/` | 还原前的安全副本 |
 
 > **注意**：如果你在 CC Switch 里改过 Codex 目录，或在 `config.toml` 里设了 `sqlite_home`，请把上面的 `~/.codex` 换成你的实际目录。下文 `~` = 你的用户主目录。
 
@@ -373,13 +371,13 @@ open -e "<文件名>.jsonl"      # macOS
 **5. 看 CC Switch 的备份目录（证明迁移 / 还原前都留了副本）**
 
 ```bash
-ls -la ~/.cc-switch/backups/codex-official-history-unify-v1/ 2>/dev/null
-ls -la ~/.cc-switch/backups/codex-official-history-unify-restore-v1/ 2>/dev/null
+ls -la ~/.ccs-lite/backups/codex-official-history-unify-v1/ 2>/dev/null
+ls -la ~/.ccs-lite/backups/codex-official-history-unify-restore-v1/ 2>/dev/null
 ```
 
 ### Windows 命令（PowerShell）
 
-会话目录通常在 `C:\Users\<你的用户名>\.codex\`，备份在 `C:\Users\<你的用户名>\.cc-switch\backups\`。
+会话目录通常在 `C:\Users\<你的用户名>\.codex\`，备份在 `C:\Users\<你的用户名>\.ccs-lite\backups\`。
 
 ```powershell
 # 1. 会话文件总数（"没丢"的硬证据）
@@ -396,8 +394,8 @@ Get-ChildItem "$env:USERPROFILE\.codex\sessions" -Recurse -Filter *.jsonl |
   Select-String -Pattern 'model_provider"\s*:\s*"custom"' -List).Count
 
 # 4. 看备份目录
-Get-ChildItem "$env:USERPROFILE\.cc-switch\backups\codex-official-history-unify-v1" -ErrorAction SilentlyContinue
-Get-ChildItem "$env:USERPROFILE\.cc-switch\backups\codex-official-history-unify-restore-v1" -ErrorAction SilentlyContinue
+Get-ChildItem "$env:USERPROFILE\.ccs-lite\backups\codex-official-history-unify-v1" -ErrorAction SilentlyContinue
+Get-ChildItem "$env:USERPROFILE\.ccs-lite\backups\codex-official-history-unify-restore-v1" -ErrorAction SilentlyContinue
 ```
 
 > 同样提醒：第 3 步的 grep 数会**少于**文件总数属正常（旧会话不写该字段），请以第 1 步的**文件总数**作为"会话没丢"的判断依据。
@@ -459,9 +457,8 @@ wire_api = "responses"
 ## 参考链接
 
 - [使用第三方 API 时保留 Codex 远程操作和官方插件：CC Switch 配置攻略](./codex-official-auth-preservation-guide-zh.md)
-- [在 Codex 中使用 Chat 格式 API：本地路由攻略](./codex-deepseek-routing-guide-zh.md)
 - CC Switch 用户手册中「Codex 应用增强」相关章节
 
 ---
 
-**给你的最后一句话**：你看到的"会话不见了 / 续聊失败"，本质是**会话被换到了另一个历史列表（抽屉）里、或对方后端无法解密旧推理内容**，文件始终原封不动地躺在 `~/.codex/sessions/`（及 `state_5.sqlite`）里。关闭开关时勾选"按备份还原"即可把当初迁入的官方会话精确翻回官方列表；即便不还原，原始 `.jsonl` 文件和 `~/.cc-switch/backups/codex-official-history-unify-*/` 下的备份副本也都在——**数据绝不会真正丢失。**
+**给你的最后一句话**：你看到的"会话不见了 / 续聊失败"，本质是**会话被换到了另一个历史列表（抽屉）里、或对方后端无法解密旧推理内容**，文件始终原封不动地躺在 `~/.codex/sessions/`（及 `state_5.sqlite`）里。关闭开关时勾选"按备份还原"即可把当初迁入的官方会话精确翻回官方列表；即便不还原，原始 `.jsonl` 文件和 `~/.ccs-lite/backups/codex-official-history-unify-*/` 下的备份副本也都在——**数据绝不会真正丢失。**

@@ -82,14 +82,11 @@ describe("AWS Bedrock OpenCode Provider Presets", () => {
 
     for (const preset of presets) {
       expect(preset).toBeDefined();
-      expect(preset!.settingsConfig.models["mimo-v2.5-pro"]).toMatchObject({
-        limit: { context: 1048576, output: 131072 },
-        modalities: { input: ["text"], output: ["text"] },
-      });
-      expect(preset!.settingsConfig.models["mimo-v2.5"]).toMatchObject({
+      expect(preset!.settingsConfig.models["mimo-v2.6-pro"]).toMatchObject({
         limit: { context: 1048576, output: 131072 },
         modalities: { input: ["text", "image"], output: ["text"] },
       });
+      expect(preset!.settingsConfig.models).not.toHaveProperty("mimo-v2.5");
     }
   });
 

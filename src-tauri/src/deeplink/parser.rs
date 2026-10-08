@@ -8,10 +8,13 @@ use crate::error::AppError;
 use std::collections::HashMap;
 use url::Url;
 
-/// Parse a ccswitch:// URL into a DeepLinkImportRequest
+/// Parse a ccslite:// (or upstream ccswitch://) URL into a DeepLinkImportRequest
 ///
 /// Expected format:
-/// ccswitch://v1/import?resource={type}&...
+/// ccslite://v1/import?resource={type}&...
+///
+/// 系统只把 `ccslite://` 交给 ccs-lite；供应商网站生成的一键导入链接仍是上游的
+/// `ccswitch://`，用户可以把它粘贴进设置页的"从链接导入"。
 pub fn parse_deeplink_url(url_str: &str) -> Result<DeepLinkImportRequest, AppError> {
     // Parse URL
     let url = Url::parse(url_str)
@@ -19,9 +22,9 @@ pub fn parse_deeplink_url(url_str: &str) -> Result<DeepLinkImportRequest, AppErr
 
     // Validate scheme
     let scheme = url.scheme();
-    if scheme != "ccswitch" {
+    if !super::DEEPLINK_SCHEMES.contains(&scheme) {
         return Err(AppError::InvalidInput(format!(
-            "Invalid scheme: expected 'ccswitch', got '{scheme}'"
+            "Invalid scheme: expected 'ccslite' or 'ccswitch', got '{scheme}'"
         )));
     }
 

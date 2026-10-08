@@ -5,8 +5,10 @@
 use crate::database::{lock_conn, Database};
 use crate::error::AppError;
 use crate::services::sql_helpers::{fresh_input_sql, INPUT_TOKEN_SEMANTICS_FRESH};
-use crate::services::usage_stats::effective_usage_log_filter;
 use chrono::{Duration, Local, TimeZone};
+
+/// 明细保留天数：更早的明细汇总进 `usage_daily_rollups` 后删除。
+pub(crate) const USAGE_DETAIL_RETENTION_DAYS: i64 = 30;
 
 /// Compute the rollup/prune cutoff aligned to a local-day boundary.
 ///
@@ -17,7 +19,7 @@ use chrono::{Duration, Local, TimeZone};
 /// the cutoff falls mid-day, leaving the day half-rolled-up and half-pruned —
 /// which would silently under-count any range query that touches that day
 /// after `compute_rollup_date_bounds` trims partial-coverage rollup days.
-fn compute_local_midnight_cutoff(
+pub(crate) fn compute_local_midnight_cutoff(
     now: chrono::DateTime<Local>,
     retain_days: i64,
 ) -> Result<i64, AppError> {
@@ -81,7 +83,7 @@ impl Database {
         // 之后；周期任务同理）。所以剪枝前先尽力回填一次。失败仅告警不阻断——
         // 否则一行损坏的定价数据会永久卡死日志清理。
         // 注意必须在 SAVEPOINT 之外调用：回填内部自己开顶层事务。
-        if let Err(e) = Self::backfill_missing_usage_costs_on_conn(&conn, None) {
+        if let Err(e) = Self::reprice_usage_costs_on_conn(&conn, None, Some(cutoff)) {
             log::warn!("Pre-prune cost backfill failed, pruning anyway: {e}");
         }
 
@@ -115,12 +117,10 @@ impl Database {
 
     fn do_rollup_and_prune(conn: &rusqlite::Connection, cutoff: i64) -> Result<u64, AppError> {
         // Aggregate old logs, merging with any pre-existing rollup rows via LEFT JOIN.
-        let effective_filter = effective_usage_log_filter("l");
         let fresh_detail_input = fresh_input_sql("l");
         let fresh_old_input = fresh_input_sql("old");
-        // request_model 维度保留路由接管的「客户端别名 → 真实模型」映射，
-        // pricing_model 维度保留写入时的计价基准（request 计价模式下与 model 分叉）；
-        // 明细行的这两列可能为 NULL（历史/手工数据），归一为 ''。
+        // request_model / pricing_model 维度沿用旧版路由写入的值，会话导入的行
+        // 不写 pricing_model；明细行的这两列可能为 NULL（历史/手工数据），归一为 ''。
         let aggregation_sql = format!(
             "INSERT OR REPLACE INTO usage_daily_rollups
                 (date, app_type, provider_id, model, request_model, pricing_model,
@@ -158,7 +158,7 @@ impl Database {
                     COALESCE(SUM(CAST(l.total_cost_usd AS REAL)), 0) as new_cost,
                     COALESCE(AVG(l.latency_ms), 0) as new_lat
                 FROM proxy_request_logs l
-                WHERE l.created_at < ?1 AND {effective_filter}
+                WHERE l.created_at < ?1
                 GROUP BY d, a, p, m, rm, pm
             ) agg
             LEFT JOIN usage_daily_rollups old
@@ -170,8 +170,6 @@ impl Database {
         conn.execute(&aggregation_sql, [cutoff])
             .map_err(|e| AppError::Database(format!("Rollup aggregation failed: {e}")))?;
 
-        // INSERT uses the effective-log filter to exclude duplicate session rows.
-        // DELETE intentionally prunes all old details so those duplicates are discarded.
         let deleted = conn
             .execute(
                 "DELETE FROM proxy_request_logs WHERE created_at < ?1",
@@ -278,69 +276,6 @@ mod tests {
                 row.get(0)
             })?;
         assert_eq!(remaining, 3);
-        Ok(())
-    }
-
-    #[test]
-    fn test_rollup_uses_effective_usage_logs() -> Result<(), AppError> {
-        let db = Database::memory()?;
-        let now = chrono::Utc::now().timestamp();
-        let old_ts = now - 40 * 86400;
-
-        {
-            let conn = crate::database::lock_conn!(db.conn);
-            conn.execute(
-                "INSERT INTO proxy_request_logs (
-                    request_id, provider_id, app_type, model, request_model,
-                    input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens,
-                    total_cost_usd, latency_ms, status_code, created_at, data_source
-                ) VALUES (?1, 'openai', 'codex', 'gpt-5.4', 'gpt-5.4', 100, 20, 10, 0, '0.10', 100, 200, ?2, 'proxy')",
-                rusqlite::params!["codex-proxy-old", old_ts],
-            )?;
-            conn.execute(
-                "INSERT INTO proxy_request_logs (
-                    request_id, provider_id, app_type, model, request_model,
-                    input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens,
-                    total_cost_usd, latency_ms, status_code, created_at, data_source
-                ) VALUES (?1, '_codex_session', 'codex', 'gpt-5.4', 'gpt-5.4', 100, 20, 10, 0, '0.10', 0, 200, ?2, 'codex_session')",
-                rusqlite::params!["codex-session-old-dup", old_ts + 60],
-            )?;
-        }
-
-        let deleted = db.rollup_and_prune(30)?;
-        assert_eq!(deleted, 2);
-
-        let conn = crate::database::lock_conn!(db.conn);
-        let mut stmt = conn.prepare(
-            "SELECT provider_id, request_count, input_tokens, output_tokens, cache_read_tokens
-             FROM usage_daily_rollups WHERE app_type = 'codex'",
-        )?;
-        let rows = stmt
-            .query_map([], |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, i64>(1)?,
-                    row.get::<_, i64>(2)?,
-                    row.get::<_, i64>(3)?,
-                    row.get::<_, i64>(4)?,
-                ))
-            })?
-            .collect::<Result<Vec<_>, _>>()?;
-
-        assert_eq!(rows.len(), 1);
-        let (provider_id, request_count, input_tokens, output_tokens, cache_read_tokens) = &rows[0];
-        assert_eq!(provider_id, "openai");
-        assert_eq!(*request_count, 1);
-        assert_eq!(*input_tokens, 90, "rollup stores normalized fresh input");
-        assert_eq!(*output_tokens, 20);
-        assert_eq!(*cache_read_tokens, 10);
-
-        let remaining: i64 =
-            conn.query_row("SELECT COUNT(*) FROM proxy_request_logs", [], |row| {
-                row.get(0)
-            })?;
-        assert_eq!(remaining, 0);
-
         Ok(())
     }
 
@@ -491,9 +426,9 @@ mod tests {
                 "INSERT INTO proxy_request_logs (
                     request_id, provider_id, app_type, model, request_model, pricing_model,
                     input_tokens, output_tokens, total_cost_usd,
-                    latency_ms, status_code, created_at
+                    latency_ms, status_code, created_at, data_source, input_token_semantics
                 ) VALUES ('prune-backfill', 'p1', 'codex', 'gpt-5.5', 'gpt-5.5', 'gpt-5.5',
-                          1000000, 0, '0', 100, 200, ?1)",
+                          100000, 0, '0', 100, 200, ?1, 'codex_session', 2)",
                 rusqlite::params![old_ts],
             )?;
         }
@@ -508,10 +443,10 @@ mod tests {
             [],
             |row| row.get(0),
         )?;
-        // gpt-5.5 input $5/M × 1M tokens，回填后再汇总
+        // gpt-5.5 input $5/M × 100K tokens，先按定价重算再汇总
         assert!(
-            (total_cost - 5.0).abs() < 1e-6,
-            "expected backfilled cost 5.0, got {total_cost}"
+            (total_cost - 0.5).abs() < 1e-6,
+            "expected repriced cost 0.5, got {total_cost}"
         );
         Ok(())
     }

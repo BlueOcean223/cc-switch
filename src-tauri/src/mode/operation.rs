@@ -213,6 +213,17 @@ pub fn recover(
     let Some(pending) = state::pending(store, guard.app())? else {
         return Ok(None);
     };
+    if !state::op::REPLAYABLE.contains(&pending.op.as_str()) {
+        // 不是 ccs-lite 写的操作（例如上游 CC Switch 的路由操作），不发布它的临时文件
+        log::warn!(
+            "[{}] 丢弃不认识的待执行操作 {}，客户端文件保持原样",
+            guard.app(),
+            pending.op
+        );
+        discard_pending_files(&pending);
+        state::set_pending(store, guard.app(), None)?;
+        return Ok(Some(RecoveryOutcome::Discarded));
+    }
 
     enum At {
         Pre,
@@ -301,15 +312,8 @@ pub(crate) fn has_pending(app: &str) -> bool {
         .is_some()
 }
 
-/// 这个应用上一次操作留下的 pending 是否已经开始发布：`Some(true)` 表示下次操作或启动时
-/// 会前滚补完，`Some(false)` 表示会被丢弃，`None` 表示没有 pending。操作返回错误后用来
-/// 判断是「什么都没改」还是「已部分写入、待补完」。
-pub(crate) fn pending_published(store: &DeviceStore, app: &str) -> Result<Option<bool>, AppError> {
-    Ok(state::pending(store, app)?.map(|pending| pending.published))
-}
-
 /// 读指针、模式或「live 现在归谁」之前调用：先补完这个应用上一次没做完的操作，读到的
-/// 才是落定过的状态。调用方不能持有这个应用的写锁（不可重入）；要拿代理切换锁时先拿它。
+/// 才是落定过的状态。调用方不能持有这个应用的写锁（不可重入）。
 pub fn settle(db: &Database, app: &str) -> Result<Option<RecoveryOutcome>, AppError> {
     let store = DeviceStore::for_device();
     let guard = crate::live::engine::lock_app(app);
@@ -391,6 +395,17 @@ pub fn recover_all(
     };
     apps.into_iter()
         .filter_map(|app| {
+            if app.parse::<crate::app_config::AppType>().is_err() {
+                // 例如上游的 claude-desktop：ccs-lite 不管理它，回放不了，也不会再有人清掉
+                log::warn!("[{app}] 丢弃不认识的应用的待执行操作");
+                if let Ok(Some(pending)) = state::pending(store, &app) {
+                    discard_pending_files(&pending);
+                }
+                return match state::set_pending(store, &app, None) {
+                    Ok(()) => None,
+                    Err(err) => Some((app, Err(err))),
+                };
+            }
             let guard = crate::live::engine::lock_app(&app);
             let commit = |target: &PendingTarget| commit_target(&app, target);
             match recover(store, &guard, &commit) {
@@ -404,10 +419,9 @@ pub fn recover_all(
 
 /// 落定目标状态。必须可以重复执行（崩溃恢复可能再跑一次）。
 ///
-/// - 直连指针：设备本地的 `current_provider_*` 和 DB 的 `is_current`，和现有切换用的是
+/// - 指针：设备本地的 `current_provider_*` 和 DB 的 `is_current`，和现有切换用的是
 ///   同一套机制；
-/// - 模式状态：写进 `live-state.json`，另把 `proxy_config.enabled` 镜像成
-///   「mode == proxy」。旧版只认这一列来决定启动时是否接管，降级后才能照常工作。
+/// - 写入记录：写进 `live-state.json`。
 pub fn commit_target(
     db: &crate::database::Database,
     store: &DeviceStore,
@@ -419,38 +433,12 @@ pub fn commit_target(
         crate::settings::set_current_provider(&app_type, Some(id))?;
         db.set_current_provider(app, id)?;
     }
-    // 模式、写入记录和 Stack 模型在同一次状态文件写入里落定。
-    if target.state.is_some() || target.written.is_some() || target.stack.is_some() {
+    if let Some(written) = &target.written {
         state::update(store, |live| {
-            let entry = live.apps.entry(app.to_string()).or_default();
-            if let Some(mode) = &target.state {
-                entry.set_mode_state(mode.clone());
-            }
-            if let Some(written) = &target.written {
-                entry.written = Some(written.clone());
-            }
-            if let Some(stack) = &target.stack {
-                entry.stack = stack.clone();
-            }
+            live.apps.entry(app.to_string()).or_default().written = Some(written.clone());
         })?;
     }
-    if let Some(mode) = &target.state {
-        mirror_proxy_flag(db, app, mode.is_proxy())?;
-    }
     Ok(())
-}
-
-/// `proxy_config.enabled := (mode == proxy)`。
-pub fn mirror_proxy_flag(
-    db: &crate::database::Database,
-    app: &str,
-    proxy: bool,
-) -> Result<(), AppError> {
-    let (enabled, auto_failover) = db.get_proxy_flags_sync(app);
-    if enabled == proxy {
-        return Ok(());
-    }
-    db.set_proxy_flags_sync(app, proxy, auto_failover)
 }
 
 /// 启动时调用：补完上次崩溃留下的客户端文件写入。要在任何写客户端文件的启动步骤之前。
@@ -719,6 +707,47 @@ mod tests {
         drop(guard);
         assert!(result.is_err(), "crash injected at {crash}");
         pointer
+    }
+
+    /// 上游 CC Switch 的操作（attach 等）和 ccs-lite 不管理的应用（claude-desktop）留下的
+    /// pending：恢复时丢掉，不发布临时文件，客户端文件不变。
+    #[test]
+    fn foreign_pending_operations_are_dropped_without_touching_files() {
+        let fx = Fixture::new();
+        let staged = fx.a.with_file_name("a.json.tmp.upstream");
+        fs::write(&staged, "{\"key\": \"PROXY_MANAGED\"}").unwrap();
+        let foreign = |op: &str| state::Pending {
+            op: op.to_string(),
+            files: vec![state::PendingFile {
+                path: fx.a.clone(),
+                pre: digest(Some(fs::read(&fx.a).unwrap().as_slice())),
+                planned: Some("planned-by-upstream".to_string()),
+                staged: Some(staged.clone()),
+            }],
+            target: PendingTarget::pointer(Some("upstream".into())),
+            published: true,
+        };
+
+        state::set_pending(&fx.store, &fx.app, Some(foreign("attach"))).unwrap();
+        let pointer = RefCell::new(None);
+        assert_eq!(recover_now(&fx, &pointer), Some(RecoveryOutcome::Discarded));
+        assert_old(&fx);
+        assert_eq!(*pointer.borrow(), None, "target must not be committed");
+        assert!(!staged.exists(), "upstream temp file is removed");
+        assert!(state::pending(&fx.store, &fx.app).unwrap().is_none());
+
+        fs::write(&staged, "{}").unwrap();
+        state::set_pending(
+            &fx.store,
+            "claude-desktop",
+            Some(foreign(state::op::SWITCH)),
+        )
+        .unwrap();
+        let outcomes = recover_all(&fx.store, &|_, _| panic!("nothing to commit"));
+        assert!(outcomes.is_empty(), "{outcomes:?}");
+        assert_old(&fx);
+        assert!(!staged.exists());
+        assert!(state::apps_with_pending(&fx.store).unwrap().is_empty());
     }
 
     #[test]

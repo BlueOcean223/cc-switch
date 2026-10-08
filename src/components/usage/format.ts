@@ -92,7 +92,7 @@ export const SPEED_ESTIMATE_MIN_OUTPUT_TOKENS = 200;
 /** 估算耗时短于此值时不估速度：输出 200 token 以上却不到 1 秒，多半是起点取晚了。 */
 export const SPEED_ESTIMATE_MIN_DURATION_MS = 1000;
 
-/** 这条请求是不是从会话日志导入的（不是路由服务记的）。 */
+/** 这条请求是不是从会话日志导入的（不是旧版路由记的）。 */
 export function isSessionLogRequest(log: { dataSource?: unknown }): boolean {
   return (
     typeof log.dataSource === "string" &&
@@ -252,11 +252,6 @@ function isCjkLanguage(lang: string): boolean {
 /** 并列的名字：中日文用「、」，其他语言用逗号。 */
 export function joinNames(items: readonly string[], lang: string): string {
   return items.join(isCjkLanguage(lang) ? "、" : ", ");
-}
-
-/** 并列的分句：中日文用「；」，其他语言用分号。 */
-export function joinClauses(items: readonly string[], lang: string): string {
-  return items.join(isCjkLanguage(lang) ? "；" : "; ");
 }
 
 /**

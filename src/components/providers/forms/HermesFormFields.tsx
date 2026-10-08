@@ -40,8 +40,6 @@ interface HermesFormFieldsProps {
   category?: ProviderCategory;
   shouldShowApiKeyLink: boolean;
   websiteUrl: string;
-  isPartner?: boolean;
-  partnerPromotionKey?: string;
   apiMode: HermesApiMode;
   onApiModeChange: (mode: HermesApiMode) => void;
   models: HermesModel[];
@@ -89,8 +87,6 @@ export function HermesFormFields({
   category,
   shouldShowApiKeyLink,
   websiteUrl,
-  isPartner,
-  partnerPromotionKey,
   apiMode,
   onApiModeChange,
   models,
@@ -283,8 +279,6 @@ export function HermesFormFields({
         category={category === "official" ? undefined : category}
         shouldShowLink={shouldShowApiKeyLink}
         websiteUrl={websiteUrl}
-        isPartner={isPartner}
-        partnerPromotionKey={partnerPromotionKey}
       />
 
       <div className="space-y-3 border-l border-border pl-3">

@@ -9,7 +9,6 @@ import {
 const OPENCODE_GO_CODEX_TOML = `model_provider = "custom"
 model = "glm-5.2"
 model_reasoning_effort = "high"
-disable_response_storage = true
 
 [model_providers.custom]
 name = "opencode_go"
@@ -19,7 +18,7 @@ requires_openai_auth = true`;
 
 describe("detectCodingPlanProvider (OpenCode Go)", () => {
   it("matches both base variants across apps", () => {
-    // claude/claude-desktop 预设是 /zen/go，codex/opencode/pi 是 /zen/go/v1
+    // claude 预设是 /zen/go，opencode/pi 是 /zen/go/v1
     expect(detectCodingPlanProvider("https://opencode.ai/zen/go")).toBe(
       "opencode_go",
     );
@@ -31,6 +30,15 @@ describe("detectCodingPlanProvider (OpenCode Go)", () => {
   it("does not match OpenCode Zen (pay-as-you-go, no usage API)", () => {
     expect(detectCodingPlanProvider("https://opencode.ai/zen/v1")).toBeNull();
   });
+});
+
+describe("detectCodingPlanProvider (Kimi)", () => {
+  it.each(["https://api.kimi.com/coding/", "https://api.kimi.ai/coding/v1"])(
+    "recognizes Kimi For Coding for %s",
+    (baseUrl) => {
+      expect(detectCodingPlanProvider(baseUrl)).toBe("kimi");
+    },
+  );
 });
 
 describe("detectCodingPlanProvider (MiniMax)", () => {
@@ -52,14 +60,11 @@ describe("detectCodingPlanProvider (MiniMax)", () => {
 });
 
 describe("extractBaseUrlForUsageDetection", () => {
-  it("reads env.ANTHROPIC_BASE_URL for claude and claude-desktop", () => {
+  it("reads env.ANTHROPIC_BASE_URL for claude", () => {
     const config = {
       env: { ANTHROPIC_BASE_URL: "https://opencode.ai/zen/go" },
     };
     expect(extractBaseUrlForUsageDetection("claude", config)).toBe(
-      "https://opencode.ai/zen/go",
-    );
-    expect(extractBaseUrlForUsageDetection("claude-desktop", config)).toBe(
       "https://opencode.ai/zen/go",
     );
   });
@@ -86,6 +91,15 @@ describe("extractBaseUrlForUsageDetection", () => {
     ).toBe("https://opencode.ai/zen/go/v1");
   });
 
+  it("looks up the address of a key-only entry for a provider Pi ships", () => {
+    expect(
+      extractBaseUrlForUsageDetection("pi", { apiKey: "k" }, "opencode-go"),
+    ).toBe("https://opencode.ai/zen/go/v1");
+    expect(
+      extractBaseUrlForUsageDetection("pi", { apiKey: "k" }, "my-provider"),
+    ).toBeNull();
+  });
+
   it("returns null for unsupported apps", () => {
     expect(
       extractBaseUrlForUsageDetection("gemini", {
@@ -98,6 +112,7 @@ describe("extractBaseUrlForUsageDetection", () => {
 type TestProvider = {
   settingsConfig?: Record<string, any>;
   meta?: Record<string, any>;
+  providerKey?: string;
 };
 
 describe("injectCodingPlanUsageScript", () => {
@@ -111,16 +126,9 @@ describe("injectCodingPlanUsageScript", () => {
     });
   };
 
-  it("injects OpenCode Go for every app that ships its preset", () => {
+  it("injects OpenCode Go for every app that can point at it", () => {
     expectInjected(
       inject("claude", {
-        settingsConfig: {
-          env: { ANTHROPIC_BASE_URL: "https://opencode.ai/zen/go" },
-        },
-      }),
-    );
-    expectInjected(
-      inject("claude-desktop", {
         settingsConfig: {
           env: { ANTHROPIC_BASE_URL: "https://opencode.ai/zen/go" },
         },
@@ -143,6 +151,13 @@ describe("injectCodingPlanUsageScript", () => {
         settingsConfig: { baseUrl: "https://opencode.ai/zen/go/v1" },
       }),
     );
+    // Pi 内置的 opencode-go 条目只有 key
+    expectInjected(
+      inject("pi", {
+        providerKey: "opencode-go",
+        settingsConfig: { apiKey: "k" },
+      }),
+    );
   });
 
   it("keeps the existing claude behavior for other coding plans", () => {
@@ -152,6 +167,26 @@ describe("injectCodingPlanUsageScript", () => {
       },
     });
     expect(injected.meta?.usage_script?.codingPlanProvider).toBe("kimi");
+  });
+
+  it("queries the balance for a MiniMax pay-as-you-go key", () => {
+    const minimax = (key: string) =>
+      inject("claude", {
+        settingsConfig: {
+          env: {
+            ANTHROPIC_BASE_URL: "https://api.minimax.cn/anthropic",
+            ANTHROPIC_AUTH_TOKEN: key,
+          },
+        },
+      }).meta?.usage_script;
+    expect(minimax("sk-api-abc")).toMatchObject({
+      enabled: true,
+      templateType: "balance",
+    });
+    expect(minimax("sk-cp-abc")).toMatchObject({
+      templateType: "token_plan",
+      codingPlanProvider: "minimax",
+    });
   });
 
   it("does not extend other coding plans to non-claude apps", () => {

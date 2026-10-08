@@ -10,7 +10,6 @@ import type {
   ModelPricing,
   ModelsDevSyncConfig,
   ModelsDevSyncState,
-  ProviderLimitStatus,
   PaginatedLogs,
   SessionSyncResult,
   DataSourceSummary,
@@ -49,7 +48,7 @@ export const usageApi = {
     });
   },
 
-  // Proxy usage statistics methods
+  // Usage statistics methods
   getUsageSummary: async (
     startDate?: number,
     endDate?: number,
@@ -198,13 +197,6 @@ export const usageApi = {
     return invoke("delete_model_pricing", { modelId });
   },
 
-  checkProviderLimits: async (
-    providerId: string,
-    appType: string,
-  ): Promise<ProviderLimitStatus> => {
-    return invoke("check_provider_limits", { providerId, appType });
-  },
-
   // Session usage sync
   syncSessionUsage: async (): Promise<SessionSyncResult> => {
     return invoke("sync_session_usage");
@@ -215,8 +207,8 @@ export const usageApi = {
     return invoke("get_session_usage_last_sync");
   },
 
-  rebuildCodexUsage: async (): Promise<SessionSyncResult> => {
-    return invoke("rebuild_codex_usage");
+  rebuildSessionUsage: async (): Promise<SessionSyncResult> => {
+    return invoke("rebuild_session_usage");
   },
 
   getDataSourceBreakdown: async (): Promise<DataSourceSummary[]> => {

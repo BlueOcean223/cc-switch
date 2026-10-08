@@ -7,7 +7,7 @@
  * - settingsConfig 从 JSON 字符串解析成对象，便于读 diff；
  * - presetId 是按预设列表下标生成的（claude-N / codex-N），下标替换成 <index>，
  *   另行断言它仍指回被点中的预设，避免新增预设导致无关的快照抖动；
- * - meta 原样保留（commonConfigEnabled / apiFormat / endpointAutoSelect 等都在快照里）；
+ * - meta 原样保留（commonConfigEnabled / endpointAutoSelect 等都在快照里）；
  * - apiKeyLocations 列出测试 Key 在行里出现的所有位置（含 TOML 字符串内），审 Key 落点用。
  *
  * 快照变了 = 行的形状变了：必须能说清原因再更新。
@@ -19,13 +19,12 @@
  * - OAuth hooks → 未登录；通用配置 hooks → 未勾选、片段为空，快照与片段无关。
  *
  * 预设取舍：
- * - Claude「需要格式转换的 openai_chat」：OpenRouter 现在走 Anthropic 原生，
- *   GitHub Copilot 必须 OAuth 登录，选 Nvidia；
  * - Claude「上下文窗口类键」：Kimi For Coding（同时带 CLAUDE_CODE_MAX_CONTEXT_TOKENS
  *   和 CLAUDE_CODE_AUTO_COMPACT_WINDOW）；
- * - Codex「原生 Responses 第三方」：xAI (Grok)（category=third_party、显式
- *   apiFormat=openai_responses、目录带原生 Responses 专用字段）；
- * - Codex「openai_chat + 模型目录」：Nvidia（另带 codexChatReasoning）。
+ * - Codex「原生 Responses 第三方」：xAI (Grok)（category=third_party、
+ *   目录带原生 Responses 专用字段）；
+ * - Claude「Anthropic 原生聚合」：OpenRouter；「额外 env 键 + 地址候选」：AtlasCloud；
+ * - Codex「原生 Responses、无模型目录 + 地址候选」：CherryIN。
  */
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClientProvider } from "@tanstack/react-query";
@@ -83,21 +82,10 @@ vi.mock("@/components/providers/forms/hooks", async (importOriginal) => {
     await importOriginal<typeof import("@/components/providers/forms/hooks")>();
   return {
     ...actual,
-    useCopilotAuth: () => ({
-      isAuthenticated: false,
-      isStatusSuccess: true,
-      isStatusError: false,
-      accounts: [],
-    }),
     useCodexOauth: () => ({
       isAuthenticated: false,
       isStatusSuccess: true,
       isStatusError: false,
-      defaultAccountId: null,
-      accounts: [],
-    }),
-    useXaiOauth: () => ({
-      isAuthenticated: false,
       accounts: [],
     }),
   };
@@ -126,22 +114,20 @@ interface GoldenCase {
 
 const CLAUDE_CASES: GoldenCase[] = [
   { preset: "Claude Official", fillApiKey: false },
-  { preset: "RelaxyCode", fillApiKey: true },
+  { preset: "OpenRouter", fillApiKey: true },
   {
     preset: "AWS Bedrock (API Key)",
     fillApiKey: true,
     templateValues: { AWS_REGION: "us-east-1" },
   },
-  { preset: "Nvidia", fillApiKey: true },
   { preset: "Kimi For Coding", fillApiKey: true },
-  { preset: "E-FlowCode", fillApiKey: true },
+  { preset: "AtlasCloud", fillApiKey: true },
 ];
 
 const CODEX_CASES: GoldenCase[] = [
   { preset: "OpenAI Official", fillApiKey: false },
   { preset: "xAI (Grok)", fillApiKey: true },
-  { preset: "Nvidia", fillApiKey: true },
-  { preset: "E-FlowCode", fillApiKey: true },
+  { preset: "CherryIN", fillApiKey: true },
 ];
 
 const API_KEY_INPUT_ID: Record<GoldenAppId, string> = {

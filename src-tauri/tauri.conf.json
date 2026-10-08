@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "CC Switch",
-  "version": "4.0.3",
-  "identifier": "com.ccswitch.desktop",
+  "productName": "ccs-lite",
+  "version": "5.0.0",
+  "identifier": "io.github.blueocean223.ccs-lite",
   "build": {
     "frontendDist": "../dist",
     "devUrl": "http://localhost:3000",
@@ -57,14 +57,13 @@
   "plugins": {
     "deep-link": {
       "desktop": {
-        "schemes": ["ccswitch"]
+        "schemes": ["ccslite"]
       }
     },
     "updater": {
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEM4MDI4QzlBNTczOTI4RTMKUldUaktEbFhtb3dDeUM5US9kT0FmdGR5Ti9vQzcwa2dTMlpibDVDUmQ2M0VGTzVOWnd0SGpFVlEK",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEZBMTU0MTk2NkNENjc1Q0YKUldUUGRkWnNsa0VWK3JOY2RpMFVmbkxhcXBqVUFsSDhPOThReHhIQi9sRjYrY1h2SzdUbDJKNm8K",
       "endpoints": [
-        "https://dl.ccswitch.io/latest.json",
-        "https://github.com/farion1231/cc-switch/releases/latest/download/latest.json"
+        "https://github.com/BlueOcean223/cc-switch/releases/latest/download/latest.json"
       ]
     }
   }

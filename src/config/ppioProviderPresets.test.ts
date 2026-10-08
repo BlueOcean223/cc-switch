@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 
-import { claudeDesktopProviderPresets } from "./claudeDesktopProviderPresets";
 import { providerPresets } from "./claudeProviderPresets";
 import { codexProviderPresets } from "./codexProviderPresets";
 import { hermesProviderPresets } from "./hermesProviderPresets";
@@ -11,8 +10,6 @@ import { getIcon, getIconMetadata } from "../icons/extracted";
 
 const ppioPresetCollections = [
   ["Claude Code", providerPresets],
-  ["Claude Desktop", claudeDesktopProviderPresets],
-  ["Codex", codexProviderPresets],
   ["OpenCode", opencodeProviderPresets],
   ["OpenClaw", openclawProviderPresets],
   ["Hermes", hermesProviderPresets],
@@ -27,10 +24,8 @@ const ppioChatCompletionsEndpoint = `${ppioOpenAiEndpoint}/chat/completions`;
 const ppioModelsEndpoint = `${ppioOpenAiEndpoint}/models`;
 const ppioBrandFields = {
   websiteUrl: "https://ppio.com",
-  apiKeyUrl: "https://ppio.com/activity/ccswitch",
+  apiKeyUrl: "https://ppio.com/settings/key-management",
   category: "aggregator",
-  isPartner: true,
-  partnerPromotionKey: "ppio",
   icon: "ppio",
   iconColor: "#2874FF",
 };
@@ -68,50 +63,9 @@ describe("PPIO provider presets", () => {
     });
   });
 
-  it("configures Claude Desktop with the native Anthropic endpoint", () => {
-    expect(getPpioPreset(claudeDesktopProviderPresets)).toMatchObject({
-      ...ppioBrandFields,
-      baseUrl: ppioAnthropicEndpoint,
-      mode: "proxy",
-      apiFormat: "anthropic",
-      modelRoutes: [
-        {
-          routeId: "claude-sonnet-5",
-          upstreamModel: ppioModelId,
-          labelOverride: ppioModelId,
-          supports1m: true,
-        },
-      ],
-      endpointCandidates: [ppioAnthropicEndpoint],
-    });
-  });
-
-  it("configures Codex for OpenAI Chat translation and reasoning", () => {
-    const codex = getPpioPreset(codexProviderPresets)!;
-    expect(codex).toMatchObject({
-      ...ppioBrandFields,
-      auth: { OPENAI_API_KEY: "" },
-      endpointCandidates: [ppioOpenAiEndpoint],
-      apiFormat: "openai_chat",
-      modelCatalog: [
-        {
-          model: ppioModelId,
-          displayName: ppioModelName,
-          contextWindow: 1048576,
-          inputModalities: ["text"],
-        },
-      ],
-      codexChatReasoning: {
-        supportsThinking: true,
-        supportsEffort: false,
-        thinkingParam: "thinking",
-        effortParam: "none",
-        outputFormat: "reasoning_content",
-      },
-    });
-    expect(codex.config).toContain(`model = "${ppioModelId}"`);
-    expect(codex.config).toContain(`base_url = "${ppioOpenAiEndpoint}"`);
-    expect(codex.config).toContain('wire_api = "responses"');
+  // PPIO 的 OpenAI 端点只有 Chat Completions，Codex 直连用不了
+  it("has no Codex preset", () => {
+    expect(getPpioPreset(codexProviderPresets)).toBeUndefined();
   });
 
   it("configures OpenCode with a versioned OpenAI-compatible base", () => {

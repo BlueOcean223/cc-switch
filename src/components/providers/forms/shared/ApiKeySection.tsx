@@ -17,8 +17,6 @@ interface ApiKeySectionProps {
   disabled?: boolean;
   /** 保存时会校验 Key 非空的表单才传；官方 / 云厂商 / 禁用时不标星 */
   required?: boolean;
-  isPartner?: boolean;
-  partnerPromotionKey?: string;
 }
 
 export function ApiKeySection({
@@ -32,7 +30,6 @@ export function ApiKeySection({
   placeholder,
   disabled,
   required = false,
-  partnerPromotionKey,
 }: ApiKeySectionProps) {
   const { t } = useTranslation();
 
@@ -54,13 +51,6 @@ export function ApiKeySection({
     category !== "cloud_provider";
 
   const showLink = shouldShowLink && Boolean(websiteUrl);
-  // 推广语跟着「获取 API Key」走，按输入框说明文字的样式写在框下面（v7 不画推广框）
-  const promotion =
-    showLink && partnerPromotionKey
-      ? t(`providerForm.partnerPromotion.${partnerPromotionKey}`, {
-          defaultValue: "",
-        })
-      : "";
 
   return (
     <ApiKeyInput
@@ -87,7 +77,6 @@ export function ApiKeySection({
           </a>
         ) : null
       }
-      hint={promotion || undefined}
     />
   );
 }

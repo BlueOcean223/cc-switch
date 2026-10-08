@@ -14,6 +14,16 @@ fn should_sync_claude_mcp() -> bool {
     crate::config::get_claude_config_dir().exists() || crate::config::get_claude_mcp_path().exists()
 }
 
+/// 写进 `~/.claude.json` 的条目：去掉其他客户端的已知字段。只用于从数据库写出的条目，
+/// `~/.claude.json` 里用户自己的条目原样保留。
+fn claude_spec(spec: &Value) -> Value {
+    let mut spec = spec.clone();
+    if let Some(object) = spec.as_object_mut() {
+        super::fields::retain_for(super::fields::Client::Claude, object);
+    }
+    spec
+}
+
 /// 返回已启用的 MCP 服务器（过滤 enabled==true）
 fn collect_enabled_servers(cfg: &McpConfig) -> HashMap<String, Value> {
     let mut out = HashMap::new();
@@ -27,7 +37,7 @@ fn collect_enabled_servers(cfg: &McpConfig) -> HashMap<String, Value> {
         }
         match extract_server_spec(entry) {
             Ok(spec) => {
-                out.insert(id.clone(), spec);
+                out.insert(id.clone(), claude_spec(&spec));
             }
             Err(err) => {
                 log::warn!("跳过无效的 MCP 条目 '{id}': {err}");
@@ -129,7 +139,7 @@ pub fn sync_single_server_to_claude(
 
     // 创建新的 HashMap，包含现有的所有服务器 + 当前要同步的服务器
     let mut updated = current;
-    updated.insert(id.to_string(), server_spec.clone());
+    updated.insert(id.to_string(), claude_spec(server_spec));
 
     // 写回
     crate::claude_mcp::set_mcp_servers_map(&updated)
@@ -148,4 +158,35 @@ pub fn remove_server_from_claude(id: &str) -> Result<(), AppError> {
 
     // 写回
     crate::claude_mcp::set_mcp_servers_map(&current)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn claude_entries_drop_fields_of_other_clients() {
+        let spec = json!({
+            "type": "http",
+            "url": "https://a/mcp",
+            "headers": {"X": "Y"},
+            "headersHelper": "./h.sh",
+            "trust": true,
+            "timeout": 5000,
+            "bearer_token_env_var": "TOKEN",
+            "exposure": "all",
+            "somethingNew": 1
+        });
+        assert_eq!(
+            claude_spec(&spec),
+            json!({
+                "type": "http",
+                "url": "https://a/mcp",
+                "headers": {"X": "Y"},
+                "headersHelper": "./h.sh",
+                "somethingNew": 1
+            })
+        );
+    }
 }

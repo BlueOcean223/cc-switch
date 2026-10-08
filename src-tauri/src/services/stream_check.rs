@@ -9,14 +9,7 @@
 //!
 //! 本检查刻意不验证鉴权或模型，因此不会被第三方供应商的鉴权拦截 / 模型校验
 //! 误判为"不可用"。代价是它无法告诉你鉴权对不对、模型存不存在。
-//!
-//! ## 与故障转移的关系（重要不变量）
-//!
-//! 连通性检查 **绝不** 触碰故障转移熔断器：一个返回 403/401 的供应商在本检查里
-//! 算"可达"，但它对真实流量是坏的。熔断器只由 `proxy/forwarder.rs` 转发真实流量
-//! 的成败驱动（被动）。两者职责分离——可达性回答"能不能到"，真实流量回答"能不能用"。
 
-use reqwest::header::HeaderValue;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::time::Instant;
@@ -24,7 +17,9 @@ use std::time::Instant;
 use crate::app_config::AppType;
 use crate::error::AppError;
 use crate::provider::Provider;
-use crate::proxy::providers::{get_adapter, ClaudeAdapter, ProviderAdapter};
+
+/// Codex 官方（ChatGPT 登录）卡的请求地址。
+const CHATGPT_CODEX_BASE_URL: &str = "https://chatgpt.com/backend-api/codex";
 
 /// 健康状态枚举
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -77,21 +72,15 @@ pub struct StreamCheckService;
 
 impl StreamCheckService {
     /// 执行连通性检查（仅对超时类失败重试）。
-    ///
-    /// `base_url_override`：用于 Copilot 等需要从 OAuth 管理器动态解析端点的供应商，
-    /// 由命令层预先解析后传入；其余供应商传 `None`，由本服务从 `settings_config` 提取。
     pub async fn check_with_retry(
         app_type: &AppType,
         provider: &Provider,
         config: &StreamCheckConfig,
-        base_url_override: Option<String>,
     ) -> Result<StreamCheckResult, AppError> {
         let mut last_result: Option<StreamCheckResult> = None;
         for attempt in 0..=config.max_retries {
             let start = Instant::now();
-            let result =
-                Self::check_once(app_type, provider, config, base_url_override.clone(), start)
-                    .await?;
+            let result = Self::check_once(app_type, provider, config, start).await?;
 
             if result.success {
                 return Ok(StreamCheckResult {
@@ -127,19 +116,14 @@ impl StreamCheckService {
         app_type: &AppType,
         provider: &Provider,
         config: &StreamCheckConfig,
-        base_url_override: Option<String>,
         start: Instant,
     ) -> Result<StreamCheckResult, AppError> {
-        let base_url = match base_url_override {
-            Some(b) => b,
-            None => Self::resolve_base_url(app_type, provider)?,
-        };
+        let base_url = Self::resolve_base_url(app_type, provider)?;
 
-        let client = crate::proxy::http_client::get();
+        let client = crate::http_client::get();
         let timeout = std::time::Duration::from_secs(config.timeout_secs);
-        let ua = Self::custom_user_agent(provider);
 
-        let result = Self::probe_reachability(&client, &base_url, timeout, ua).await;
+        let result = Self::probe_reachability(&client, &base_url, timeout).await;
         let response_time = start.elapsed().as_millis() as u64;
         Ok(Self::build_result(
             result,
@@ -165,28 +149,96 @@ impl StreamCheckService {
         }
 
         match app_type {
-            // 累加模式应用的 settings_config 结构与 Claude/Codex/Gemini 不同，
-            // 不走 adapter，直接按各自约定提取 base_url。
+            // 各应用的 settings_config 结构不同，按各自约定提取 base_url。
             AppType::OpenCode => {
                 let npm = Self::extract_opencode_npm(provider);
                 Self::resolve_opencode_base_url(provider, npm.as_deref())
             }
             AppType::OpenClaw => Self::extract_openclaw_base_url(provider),
             AppType::Hermes => Self::extract_hermes_base_url(provider),
-            AppType::Pi => crate::pi_config::provider_base_url(&provider.settings_config),
-            AppType::ClaudeDesktop => ClaudeAdapter::new()
-                .extract_base_url(provider)
-                .map_err(|e| AppError::Message(format!("Failed to extract base_url: {e}"))),
-            _ => get_adapter(app_type)
-                .ok_or_else(|| {
-                    AppError::InvalidInput(format!(
-                        "{} does not support proxy adapters",
-                        app_type.as_str()
-                    ))
-                })?
-                .extract_base_url(provider)
-                .map_err(|e| AppError::Message(format!("Failed to extract base_url: {e}"))),
+            AppType::Pi => {
+                crate::pi_config::provider_base_url(&provider.id, &provider.settings_config)
+            }
+            AppType::Claude => Self::extract_claude_base_url(provider),
+            AppType::Gemini => Self::extract_gemini_base_url(provider),
+            AppType::Codex => Self::extract_codex_base_url(provider),
+            AppType::GrokBuild => Self::extract_grok_base_url(provider),
+            AppType::Mcode => Err(AppError::InvalidInput(format!(
+                "{} does not support reachability checks",
+                app_type.as_str()
+            ))),
         }
+    }
+
+    /// `settings_config` 里第一个非空的字符串地址（去掉末尾的 `/`）。
+    fn first_url(provider: &Provider, paths: &[&str]) -> Option<String> {
+        paths.iter().find_map(|path| {
+            provider
+                .settings_config
+                .pointer(path)
+                .and_then(|v| v.as_str())
+                .map(str::trim)
+                .filter(|url| !url.is_empty())
+                .map(|url| url.trim_end_matches('/').to_string())
+        })
+    }
+
+    fn missing_base_url(app: &str) -> AppError {
+        AppError::Message(format!(
+            "Failed to extract base_url: {app} provider has no base_url"
+        ))
+    }
+
+    fn extract_claude_base_url(provider: &Provider) -> Result<String, AppError> {
+        Self::first_url(
+            provider,
+            &[
+                "/env/ANTHROPIC_BASE_URL",
+                "/base_url",
+                "/baseURL",
+                "/apiEndpoint",
+            ],
+        )
+        .ok_or_else(|| Self::missing_base_url("Claude"))
+    }
+
+    fn extract_gemini_base_url(provider: &Provider) -> Result<String, AppError> {
+        Self::first_url(
+            provider,
+            &["/env/GOOGLE_GEMINI_BASE_URL", "/base_url", "/baseURL"],
+        )
+        .ok_or_else(|| Self::missing_base_url("Gemini"))
+    }
+
+    /// `config.toml` 文本交给对应解析器取地址，或者行上直接存的地址。
+    fn extract_toml_base_url(
+        provider: &Provider,
+        parse: fn(&str) -> Option<String>,
+    ) -> Option<String> {
+        Self::first_url(provider, &["/base_url", "/baseURL", "/config/base_url"]).or_else(|| {
+            provider
+                .settings_config
+                .get("config")
+                .and_then(|v| v.as_str())
+                .and_then(parse)
+                .map(|url| url.trim().trim_end_matches('/').to_string())
+                .filter(|url| !url.is_empty())
+        })
+    }
+
+    /// Codex：当前 `model_provider` 对应的 `[model_providers.<id>] base_url`。
+    fn extract_codex_base_url(provider: &Provider) -> Result<String, AppError> {
+        if crate::codex_provider::is_codex_official_provider(provider) {
+            return Ok(CHATGPT_CODEX_BASE_URL.to_string());
+        }
+        Self::extract_toml_base_url(provider, crate::codex_config::extract_codex_base_url)
+            .ok_or_else(|| Self::missing_base_url("Codex"))
+    }
+
+    /// Grok Build：`[models] default` 指向的 `[model.<id>] base_url`。
+    fn extract_grok_base_url(provider: &Provider) -> Result<String, AppError> {
+        Self::extract_toml_base_url(provider, crate::grok_config::extract_base_url)
+            .ok_or_else(|| Self::missing_base_url("Grok Build"))
     }
 
     /// 轻量可达性探测：GET `base_url`，收到任意 HTTP 响应即可达。
@@ -198,22 +250,17 @@ impl StreamCheckService {
         client: &Client,
         base_url: &str,
         timeout: std::time::Duration,
-        custom_ua: Option<HeaderValue>,
     ) -> Result<u16, AppError> {
         let url = base_url.trim();
         if url.is_empty() {
             return Err(AppError::Message("base_url 为空".to_string()));
         }
 
-        let mut req = client
+        let req = client
             .get(url)
             .timeout(timeout)
             .header("accept", "*/*")
             .header("accept-encoding", "identity");
-        // 复用供应商自定义 UA（部分网关按 UA 白名单放行），与转发路径口径一致。
-        if let Some(ua) = custom_ua {
-            req = req.header("user-agent", ua);
-        }
 
         match req.send().await {
             Ok(resp) => Ok(resp.status().as_u16()),
@@ -271,15 +318,6 @@ impl StreamCheckService {
         } else {
             AppError::Message(e.to_string())
         }
-    }
-
-    /// Provider 级自定义 User-Agent（`meta.customUserAgent`），与转发路径共用单一口径：
-    /// trim、空串视为未设置、非法值静默忽略（返回 `None`）。
-    fn custom_user_agent(provider: &Provider) -> Option<HeaderValue> {
-        provider
-            .meta
-            .as_ref()
-            .and_then(|meta| meta.custom_user_agent_header().ok().flatten())
     }
 
     // ===== 各应用 base_url 提取（settings_config 结构互不相同）=====
@@ -514,5 +552,28 @@ mod tests {
         official.id = crate::database::CODEX_OFFICIAL_PROVIDER_ID.to_string();
         official.category = Some("official".to_string());
         assert!(StreamCheckService::resolve_base_url(&AppType::Codex, &official).is_err());
+    }
+
+    #[test]
+    fn test_resolve_codex_base_url_reads_active_model_provider() {
+        let p = make_provider(serde_json::json!({
+            "auth": { "OPENAI_API_KEY": "sk-test" },
+            "config": "model_provider = \"custom\"\nmodel = \"gpt-5\"\n\n[model_providers.custom]\nname = \"custom\"\nbase_url = \"https://relay.example/v1/\"\nwire_api = \"responses\"\n",
+        }));
+        assert_eq!(
+            StreamCheckService::resolve_base_url(&AppType::Codex, &p).unwrap(),
+            "https://relay.example/v1"
+        );
+    }
+
+    #[test]
+    fn test_resolve_grok_base_url_reads_default_model_table() {
+        let p = make_provider(serde_json::json!({
+            "config": "[models]\ndefault = \"grok\"\n\n[model.grok]\nname = \"Grok\"\nmodel = \"grok-4\"\nbase_url = \"https://grok.example/v1\"\napi_backend = \"openai_responses\"\ncontext_window = 256000\n",
+        }));
+        assert_eq!(
+            StreamCheckService::resolve_base_url(&AppType::GrokBuild, &p).unwrap(),
+            "https://grok.example/v1"
+        );
     }
 }

@@ -4,10 +4,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { ReactElement } from "react";
 import { http, HttpResponse } from "msw";
 import type { Provider } from "@/types";
-import {
-  ProviderList,
-  type SwitchModeProps,
-} from "@/components/providers/ProviderList";
+import { ProviderList } from "@/components/providers/ProviderList";
 import { server } from "../msw/server";
 
 vi.mock("sonner", () => ({
@@ -158,35 +155,6 @@ describe("ProviderList Component", () => {
     onOpenWebsite: vi.fn(),
   };
 
-  function switchMode(
-    overrides: Partial<SwitchModeProps> = {},
-  ): SwitchModeProps {
-    return {
-      active: "direct",
-      view: "direct",
-      directId: null,
-      routeId: null,
-      failoverOn: false,
-      queue: [],
-      stackMembers: new Map(),
-      routingReason: () => "",
-      serviceRunning: false,
-      actions: {
-        switchDirect: vi.fn(),
-        needsRouteDialog: vi.fn(),
-        exitAndUse: vi.fn(),
-        routeTo: vi.fn(),
-        queueAdd: vi.fn(),
-        queueRemove: vi.fn(),
-        queueMove: vi.fn(),
-        stackAdd: vi.fn(),
-        stackRemove: vi.fn(),
-        stackSetDefault: vi.fn(),
-      },
-      ...overrides,
-    };
-  }
-
   it("should render skeleton placeholders when loading", () => {
     const { container } = renderWithQueryClient(
       <ProviderList {...baseProps} providers={{}} appId="claude" isLoading />,
@@ -226,13 +194,13 @@ describe("ProviderList Component", () => {
     expect(handleCreate).toHaveBeenCalledTimes(1);
   });
 
-  it("renders in the order returned by useDragSort and wires the mode actions", () => {
+  it("renders in the order returned by useDragSort and wires the card actions", () => {
     const providerA = createProvider({ id: "a", name: "A" });
     const providerB = createProvider({ id: "b", name: "B" });
+    const handleSwitch = vi.fn();
     const handleEdit = vi.fn();
     const handleDelete = vi.fn();
     const handleDuplicate = vi.fn();
-    const mode = switchMode({ directId: "b" });
 
     useDragSortMock.mockReturnValue({
       sortedProviders: [providerB, providerA],
@@ -246,10 +214,10 @@ describe("ProviderList Component", () => {
         providers={{ a: providerA, b: providerB }}
         currentProviderId="b"
         appId="claude"
+        onSwitch={handleSwitch}
         onEdit={handleEdit}
         onDelete={handleDelete}
         onDuplicate={handleDuplicate}
-        switchMode={mode}
       />,
     );
 
@@ -260,12 +228,12 @@ describe("ProviderList Component", () => {
     expect(screen.getByTestId("drag-attr-b")).toHaveTextContent("b");
     expect(screen.getByTestId("drag-attr-a")).toHaveTextContent("a");
 
-    // 直连那家显示「使用中」，其余是「切换」
+    // 当前那家显示「使用中」，其余是「切换」
     expect(screen.getByTestId("status-b")).toHaveTextContent(
       "providerCard.status.inUse",
     );
     fireEvent.click(screen.getByTestId("switch-a"));
-    expect(mode.actions.switchDirect).toHaveBeenCalledWith(providerA);
+    expect(handleSwitch).toHaveBeenCalledWith(providerA);
 
     fireEvent.click(screen.getByTestId("edit-b"));
     fireEvent.click(screen.getByTestId("duplicate-b"));
@@ -277,37 +245,6 @@ describe("ProviderList Component", () => {
       { a: providerA, b: providerB },
       "claude",
     );
-  });
-
-  it("shows queue sections while failover is on", () => {
-    const providerA = createProvider({ id: "a", name: "A" });
-    const providerB = createProvider({ id: "b", name: "B" });
-    useDragSortMock.mockReturnValue({
-      sortedProviders: [providerA, providerB],
-      sensors: [],
-      handleDragEnd: vi.fn(),
-    });
-
-    renderWithQueryClient(
-      <ProviderList
-        {...baseProps}
-        providers={{ a: providerA, b: providerB }}
-        appId="claude"
-        switchMode={switchMode({
-          active: "route",
-          view: "route",
-          routeId: "b",
-          failoverOn: true,
-          queue: ["b"],
-        })}
-      />,
-    );
-
-    expect(
-      screen.getByRole("heading", { name: "providerCard.section.queue" }),
-    ).toBeInTheDocument();
-    expect(screen.getByTestId("queueRemove-b")).toBeInTheDocument();
-    expect(screen.getByTestId("queueAdd-a")).toBeInTheDocument();
   });
 
   it("uses the additive layout for apps that keep several providers", async () => {

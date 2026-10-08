@@ -1,12 +1,5 @@
 // 使用统计相关类型定义
 
-export interface TokenUsage {
-  inputTokens: number;
-  outputTokens: number;
-  cacheReadTokens: number;
-  cacheCreationTokens: number;
-}
-
 export interface RequestLog {
   requestId: string;
   providerId: string;
@@ -14,7 +7,7 @@ export interface RequestLog {
   appType: string;
   model: string;
   requestModel?: string;
-  /** 写入时实际用于计价的模型名；路由接管 + request 计价模式下可能与 model 不同 */
+  /** 写入时实际用于计价的模型名；旧版路由记下的行可能与 model 不同 */
   pricingModel?: string;
   costMultiplier: string;
   inputTokens: number;
@@ -34,13 +27,14 @@ export interface RequestLog {
   errorMessage?: string;
   createdAt: number;
   dataSource?: string;
+  /** 定价表里查得到计价模型；false 时成本为 0 是因为没有定价 */
+  hasPricing?: boolean;
 }
 
 export interface SessionSyncResult {
   imported: number;
   skipped: number;
   filesScanned: number;
-  suspectedDuplicates: number;
   deferredFiles: number;
   errors: string[];
 }
@@ -65,6 +59,15 @@ export interface ModelPricing {
   outputCostPerMillion: string;
   cacheReadCostPerMillion: string;
   cacheCreationCostPerMillion: string;
+  /** 按阈值从低到高；超过几档就按阈值最高的那档算 */
+  longContextTiers?: LongContextTier[];
+}
+
+/** 提示超过 thresholdTokens 时，整次请求输入侧（含缓存读写）和输出分别乘的倍率。 */
+export interface LongContextTier {
+  thresholdTokens: number;
+  inputMultiplier: string;
+  outputMultiplier: string;
 }
 
 export interface ModelsDevSyncConfig {
@@ -143,6 +146,8 @@ export interface ModelStats {
   speedGenerationMs?: number;
   estSpeedOutputTokens?: number;
   estSpeedDurationMs?: number;
+  /** 定价表里查得到这个模型；价格为 0 的模型也是 true */
+  hasPricing?: boolean;
 }
 
 export interface LogFilters {
@@ -168,16 +173,6 @@ export interface UsageScopeFilters {
   model?: string;
 }
 
-export interface ProviderLimitStatus {
-  providerId: string;
-  dailyUsage: string;
-  dailyLimit?: string;
-  dailyExceeded: boolean;
-  monthlyUsage: string;
-  monthlyLimit?: string;
-  monthlyExceeded: boolean;
-}
-
 export type UsageRangePreset =
   | "today"
   | "1d"
@@ -199,18 +194,10 @@ export interface UsageRangeSelection {
 /**
  * App types surfaced as dashboard filter buttons.
  *
- * `claude-desktop` is intentionally NOT listed: the Desktop gateway's proxy
- * traffic is still recorded under its own `app_type` (preserving route-takeover
- * billing audit — the request detail panel shows the real value), but the
- * dashboard folds it into `claude` for display. It is the embedded Claude Code
- * runtime running inside the Desktop shell, and Desktop *chat* usage never
- * passes through this app at all, so a separate "Claude Desktop" bucket would
- * only ever show a partial number and mislead users into reading it as the
- * Desktop's full usage. The backend collapses `claude-desktop → claude` in
- * every dashboard query (see `folded_app_type_sql`).
- * `opencode` and `pi` have no proxy handler; their usage reaches this
- * dashboard through session importers. `openclaw` / `hermes` appear only as
- * managed apps elsewhere.
+ * Usage reaches this dashboard through session importers. Historical
+ * `claude-desktop` rows are folded into `claude` by the backend (see
+ * `folded_app_type_sql`). `openclaw` / `hermes` appear only as managed apps
+ * elsewhere.
  */
 export type AppType =
   | "claude"
@@ -234,27 +221,16 @@ export const KNOWN_APP_TYPES: ReadonlyArray<AppType> = [
 ];
 
 /**
- * App types whose proxy uses an OpenAI-style protocol. Two consequences:
- *
- * 1. `inputTokens` already includes the cached portion (must subtract
- *    `cacheReadTokens` to get fresh-input semantics — see
- *    [getFreshInputTokens]).
- * 2. The protocol does not report cache _creation_ separately, only cache
- *    _reads_. So `cacheCreationTokens` is always 0 for these app types and
- *    the UI should label it as N/A rather than 0.
- *
- * Mirror of the Rust `CACHE_INCLUSIVE_APP_TYPES` whitelist.
+ * App types whose session logs never report cache writes: the cache-write
+ * column shows N/A for them instead of 0. Grok Build reports
+ * `cacheCreationTokens`, so it is not listed.
  */
-export const CACHE_INCLUSIVE_APP_TYPES: ReadonlySet<string> = new Set([
-  "codex",
-  "gemini",
-  "grokbuild",
-]);
+const NO_CACHE_WRITE_APP_TYPES: ReadonlySet<string> = new Set(["gemini"]);
 
-// Pi sessions can mix Anthropic and OpenAI APIs, but the dashboard aggregates
-// only by app type. Treat cache-write coverage as partial without changing
-// Pi's fresh-input token semantics.
+// Some sessions report cache writes and some do not: Pi and mcode mix
+// Anthropic and OpenAI APIs, and Codex only reports them for GPT-5.6 and later.
 const PARTIAL_CACHE_WRITE_APP_TYPES: ReadonlySet<string> = new Set([
+  "codex",
   "pi",
   "mcode",
 ]);
@@ -266,35 +242,13 @@ export function getCacheWriteAvailability(
 ): CacheWriteAvailability {
   if (appTypes.length === 0) return "ok";
   const unavailable = appTypes.filter((appType) =>
-    CACHE_INCLUSIVE_APP_TYPES.has(appType),
+    NO_CACHE_WRITE_APP_TYPES.has(appType),
   ).length;
   if (unavailable === appTypes.length) return "na";
   const partial = appTypes.some((appType) =>
     PARTIAL_CACHE_WRITE_APP_TYPES.has(appType),
   );
   return unavailable === 0 && !partial ? "ok" : "partial";
-}
-
-/** Subset of request-log fields needed to derive cache-normalized input. */
-export interface CacheNormalizableLog {
-  appType: string;
-  inputTokens: number;
-  cacheReadTokens: number;
-}
-
-/**
- * For a single request log, return the input token count with cache reads
- * removed. Anthropic-style providers already report `inputTokens` without
- * cache, so they pass through unchanged.
- */
-export function getFreshInputTokens(log: CacheNormalizableLog): number {
-  if (
-    CACHE_INCLUSIVE_APP_TYPES.has(log.appType) &&
-    log.inputTokens >= log.cacheReadTokens
-  ) {
-    return log.inputTokens - log.cacheReadTokens;
-  }
-  return log.inputTokens;
 }
 
 export const NON_NEGATIVE_DECIMAL_REGEX = /^\d+(?:\.\d+)?$/;
@@ -314,7 +268,7 @@ type UsageCostLog = Pick<
   | "totalCostUsd"
   | "statusCode"
 > &
-  Partial<Pick<RequestLog, "costMultiplier">>;
+  Partial<Pick<RequestLog, "costMultiplier" | "hasPricing">>;
 
 export function hasUsageTokens(log: UsageCostLog): boolean {
   return (
@@ -337,12 +291,18 @@ export function isUnpricedUsage(log: UsageCostLog): boolean {
     hasUsageTokens(log) &&
     Number.isFinite(totalCost) &&
     (!Number.isFinite(multiplier) || multiplier !== 0) &&
-    totalCost === 0
+    totalCost === 0 &&
+    log.hasPricing !== true
   );
 }
 
-export interface StatsFilters {
-  timeRange: UsageRangePreset;
-  providerId?: string;
-  appType?: string;
+/** 有 token、成本为 0，且定价表里没有这个模型；价格为 0 的模型不算 */
+export function isUnpricedModelStat(
+  stat: Pick<ModelStats, "totalTokens" | "totalCost" | "hasPricing">,
+): boolean {
+  return (
+    stat.totalTokens > 0 &&
+    Number.parseFloat(stat.totalCost) === 0 &&
+    stat.hasPricing !== true
+  );
 }

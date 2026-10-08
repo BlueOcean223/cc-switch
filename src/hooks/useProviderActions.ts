@@ -27,18 +27,12 @@ import {
 import { usageKeys } from "@/lib/query/usage";
 import { extractErrorMessage } from "@/utils/errorUtils";
 import { openclawKeys } from "@/hooks/useOpenClaw";
-import { supportsOfficialProxyTakeover } from "@/utils/providerCapabilities";
-import { getRoutingReason } from "@/utils/routingReason";
-import { logFrontendInfo } from "@/lib/frontendLogger";
 
 /**
  * Hook for managing provider actions (add, update, delete, switch)
  * Extracts business logic from App.tsx
  */
-export function useProviderActions(
-  activeApp: AppId,
-  isProxyTakeover?: boolean,
-) {
+export function useProviderActions(activeApp: AppId) {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
 
@@ -81,7 +75,6 @@ export function useProviderActions(
         providerKey?: string;
         suggestedDefaults?: OpenClawSuggestedDefaults;
         addToLive?: boolean;
-        ensureClaudeDesktopOfficialSeed?: boolean;
         ensureGrokBuildOfficialSeed?: boolean;
         editorSave?: ProviderEditorSave;
       },
@@ -166,55 +159,7 @@ export function useProviderActions(
 
   // 切换供应商
   const switchProvider = useCallback(
-    async (provider: Provider, options?: { acknowledgedRouting?: boolean }) => {
-      // Claude Desktop 切到模型映射卡时，后端会自动拉起路由服务，不用提醒；
-      // 其余应用必须开启当前应用的 takeover（只看全局进程会漏判别的应用已接管的情况）。
-      // 确认框 F 里选了「仍然直连切换」的不再重复提醒。
-      const routingReady =
-        activeApp === "claude-desktop" ||
-        isProxyTakeover === true ||
-        options?.acknowledgedRouting === true;
-      const proxyRequiredReason = routingReady
-        ? null
-        : getRoutingReason(activeApp, provider, t);
-
-      if (proxyRequiredReason) {
-        logFrontendInfo(
-          `[SWITCH] ${activeApp} 直连切到 ${provider.id}，提示需要路由：${proxyRequiredReason}`,
-        );
-        toast.warning(
-          t("notifications.proxyRequiredForSwitch", {
-            reason: proxyRequiredReason,
-            defaultValue:
-              "此供应商{{reason}}，需要代理服务才能正常使用，请先启动代理",
-          }),
-        );
-      }
-
-      // Codex official account cards can reuse the active native ChatGPT login
-      // through local routing. Other apps' official providers remain blocked.
-      const officialSupportsTakeover = supportsOfficialProxyTakeover(
-        activeApp,
-        provider,
-      );
-      if (
-        isProxyTakeover &&
-        provider.category === "official" &&
-        !officialSupportsTakeover
-      ) {
-        logFrontendInfo(
-          `[SWITCH] ${activeApp} 拒绝切到 ${provider.id}：路由模式下不能切到官方供应商`,
-        );
-        toast.error(
-          t("notifications.officialBlockedByProxy", {
-            defaultValue:
-              "代理接管模式下不能切换到官方供应商，使用代理访问官方 API 可能导致账号被封禁",
-          }),
-          { duration: 6000 },
-        );
-        return;
-      }
-
+    async (provider: Provider) => {
       try {
         const result = await switchProviderMutation.mutateAsync(provider.id);
         await syncClaudePlugin(provider);
@@ -249,45 +194,33 @@ export function useProviderActions(
           }
         }
 
-        // 若已弹过 proxyRequired 警告则不再弹 success
-        if (!proxyRequiredReason) {
-          let messageKey = "notifications.switchSuccess";
-          let defaultMessage = "切换成功！";
-          if (activeApp === "codex") {
-            messageKey = "notifications.codexRestartRequired";
-            defaultMessage = "切换成功，请重启客户端以生效";
-          } else if (activeApp === "gemini") {
-            messageKey = "notifications.geminiRestartRequired";
-            defaultMessage = "切换成功，请重启 Gemini CLI 以生效";
-          } else if (activeApp === "grokbuild") {
-            messageKey = "notifications.grokBuildRestartRequired";
-            defaultMessage = "切换成功，请重启 Grok Build 以生效";
-          } else if (activeApp === "claude-desktop") {
-            if (provider.meta?.claudeDesktopMode === "proxy") {
-              messageKey = "notifications.claudeDesktopProxyRestartRequired";
-              defaultMessage =
-                "切换成功，请保持 CC Switch 运行，并重启 Claude Desktop 后生效";
-            } else {
-              messageKey = "notifications.claudeDesktopRestartRequired";
-              defaultMessage = "切换成功，重启 Claude Desktop 后生效";
-            }
-          } else if (
-            activeApp === "opencode" ||
-            activeApp === "openclaw" ||
-            activeApp === "mcode"
-          ) {
-            messageKey = "notifications.addToConfigSuccess";
-            defaultMessage = "已添加到配置";
-          }
-          toast.success(t(messageKey, { defaultValue: defaultMessage }), {
-            closeButton: true,
-          });
+        let messageKey = "notifications.switchSuccess";
+        let defaultMessage = "切换成功！";
+        if (activeApp === "codex") {
+          messageKey = "notifications.codexRestartRequired";
+          defaultMessage = "切换成功，请重启客户端以生效";
+        } else if (activeApp === "gemini") {
+          messageKey = "notifications.geminiRestartRequired";
+          defaultMessage = "切换成功，请重启 Gemini CLI 以生效";
+        } else if (activeApp === "grokbuild") {
+          messageKey = "notifications.grokBuildRestartRequired";
+          defaultMessage = "切换成功，请重启 Grok Build 以生效";
+        } else if (
+          activeApp === "opencode" ||
+          activeApp === "openclaw" ||
+          activeApp === "mcode"
+        ) {
+          messageKey = "notifications.addToConfigSuccess";
+          defaultMessage = "已添加到配置";
         }
+        toast.success(t(messageKey, { defaultValue: defaultMessage }), {
+          closeButton: true,
+        });
       } catch {
         // 错误提示由 mutation 处理
       }
     },
-    [switchProviderMutation, syncClaudePlugin, activeApp, isProxyTakeover, t],
+    [switchProviderMutation, syncClaudePlugin, activeApp, t],
   );
 
   // 删除供应商

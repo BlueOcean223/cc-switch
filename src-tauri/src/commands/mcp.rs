@@ -47,7 +47,7 @@ pub struct McpConfigResponse {
     pub servers: HashMap<String, serde_json::Value>,
 }
 
-/// 获取 MCP 配置（来自 ~/.cc-switch/config.json）
+/// 获取 MCP 配置（来自 ~/.ccs-lite/config.json）
 use std::str::FromStr;
 
 #[tauri::command]
@@ -212,7 +212,7 @@ pub async fn resync_mcp_to_apps(
     let targets = McpService::resync_targets(apps.as_deref()).map_err(|e| e.to_string())?;
     let mut outcomes = Vec::with_capacity(targets.len());
     for app in targets {
-        let _guard = state.proxy_service.lock_switch_for_app(app.as_str()).await;
+        let _guard = state.switch_locks.lock_for_app(app.as_str()).await;
         outcomes.push(McpService::resync_app(&state, &app));
     }
     Ok(outcomes)

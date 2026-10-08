@@ -130,7 +130,7 @@ export function PromptCopyDialog({
                       aria-describedby={note ? noteId : undefined}
                       className="ui-checkbox"
                     />
-                    <AppGlyph app={app} size={16} badgeClassName="bg-surface" />
+                    <AppGlyph app={app} size={16} />
                     <span className="text-body">{APP_DISPLAY_NAME[app]}</span>
                     <span className="flex-1" />
                     {note ? (

@@ -8,6 +8,7 @@ import { server } from "../msw/server";
 import { renderWithQueryClient as render } from "../utils/testQueryClient";
 import { MODELS_DEV_API_URL } from "@/lib/modelsDev";
 import { piThinkingProfiles } from "@/config/piThinkingProfiles";
+import { piProviderPresets } from "@/config/piProviderPresets";
 
 const TAURI_ENDPOINT = "http://tauri.local";
 
@@ -61,9 +62,7 @@ describe("PiProviderForm", () => {
     );
 
     // 表单直接铺在添加页里，不再套一层卡片
-    expect(container.querySelector("#provider-form")).not.toHaveClass(
-      "glass",
-    );
+    expect(container.querySelector("#provider-form")).not.toHaveClass("glass");
     expect(screen.getByLabelText("provider.name")).toBeInTheDocument();
     expect(screen.getByLabelText("provider.notes")).toBeInTheDocument();
     expect(screen.getByLabelText("provider.websiteUrl")).toBeInTheDocument();
@@ -749,7 +748,7 @@ describe("PiProviderForm", () => {
       />,
     );
 
-    fireEvent.click(screen.getByText("Kimi", { selector: "span" }));
+    fireEvent.click(screen.getByText("PPIO", { selector: "span" }));
     fireEvent.change(screen.getByLabelText("pi.form.credential"), {
       target: { value: "literal-key" },
     });
@@ -757,18 +756,80 @@ describe("PiProviderForm", () => {
 
     await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
     expect(onSubmit.mock.calls[0][0]).toMatchObject({
-      providerKey: "cc-switch-kimi",
-      name: "Kimi",
-      presetCategory: "cn_official",
+      providerKey: "cc-switch-ppio",
+      name: "PPIO",
+      presetCategory: "aggregator",
     });
     expect(JSON.parse(onSubmit.mock.calls[0][0].settingsConfig)).toMatchObject({
       api: "openai-completions",
-      baseUrl: "https://api.moonshot.cn/v1",
+      baseUrl: "https://api.ppio.com/openai/v1",
       apiKey: "literal-key",
     });
     expect(
       screen.queryByText("pi.form.nativeLoginAlternative"),
     ).not.toBeInTheDocument();
+  });
+
+  it("writes only the API key under Pi's own ID for a provider Pi ships", async () => {
+    const onSubmit = vi.fn().mockResolvedValue(undefined);
+    render(
+      <PiProviderForm
+        appId="pi"
+        submitLabel="Save built-in"
+        onSubmit={onSubmit}
+        onCancel={() => {}}
+      />,
+    );
+
+    fireEvent.click(screen.getByText("DeepSeek", { selector: "span" }));
+    expect(
+      screen.getByText(/Pi 已内置这个供应商（deepseek）/),
+    ).toBeInTheDocument();
+    expect(
+      document.querySelector("#pi-provider-base-url"),
+    ).not.toBeInTheDocument();
+    expect(
+      document.querySelector("#pi-models-section"),
+    ).not.toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("pi.form.credential"), {
+      target: { value: "literal-key" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save built-in" }));
+
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+    expect(onSubmit.mock.calls[0][0]).toMatchObject({
+      providerKey: "deepseek",
+      name: "DeepSeek",
+    });
+    expect(JSON.parse(onSubmit.mock.calls[0][0].settingsConfig)).toEqual({
+      apiKey: "literal-key",
+    });
+  });
+
+  it("edits a key-only built-in entry without asking for transport fields", async () => {
+    const onSubmit = vi.fn().mockResolvedValue(undefined);
+    render(
+      <PiProviderForm
+        appId="pi"
+        providerId="deepseek"
+        submitLabel="Save key-only DeepSeek"
+        onSubmit={onSubmit}
+        onCancel={() => {}}
+        initialData={{ name: "DeepSeek", settingsConfig: { apiKey: "secret" } }}
+      />,
+    );
+
+    expect(
+      screen.getByText(/Pi 已内置这个供应商（deepseek）/),
+    ).toBeInTheDocument();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Save key-only DeepSeek" }),
+    );
+
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+    expect(JSON.parse(onSubmit.mock.calls[0][0].settingsConfig)).toEqual({
+      apiKey: "secret",
+    });
   });
 
   it("keeps preset model order without exposing a default-model field", async () => {
@@ -782,7 +843,7 @@ describe("PiProviderForm", () => {
       />,
     );
 
-    fireEvent.click(screen.getByText("Kimi", { selector: "span" }));
+    fireEvent.click(screen.getByText("Novita AI", { selector: "span" }));
     fireEvent.change(screen.getByLabelText("pi.form.credential"), {
       target: { value: "literal-key" },
     });
@@ -794,28 +855,17 @@ describe("PiProviderForm", () => {
     await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
     const submitted = onSubmit.mock.calls[0][0];
     const config = JSON.parse(submitted.settingsConfig);
-    expect(config.models.map((model: { id: string }) => model.id)).toEqual([
-      "kimi-k2.7-code",
-      "kimi-k3",
-      "kimi-k2.7-code-highspeed",
-      "kimi-k2.6",
-    ]);
+    const presetModels = piProviderPresets.find(
+      (preset) => preset.name === "Novita AI",
+    )!.settingsConfig.models;
+    expect(presetModels.length).toBeGreaterThan(1);
     expect(
       config.models.map((model: { id: string; name?: string }) => ({
         id: model.id,
         name: model.name,
       })),
-    ).toEqual([
-      { id: "kimi-k2.7-code", name: "Kimi K2.7 Code" },
-      { id: "kimi-k3", name: "Kimi K3" },
-      { id: "kimi-k2.7-code-highspeed", name: "Kimi K2.7 Code HighSpeed" },
-      { id: "kimi-k2.6", name: "Kimi K2.6" },
-    ]);
+    ).toEqual(presetModels.map(({ id, name }) => ({ id, name })));
     for (const model of config.models) {
-      expect(model).toMatchObject({
-        reasoning: true,
-        input: ["text", "image"],
-      });
       expect(model.contextWindow).toBeGreaterThan(0);
       expect(model.maxTokens).toBeGreaterThan(0);
     }
@@ -980,7 +1030,6 @@ describe("PiProviderForm", () => {
       expect(requestBody).toEqual({
         baseUrl: "https://models.example/v1",
         apiKey: "literal-key",
-        customUserAgent: "pi-test-agent/1.0",
         apiFormat: "openai-completions",
         requestHeaders: {
           "user-agent": "pi-test-agent/1.0",
@@ -1464,21 +1513,28 @@ describe("PiProviderForm", () => {
       />,
     );
 
-    await user.click(screen.getByText("Kimi", { selector: "span" }));
+    await user.click(screen.getByText("PPIO", { selector: "span" }));
     const configEditor = screen.getByLabelText(
       "provider.configJson",
     ) as HTMLTextAreaElement;
-    expect(JSON.parse(configEditor.value).models[0].thinkingLevelMap).toEqual({
-      off: null,
-    });
+    const presetMap = {
+      minimal: null,
+      low: null,
+      medium: null,
+      high: "high",
+      max: "max",
+    };
+    expect(JSON.parse(configEditor.value).models[0].thinkingLevelMap).toEqual(
+      presetMap,
+    );
 
     await user.click(document.querySelector("#pi-provider-api-select")!);
     await user.click(
       await screen.findByRole("option", { name: "OpenAI Responses" }),
     );
-    expect(JSON.parse(configEditor.value).models[0].thinkingLevelMap).toEqual({
-      off: null,
-    });
+    expect(JSON.parse(configEditor.value).models[0].thinkingLevelMap).toEqual(
+      presetMap,
+    );
 
     await user.click(document.querySelector("#pi-provider-api-select")!);
     await user.click(
@@ -1486,9 +1542,9 @@ describe("PiProviderForm", () => {
         name: "OpenAI Chat Completions",
       }),
     );
-    expect(JSON.parse(configEditor.value).models[0].thinkingLevelMap).toEqual({
-      off: null,
-    });
+    expect(JSON.parse(configEditor.value).models[0].thinkingLevelMap).toEqual(
+      presetMap,
+    );
   });
 
   it("edits Pi thinking-map missing, null, and string states from the collapsed capability area", async () => {
@@ -1580,7 +1636,7 @@ describe("PiProviderForm", () => {
       />,
     );
 
-    await user.click(screen.getByText("DeepSeek", { selector: "span" }));
+    await user.click(screen.getByText("PPIO", { selector: "span" }));
     await user.click(
       screen.getAllByRole("button", {
         name: "展开或收起模型详情",
@@ -1739,7 +1795,7 @@ describe("PiProviderForm", () => {
       />,
     );
 
-    await user.click(screen.getByText("Kimi", { selector: "span" }));
+    await user.click(screen.getByText("PPIO", { selector: "span" }));
     const configEditor = screen.getByLabelText(
       "provider.configJson",
     ) as HTMLTextAreaElement;

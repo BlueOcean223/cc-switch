@@ -97,7 +97,6 @@ const TIER_WINDOW_ORDER: Record<string, number> = {
   "30_day": 3,
   monthly: 3,
   credits: 3,
-  premium: 3,
 };
 const UNKNOWN_WINDOW = 9;
 

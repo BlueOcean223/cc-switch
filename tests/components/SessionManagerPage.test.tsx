@@ -279,7 +279,6 @@ describe("SessionManagerPage", () => {
     setSettings({
       visibleApps: {
         claude: true,
-        "claude-desktop": true,
         codex: true,
         gemini: false,
         grokbuild: false,
@@ -303,15 +302,6 @@ describe("SessionManagerPage", () => {
     expect(within(menu).getAllByRole("menuitemradio")[0]).toHaveTextContent(
       "全部应用4",
     );
-  });
-
-  it("shows the Claude Desktop note when coming from Claude Desktop", async () => {
-    renderPage("claude", { fromApp: "claude-desktop" });
-    expect(
-      await screen.findByText(
-        "Claude Desktop 没有单独的会话记录，这里显示 Claude Code 的会话。",
-      ),
-    ).toBeInTheDocument();
   });
 
   it("filters by search and offers to clear an empty search", async () => {
@@ -375,13 +365,15 @@ describe("SessionManagerPage", () => {
     expect(await screen.findByText("Alpha Session")).toBeInTheDocument();
   });
 
-  it("explains why a Hermes session cannot be resumed", async () => {
+  it("explains why a JSONL-only Hermes session cannot be resumed", async () => {
     renderPage("hermes");
     await screen.findByText("Hermes Session");
     openRow("Hermes Session");
 
     expect(
-      await screen.findByText("暂不支持从命令行恢复 Hermes 会话"),
+      await screen.findByText(
+        "这个 Hermes 会话只有 JSONL 记录，不在 state.db 里，无法用 hermes --resume 恢复",
+      ),
     ).toBeInTheDocument();
     expect(
       screen.getByRole("button", { name: "复制恢复命令" }),

@@ -9,7 +9,6 @@ icon: NULL
 icon_color: NULL
 meta: {}
 is_current: true
-in_failover_queue: false
 
 id: gemini-official
 name: Google Official
@@ -22,7 +21,6 @@ icon: gemini
 icon_color: #4285F4
 meta: {}
 is_current: false
-in_failover_queue: false
 
 
 common config snippet: NULL

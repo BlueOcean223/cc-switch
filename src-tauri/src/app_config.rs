@@ -38,7 +38,6 @@ impl McpApps {
             AppType::Hermes => self.hermes,
             AppType::Mcode => self.mcode,
             AppType::Pi => self.pi,
-            AppType::ClaudeDesktop => false,
         }
     }
 
@@ -54,7 +53,6 @@ impl McpApps {
             AppType::Hermes => self.hermes = enabled,
             AppType::Mcode => self.mcode = enabled,
             AppType::Pi => self.pi = enabled,
-            AppType::ClaudeDesktop => {} // Claude Desktop 3P provider config doesn't support MCP here
         }
     }
 
@@ -135,7 +133,6 @@ impl SkillApps {
             AppType::Pi => self.pi,
             AppType::Mcode => self.mcode,
             AppType::OpenClaw => false, // OpenClaw doesn't support Skills
-            AppType::ClaudeDesktop => false,
         }
     }
 
@@ -151,7 +148,6 @@ impl SkillApps {
             AppType::Pi => self.pi = enabled,
             AppType::Mcode => self.mcode = enabled,
             AppType::OpenClaw => {} // OpenClaw doesn't support Skills, ignore
-            AppType::ClaudeDesktop => {} // Claude Desktop 3P profiles don't use CC Switch skill sync
         }
     }
 
@@ -201,20 +197,6 @@ impl SkillApps {
     pub fn only(app: &AppType) -> Self {
         let mut apps = Self::default();
         apps.set_enabled_for(app, true);
-        apps
-    }
-
-    /// 从来源标签列表构建启用状态
-    ///
-    /// 标签与 AppType::as_str() 一致时启用对应应用，
-    /// 其他标签（如 "agents", "cc-switch"）忽略。
-    pub fn from_labels(labels: &[String]) -> Self {
-        let mut apps = Self::default();
-        for label in labels {
-            if let Ok(app) = label.parse::<AppType>() {
-                apps.set_enabled_for(&app, true);
-            }
-        }
         apps
     }
 }
@@ -315,14 +297,6 @@ pub struct McpRoot {
     /// 旧的分应用存储（v3.6.x 及以前，保留用于迁移）
     #[serde(default, skip_serializing_if = "McpConfig::is_empty")]
     pub claude: McpConfig,
-    #[serde(
-        rename = "claude-desktop",
-        alias = "claudeDesktop",
-        alias = "claude_desktop",
-        default,
-        skip_serializing_if = "McpConfig::is_empty"
-    )]
-    pub claude_desktop: McpConfig,
     #[serde(default, skip_serializing_if = "McpConfig::is_empty")]
     pub codex: McpConfig,
     #[serde(default, skip_serializing_if = "McpConfig::is_empty")]
@@ -347,7 +321,6 @@ impl Default for McpRoot {
             servers: Some(HashMap::new()),
             // 旧结构保持空，仅用于反序列化旧配置时的迁移
             claude: McpConfig::default(),
-            claude_desktop: McpConfig::default(),
             codex: McpConfig::default(),
             gemini: McpConfig::default(),
             grokbuild: McpConfig::default(),
@@ -370,13 +343,6 @@ pub struct PromptConfig {
 pub struct PromptRoot {
     #[serde(default)]
     pub claude: PromptConfig,
-    #[serde(
-        rename = "claude-desktop",
-        alias = "claudeDesktop",
-        alias = "claude_desktop",
-        default
-    )]
-    pub claude_desktop: PromptConfig,
     #[serde(default)]
     pub codex: PromptConfig,
     #[serde(default)]
@@ -401,12 +367,6 @@ use crate::provider::ProviderManager;
 #[serde(rename_all = "lowercase")]
 pub enum AppType {
     Claude,
-    #[serde(
-        rename = "claude-desktop",
-        alias = "claude_desktop",
-        alias = "claudeDesktop"
-    )]
-    ClaudeDesktop,
     Codex,
     Gemini,
     GrokBuild,
@@ -421,7 +381,6 @@ impl AppType {
     pub fn as_str(&self) -> &str {
         match self {
             AppType::Claude => "claude",
-            AppType::ClaudeDesktop => "claude-desktop",
             AppType::Codex => "codex",
             AppType::Gemini => "gemini",
             AppType::GrokBuild => "grokbuild",
@@ -445,18 +404,10 @@ impl AppType {
         )
     }
 
-    pub fn supports_local_proxy(&self) -> bool {
-        matches!(
-            self,
-            AppType::Claude | AppType::Codex | AppType::Gemini | AppType::GrokBuild
-        )
-    }
-
     /// Return an iterator over all app types
     pub fn all() -> impl Iterator<Item = AppType> {
         [
             AppType::Claude,
-            AppType::ClaudeDesktop,
             AppType::Codex,
             AppType::Gemini,
             AppType::GrokBuild,
@@ -477,7 +428,6 @@ impl FromStr for AppType {
         let normalized = s.trim().to_lowercase();
         match normalized.as_str() {
             "claude" => Ok(AppType::Claude),
-            "claude-desktop" | "claude_desktop" | "claudedesktop" => Ok(AppType::ClaudeDesktop),
             "codex" => Ok(AppType::Codex),
             "gemini" => Ok(AppType::Gemini),
             "grokbuild" | "grok-build" | "grok_build" | "grok" => Ok(AppType::GrokBuild),
@@ -488,8 +438,8 @@ impl FromStr for AppType {
             "mcode" => Ok(AppType::Mcode),
             other => Err(AppError::localized(
                 "unsupported_app",
-                format!("不支持的应用标识: '{other}'。可选值: claude, claude-desktop, codex, gemini, grokbuild, opencode, openclaw, hermes, pi。"),
-                format!("Unsupported app id: '{other}'. Allowed: claude, claude-desktop, codex, gemini, grokbuild, opencode, openclaw, hermes, pi."),
+                format!("不支持的应用标识: '{other}'。可选值: claude, codex, gemini, grokbuild, opencode, openclaw, hermes, pi。"),
+                format!("Unsupported app id: '{other}'. Allowed: claude, codex, gemini, grokbuild, opencode, openclaw, hermes, pi."),
             )),
         }
     }
@@ -515,38 +465,6 @@ pub struct CommonConfigSnippets {
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hermes: Option<String>,
-}
-
-impl CommonConfigSnippets {
-    /// 获取指定应用的通用配置片段
-    pub fn get(&self, app: &AppType) -> Option<&String> {
-        match app {
-            AppType::Claude => self.claude.as_ref(),
-            AppType::ClaudeDesktop => None,
-            AppType::Codex => self.codex.as_ref(),
-            AppType::Gemini => self.gemini.as_ref(),
-            AppType::GrokBuild => None,
-            AppType::OpenCode => self.opencode.as_ref(),
-            AppType::OpenClaw => self.openclaw.as_ref(),
-            AppType::Hermes => self.hermes.as_ref(),
-            AppType::Pi | AppType::Mcode => None,
-        }
-    }
-
-    /// 设置指定应用的通用配置片段
-    pub fn set(&mut self, app: &AppType, snippet: Option<String>) {
-        match app {
-            AppType::Claude => self.claude = snippet,
-            AppType::ClaudeDesktop => {}
-            AppType::Codex => self.codex = snippet,
-            AppType::Gemini => self.gemini = snippet,
-            AppType::GrokBuild => {}
-            AppType::OpenCode => self.opencode = snippet,
-            AppType::OpenClaw => self.openclaw = snippet,
-            AppType::Hermes => self.hermes = snippet,
-            AppType::Pi | AppType::Mcode => {}
-        }
-    }
 }
 
 /// 多应用配置结构（向后兼容）
@@ -582,7 +500,6 @@ impl Default for MultiAppConfig {
     fn default() -> Self {
         let mut apps = HashMap::new();
         apps.insert("claude".to_string(), ProviderManager::default());
-        apps.insert("claude-desktop".to_string(), ProviderManager::default());
         apps.insert("codex".to_string(), ProviderManager::default());
         apps.insert("gemini".to_string(), ProviderManager::default());
         apps.insert("grokbuild".to_string(), ProviderManager::default());
@@ -634,8 +551,8 @@ impl MultiAppConfig {
         if is_v1 {
             return Err(AppError::localized(
                 "config.unsupported_v1",
-                "检测到旧版 v1 配置格式。当前版本已不再支持运行时自动迁移。\n\n解决方案：\n1. 安装 v3.2.x 版本进行一次性自动迁移\n2. 或手动编辑 ~/.cc-switch/config.json，将顶层结构调整为：\n   {\"version\": 2, \"claude\": {...}, \"codex\": {...}, \"mcp\": {...}}\n\n",
-                "Detected legacy v1 config. Runtime auto-migration is no longer supported.\n\nSolutions:\n1. Install v3.2.x for one-time auto-migration\n2. Or manually edit ~/.cc-switch/config.json to adjust the top-level structure:\n   {\"version\": 2, \"claude\": {...}, \"codex\": {...}, \"mcp\": {...}}\n\n",
+                "检测到旧版 v1 配置格式。当前版本已不再支持运行时自动迁移。\n\n解决方案：\n1. 安装 v3.2.x 版本进行一次性自动迁移\n2. 或手动编辑 ~/.ccs-lite/config.json，将顶层结构调整为：\n   {\"version\": 2, \"claude\": {...}, \"codex\": {...}, \"mcp\": {...}}\n\n",
+                "Detected legacy v1 config. Runtime auto-migration is no longer supported.\n\nSolutions:\n1. Install v3.2.x for one-time auto-migration\n2. Or manually edit ~/.ccs-lite/config.json to adjust the top-level structure:\n   {\"version\": 2, \"claude\": {...}, \"codex\": {...}, \"mcp\": {...}}\n\n",
             ));
         }
 
@@ -711,7 +628,7 @@ impl MultiAppConfig {
     /// 保存配置到文件
     pub fn save(&self) -> Result<(), AppError> {
         let config_path = get_app_config_path();
-        // 先备份旧版（若存在）到 ~/.cc-switch/config.json.bak，再写入新内容
+        // 先备份旧版（若存在）到 ~/.ccs-lite/config.json.bak，再写入新内容
         if config_path.exists() {
             let backup_path = get_app_config_dir().join("config.json.bak");
             if let Err(e) = copy_file(&config_path, &backup_path) {
@@ -772,7 +689,6 @@ impl MultiAppConfig {
     fn maybe_auto_import_prompts_for_existing_config(&mut self) -> Result<bool, AppError> {
         // 如果任一应用已经有提示词配置，说明用户已经在使用 Prompt 功能，避免再次自动导入
         if !self.prompts.claude.prompts.is_empty()
-            || !self.prompts.claude_desktop.prompts.is_empty()
             || !self.prompts.codex.prompts.is_empty()
             || !self.prompts.gemini.prompts.is_empty()
             || !self.prompts.grokbuild.prompts.is_empty()
@@ -861,7 +777,6 @@ impl MultiAppConfig {
         // 插入到对应的应用配置中
         let prompts = match app {
             AppType::Claude => &mut config.prompts.claude.prompts,
-            AppType::ClaudeDesktop => &mut config.prompts.claude_desktop.prompts,
             AppType::Codex => &mut config.prompts.codex.prompts,
             AppType::Gemini => &mut config.prompts.gemini.prompts,
             AppType::GrokBuild => &mut config.prompts.grokbuild.prompts,
@@ -907,7 +822,6 @@ impl MultiAppConfig {
         ] {
             let old_servers = match app {
                 AppType::Claude => &self.mcp.claude.servers,
-                AppType::ClaudeDesktop => continue, // Claude Desktop 3P profiles don't use MCP here
                 AppType::Codex => &self.mcp.codex.servers,
                 AppType::Gemini => &self.mcp.gemini.servers,
                 AppType::GrokBuild => continue,
@@ -1029,23 +943,6 @@ mod tests {
     use std::env;
     use std::fs;
     use tempfile::TempDir;
-
-    #[test]
-    fn app_type_parses_claude_desktop_aliases() {
-        assert_eq!(
-            "claude-desktop".parse::<AppType>().unwrap(),
-            AppType::ClaudeDesktop
-        );
-        assert_eq!(
-            "claude_desktop".parse::<AppType>().unwrap(),
-            AppType::ClaudeDesktop
-        );
-        assert_eq!(
-            "claudeDesktop".parse::<AppType>().unwrap(),
-            AppType::ClaudeDesktop
-        );
-        assert_eq!(AppType::ClaudeDesktop.as_str(), "claude-desktop");
-    }
 
     struct TempHome {
         #[allow(dead_code)] // 字段通过 Drop trait 管理临时目录生命周期

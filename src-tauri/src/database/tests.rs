@@ -205,6 +205,7 @@ fn schema_migration_sets_user_version_when_missing() {
 fn schema_migration_rejects_future_version() {
     let conn = Connection::open_in_memory().expect("open memory db");
     Database::create_tables_on_conn(&conn).expect("create tables");
+    lineage::mark_fork(&conn).expect("mark fork");
     Database::set_user_version(&conn, SCHEMA_VERSION + 1).expect("set future version");
 
     let err =
@@ -212,6 +213,70 @@ fn schema_migration_rejects_future_version() {
     assert!(
         err.to_string().contains("数据库版本过新"),
         "unexpected error: {err}"
+    );
+}
+
+#[test]
+fn schema_migration_rejects_newer_upstream_schema() {
+    let conn = Connection::open_in_memory().expect("open memory db");
+    conn.execute_batch("CREATE TABLE proxy_config (id INTEGER); PRAGMA user_version = 22;")
+        .expect("seed upstream v22");
+
+    let err = Database::apply_schema_migrations_on_conn(&conn)
+        .expect_err("newer upstream schema must be rejected");
+    assert!(err.to_string().contains("上游"), "unexpected error: {err}");
+    assert_eq!(Database::get_user_version(&conn).unwrap(), 22);
+    assert_eq!(lineage::application_id(&conn).unwrap(), 0);
+}
+
+#[test]
+fn migrations_mark_upgraded_upstream_databases_as_fork() {
+    for version in [19, 20] {
+        let conn = Connection::open_in_memory().expect("open memory db");
+        Database::create_tables_on_conn(&conn).expect("create tables");
+        Database::set_user_version(&conn, version).expect("set version");
+        assert_eq!(
+            lineage::classify(&conn).unwrap(),
+            lineage::Lineage::Upstream
+        );
+
+        Database::apply_schema_migrations_on_conn(&conn).expect("migrate");
+
+        assert_eq!(Database::get_user_version(&conn).unwrap(), SCHEMA_VERSION);
+        assert_eq!(
+            lineage::application_id(&conn).unwrap(),
+            lineage::FORK_APPLICATION_ID,
+            "v{version} upgrade must leave the fork mark"
+        );
+    }
+}
+
+#[test]
+fn unmarked_fork_development_database_gets_marked() {
+    let conn = Connection::open_in_memory().expect("open memory db");
+    Database::create_tables_on_conn(&conn).expect("create tables");
+    Database::apply_schema_migrations_on_conn(&conn).expect("migrate");
+    conn.execute_batch("PRAGMA application_id = 0;").unwrap();
+    assert_eq!(
+        lineage::classify(&conn).unwrap(),
+        lineage::Lineage::UnmarkedFork
+    );
+
+    Database::apply_schema_migrations_on_conn(&conn).expect("re-run on dev db");
+
+    assert_eq!(
+        lineage::application_id(&conn).unwrap(),
+        lineage::FORK_APPLICATION_ID
+    );
+}
+
+#[test]
+fn memory_database_is_marked_as_fork() {
+    let db = Database::memory().expect("memory db");
+    let conn = db.conn.lock().unwrap();
+    assert_eq!(
+        lineage::application_id(&conn).unwrap(),
+        lineage::FORK_APPLICATION_ID
     );
 }
 
@@ -301,22 +366,9 @@ fn schema_migration_aligns_column_defaults_and_types() {
 }
 
 #[test]
-fn schema_create_tables_include_pricing_model_columns() {
+fn schema_create_tables_include_request_model_column() {
     let conn = Connection::open_in_memory().expect("open memory db");
     Database::create_tables_on_conn(&conn).expect("create tables");
-
-    let multiplier = get_column_info(&conn, "proxy_config", "default_cost_multiplier");
-    assert_eq!(multiplier.r#type, "TEXT");
-    assert_eq!(multiplier.notnull, 1);
-    assert_eq!(normalize_default(&multiplier.default).as_deref(), Some("1"));
-
-    let pricing_source = get_column_info(&conn, "proxy_config", "pricing_model_source");
-    assert_eq!(pricing_source.r#type, "TEXT");
-    assert_eq!(pricing_source.notnull, 1);
-    assert_eq!(
-        normalize_default(&pricing_source.default).as_deref(),
-        Some("response")
-    );
 
     let request_model = get_column_info(&conn, "proxy_request_logs", "request_model");
     assert_eq!(request_model.r#type, "TEXT");
@@ -324,7 +376,7 @@ fn schema_create_tables_include_pricing_model_columns() {
 }
 
 #[test]
-fn schema_migration_v4_adds_pricing_model_columns() {
+fn schema_migration_v4_adds_request_model_column() {
     let conn = Connection::open_in_memory().expect("open memory db");
     conn.execute_batch(
         r#"
@@ -354,18 +406,8 @@ fn schema_migration_v4_adds_pricing_model_columns() {
     Database::set_user_version(&conn, 4).expect("set user_version=4");
     Database::apply_schema_migrations_on_conn(&conn).expect("apply migrations");
 
-    let multiplier = get_column_info(&conn, "proxy_config", "default_cost_multiplier");
-    assert_eq!(multiplier.r#type, "TEXT");
-    assert_eq!(multiplier.notnull, 1);
-    assert_eq!(normalize_default(&multiplier.default).as_deref(), Some("1"));
-
-    let pricing_source = get_column_info(&conn, "proxy_config", "pricing_model_source");
-    assert_eq!(pricing_source.r#type, "TEXT");
-    assert_eq!(pricing_source.notnull, 1);
-    assert_eq!(
-        normalize_default(&pricing_source.default).as_deref(),
-        Some("response")
-    );
+    // 代理配置表在 v21 删除。
+    assert!(!Database::table_exists(&conn, "proxy_config").expect("check proxy_config"));
 
     let request_model = get_column_info(&conn, "proxy_request_logs", "request_model");
     assert_eq!(request_model.r#type, "TEXT");
@@ -515,53 +557,6 @@ fn schema_create_tables_repairs_dev_global_profile_marker() {
 }
 
 #[test]
-fn schema_create_tables_repairs_legacy_proxy_config_singleton_to_per_app() {
-    let conn = Connection::open_in_memory().expect("open memory db");
-
-    // 模拟测试版 v2：user_version=2，但 proxy_config 仍是单例结构（无 app_type）
-    Database::set_user_version(&conn, 2).expect("set user_version");
-    conn.execute_batch(
-        r#"
-        CREATE TABLE proxy_config (
-            id INTEGER PRIMARY KEY,
-            enabled INTEGER NOT NULL DEFAULT 0,
-            listen_address TEXT NOT NULL DEFAULT '127.0.0.1',
-            listen_port INTEGER NOT NULL DEFAULT 5000,
-            max_retries INTEGER NOT NULL DEFAULT 3,
-            request_timeout INTEGER NOT NULL DEFAULT 300,
-            enable_logging INTEGER NOT NULL DEFAULT 1,
-            target_app TEXT NOT NULL DEFAULT 'claude',
-            created_at TEXT NOT NULL DEFAULT (datetime('now')),
-            updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-        );
-        INSERT INTO proxy_config (id, enabled) VALUES (1, 1);
-        "#,
-    )
-    .expect("seed legacy proxy_config");
-
-    Database::create_tables_on_conn(&conn).expect("create tables should repair proxy_config");
-
-    assert!(
-        Database::has_column(&conn, "proxy_config", "app_type").expect("check app_type"),
-        "proxy_config should be migrated to per-app structure"
-    );
-
-    let count: i32 = conn
-        .query_row("SELECT COUNT(*) FROM proxy_config", [], |r| r.get(0))
-        .expect("count rows");
-    assert_eq!(count, 4, "per-app proxy_config should have 4 rows");
-
-    // 新结构下应能按 app_type 查询
-    let _: i32 = conn
-        .query_row(
-            "SELECT COUNT(*) FROM proxy_config WHERE app_type = 'claude'",
-            [],
-            |r| r.get(0),
-        )
-        .expect("query by app_type");
-}
-
-#[test]
 fn migration_from_v3_8_schema_v1_to_current_schema_v3() {
     let conn = Connection::open_in_memory().expect("open memory db");
     conn.execute("PRAGMA foreign_keys = ON;", [])
@@ -611,7 +606,7 @@ fn migration_from_v3_8_schema_v1_to_current_schema_v3() {
         SCHEMA_VERSION
     );
 
-    // v1 -> v2：providers 新增字段必须补齐
+    // v21 删掉了路由时代的 providers 列
     for column in [
         "cost_multiplier",
         "limit_daily_usd",
@@ -620,12 +615,12 @@ fn migration_from_v3_8_schema_v1_to_current_schema_v3() {
         "in_failover_queue",
     ] {
         assert!(
-            Database::has_column(&conn, "providers", column).expect("check column"),
-            "providers.{column} should exist after migration"
+            !Database::has_column(&conn, "providers", column).expect("check column"),
+            "providers.{column} should be dropped after migration"
         );
     }
 
-    // 旧 provider 不应丢失，且新增字段应有默认值
+    // 旧 provider 不应丢失
     let provider_count: i64 = conn
         .query_row(
             "SELECT COUNT(*) FROM providers WHERE id = 'p1' AND app_type = 'claude'",
@@ -634,15 +629,6 @@ fn migration_from_v3_8_schema_v1_to_current_schema_v3() {
         )
         .expect("count providers");
     assert_eq!(provider_count, 1);
-
-    let cost_multiplier: String = conn
-        .query_row(
-            "SELECT cost_multiplier FROM providers WHERE id = 'p1' AND app_type = 'claude'",
-            [],
-            |r| r.get(0),
-        )
-        .expect("read cost_multiplier");
-    assert_eq!(cost_multiplier, "1.0");
 
     // v2 -> v3：skills 表重建为统一结构，并设置 pending 标记（后续由启动时扫描文件系统重建数据）
     assert!(
@@ -685,11 +671,12 @@ fn migration_from_v3_8_schema_v1_to_current_schema_v3() {
         "skills migration snapshot should preserve legacy app mapping"
     );
 
-    // v3.9+ 新增：proxy_config 三行 seed 必须存在（否则 UI 会查不到默认值）
-    let proxy_rows: i64 = conn
-        .query_row("SELECT COUNT(*) FROM proxy_config", [], |r| r.get(0))
-        .expect("count proxy_config rows");
-    assert_eq!(proxy_rows, 4);
+    for table in ["proxy_config", "provider_health", "proxy_live_backup"] {
+        assert!(
+            !Database::table_exists(&conn, table).expect("check table"),
+            "{table} should be dropped after migration"
+        );
+    }
 
     // model_pricing 应具备默认数据（迁移时会 seed）
     let pricing_rows: i64 = conn
@@ -742,7 +729,6 @@ fn dry_run_validates_schema_compatibility() {
             meta: None,
             icon: None,
             icon_color: None,
-            in_failover_queue: false,
         },
     );
 
@@ -872,165 +858,6 @@ fn model_pricing_repair_restores_deepseek_v4_pro_after_retracted_cutover() {
 }
 
 #[test]
-fn model_pricing_seed_repairs_known_outdated_builtin_prices() {
-    let db = Database::memory().expect("create memory db");
-
-    {
-        let conn = db.conn.lock().expect("lock conn");
-        conn.execute(
-            "UPDATE model_pricing
-             SET input_cost_per_million = '1.68',
-                 output_cost_per_million = '3.36',
-                 cache_read_cost_per_million = '0.14',
-                 cache_creation_cost_per_million = '0'
-             WHERE model_id = 'deepseek-v4-pro'",
-            [],
-        )
-        .expect("restore old DeepSeek price");
-        conn.execute(
-            "UPDATE model_pricing
-             SET input_cost_per_million = '9',
-                 output_cost_per_million = '9',
-                 cache_read_cost_per_million = '9',
-                 cache_creation_cost_per_million = '0'
-             WHERE model_id = 'glm-5.1'",
-            [],
-        )
-        .expect("set custom GLM price");
-        // <v3.19 老库形态：cache_write 仍是最初 seed 的 0（07-12 条目才补成 6.25）
-        conn.execute(
-            "UPDATE model_pricing
-             SET input_cost_per_million = '5',
-                 output_cost_per_million = '30',
-                 cache_read_cost_per_million = '0.50',
-                 cache_creation_cost_per_million = '0'
-             WHERE model_id = 'gpt-5.6-sol'",
-            [],
-        )
-        .expect("restore pre-v3.19 GPT-5.6 Sol price");
-        // 最早 seed 的 M2.5 价（bb7c83c2 时代）
-        conn.execute(
-            "UPDATE model_pricing
-             SET input_cost_per_million = '0.12',
-                 output_cost_per_million = '0.95',
-                 cache_read_cost_per_million = '0.03',
-                 cache_creation_cost_per_million = '0'
-             WHERE model_id = 'minimax-m2.5'",
-            [],
-        )
-        .expect("restore oldest MiniMax M2.5 price");
-        // 2026-07-31 之前的 V4 Flash 形态（cache_read 尚未修正为 0.0028）
-        conn.execute(
-            "UPDATE model_pricing
-             SET input_cost_per_million = '0.14',
-                 output_cost_per_million = '0.28',
-                 cache_read_cost_per_million = '0.028',
-                 cache_creation_cost_per_million = '0'
-             WHERE model_id = 'deepseek-v4-flash'",
-            [],
-        )
-        .expect("restore oldest DeepSeek V4 Flash price");
-    }
-
-    db.ensure_model_pricing_seeded()
-        .expect("ensure pricing seeded");
-
-    let conn = db.conn.lock().expect("lock conn");
-    let deepseek: (String, String, String) = conn
-        .query_row(
-            "SELECT input_cost_per_million, output_cost_per_million, cache_read_cost_per_million
-             FROM model_pricing WHERE model_id = 'deepseek-v4-pro'",
-            [],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-        )
-        .expect("query DeepSeek price");
-    // 从远古价 1.68/3.36/0.14 出发要连跳两级才能到位：
-    //   1.68/3.36/0.14 →(2026-07 条目)→ 0.435/0.87/0.003625
-    //                  →(2026-08-16 峰谷调价条目)→ 1.32/3.96/0.044
-    // 这同时锁住了 repair 条目的顺序：新条目必须排在旧条目之后，
-    // 否则老库会停在中间价位，本断言即会失败。v3.20.3 错价的修回另见
-    // model_pricing_repair_restores_deepseek_v4_pro_after_retracted_cutover。
-    assert_eq!(
-        deepseek,
-        ("1.32".to_string(), "3.96".to_string(), "0.044".to_string())
-    );
-
-    let glm: (String, String, String) = conn
-        .query_row(
-            "SELECT input_cost_per_million, output_cost_per_million, cache_read_cost_per_million
-             FROM model_pricing WHERE model_id = 'glm-5.1'",
-            [],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-        )
-        .expect("query GLM price");
-    assert_eq!(glm, ("9".to_string(), "9".to_string(), "9".to_string()));
-
-    // 2026-09-06 条目同样依赖顺序：
-    //   gpt-5.6-sol  5/30/0.50/0 →(07-12 补 cache_write)→ 5/30/0.50/6.25 →(09-06 促销)→ 4/20/0.40/5
-    //   minimax-m2.5 0.12/0.95/0.03/0 →(0.12→0.15 条目)→ 0.15/… →(09-06 官方价)→ 0.30/1.20/0.03/0.375
-    let sol: (String, String, String, String) = conn
-        .query_row(
-            "SELECT input_cost_per_million, output_cost_per_million,
-                    cache_read_cost_per_million, cache_creation_cost_per_million
-             FROM model_pricing WHERE model_id = 'gpt-5.6-sol'",
-            [],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
-        )
-        .expect("query GPT-5.6 Sol price");
-    assert_eq!(
-        sol,
-        (
-            "4".to_string(),
-            "20".to_string(),
-            "0.40".to_string(),
-            "5".to_string()
-        )
-    );
-    let m25: (String, String, String, String) = conn
-        .query_row(
-            "SELECT input_cost_per_million, output_cost_per_million,
-                    cache_read_cost_per_million, cache_creation_cost_per_million
-             FROM model_pricing WHERE model_id = 'minimax-m2.5'",
-            [],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
-        )
-        .expect("query MiniMax M2.5 price");
-    assert_eq!(
-        m25,
-        (
-            "0.30".to_string(),
-            "1.20".to_string(),
-            "0.03".to_string(),
-            "0.375".to_string()
-        )
-    );
-
-    // 2026-09-11 条目是 DeepSeek V4 Flash 链条的第三级，从最老形态出发要连跳三级：
-    //   0.14/0.28/0.028 →(2026-07 修 cache_read)→ 0.14/0.28/0.0028
-    //                   →(2026-08-16 峰谷调价)→ 0.44/1.32/0.014
-    //                   →(2026-09-11 V4.1 Flash 承接)→ 0.3/1.2/0.006
-    // 任一条目被挪到前面，老库都会停在中间价位，本断言即失败。
-    let flash: (String, String, String, String) = conn
-        .query_row(
-            "SELECT input_cost_per_million, output_cost_per_million,
-                    cache_read_cost_per_million, cache_creation_cost_per_million
-             FROM model_pricing WHERE model_id = 'deepseek-v4-flash'",
-            [],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
-        )
-        .expect("query DeepSeek V4 Flash price");
-    assert_eq!(
-        flash,
-        (
-            "0.3".to_string(),
-            "1.2".to_string(),
-            "0.006".to_string(),
-            "0".to_string()
-        )
-    );
-}
-
-#[test]
 fn model_pricing_seed_covers_deepseek_v41_flash_aliases() {
     let db = Database::memory().expect("create memory db");
     let conn = db.conn.lock().expect("lock conn");
@@ -1143,41 +970,62 @@ fn model_pricing_seed_includes_claude_opus_5_5() {
 }
 
 #[test]
-fn model_pricing_refresh_finishes_old_repair_chains_and_preserves_custom_prices() {
+fn model_pricing_seed_includes_claude_haiku_5_5_and_sonnet_5_5() {
     let db = Database::memory().expect("create memory db");
-    {
-        let conn = db.conn.lock().unwrap();
-        conn.execute_batch(
-            "UPDATE model_pricing SET input_cost_per_million = '0.09',
-                output_cost_per_million = '0.29', cache_read_cost_per_million = '0.009',
-                cache_creation_cost_per_million = '0' WHERE model_id = 'mimo-v2.5';
-             UPDATE model_pricing SET input_cost_per_million = '9.99' WHERE model_id = 'o3-mini';",
+    let conn = db.conn.lock().expect("lock conn");
+    let prices = |model_id: &str| -> (String, String, String, String, String, String) {
+        conn.query_row(
+            "SELECT input_cost_per_million, output_cost_per_million,
+                    cache_read_cost_per_million, cache_creation_cost_per_million,
+                    long_context_tiers, priority_multiplier
+             FROM model_pricing WHERE model_id = ?1",
+            [model_id],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                ))
+            },
         )
-        .unwrap();
-    }
-    db.ensure_model_pricing_seeded().unwrap();
-    for _ in 0..2 {
-        {
-            let conn = db.conn.lock().unwrap();
-            let output: String = conn
-                .query_row(
-                    "SELECT output_cost_per_million FROM model_pricing WHERE model_id = 'mimo-v2.5'",
-                    [],
-                    |row| row.get(0),
-                )
-                .unwrap();
-            assert_eq!(output, "0.28");
-            let custom: String = conn
-                .query_row(
-                    "SELECT input_cost_per_million FROM model_pricing WHERE model_id = 'o3-mini'",
-                    [],
-                    |row| row.get(0),
-                )
-                .unwrap();
-            assert_eq!(custom, "9.99");
-        }
-        db.ensure_model_pricing_seeded().unwrap();
-    }
+        .expect("query price")
+    };
+
+    // 2026-10-07 起缓存读 0.05x = $0.10（之前和 Sonnet 5 一样是 $0.20）
+    let (input, output, cache_read, cache_creation, _, _) = prices("claude-sonnet-5-5");
+    assert_eq!(
+        (input, output, cache_read, cache_creation),
+        (
+            "2".to_string(),
+            "10".to_string(),
+            "0.10".to_string(),
+            "2.50".to_string()
+        )
+    );
+
+    // 提示不超过 100K 的价格；超过 100K 整次请求各项 ×5
+    let (input, output, cache_read, cache_creation, tiers, priority) = prices("claude-haiku-5-5");
+    assert_eq!(
+        (input, output, cache_read, cache_creation),
+        (
+            "0.10".to_string(),
+            "0.50".to_string(),
+            "0.01".to_string(),
+            "0.125".to_string()
+        )
+    );
+    assert_eq!(
+        crate::services::model_pricing::long_context_tiers_from_json("claude-haiku-5-5", &tiers),
+        vec![crate::services::model_pricing::LongContextTier {
+            threshold_tokens: 100_000,
+            input_multiplier: "5".to_string(),
+            output_multiplier: "5".to_string(),
+        }]
+    );
+    assert_eq!(priority, "1");
 }
 
 #[test]
@@ -1259,83 +1107,62 @@ fn model_pricing_seed_includes_gemini_3_8_flash() {
 }
 
 #[test]
-fn model_pricing_seed_repairs_sonnet_5_list_price_but_keeps_custom_price() {
+fn model_pricing_seed_overwrites_builtin_rows_and_sets_tiers() {
     let db = Database::memory().expect("create memory db");
 
     {
         let conn = db.conn.lock().expect("lock conn");
-        // 旧 seed 按 list 价录入的行 → 应被修正
+        // 数据库里的内置行和代码不一致（旧版本 seed、或直接改了库）→ 以代码为准
         conn.execute(
             "UPDATE model_pricing
-             SET input_cost_per_million = '3',
-                 output_cost_per_million = '15',
-                 cache_read_cost_per_million = '0.30',
-                 cache_creation_cost_per_million = '3.75'
+             SET input_cost_per_million = '9', output_cost_per_million = '9'
              WHERE model_id = 'claude-sonnet-5'",
             [],
         )
-        .expect("restore old Sonnet 5 list price");
+        .expect("diverge Sonnet 5 price");
     }
 
     db.ensure_model_pricing_seeded()
         .expect("ensure pricing seeded");
 
-    {
-        let conn = db.conn.lock().expect("lock conn");
-        let sonnet: (String, String, String, String) = conn
-            .query_row(
-                "SELECT input_cost_per_million, output_cost_per_million,
-                        cache_read_cost_per_million, cache_creation_cost_per_million
-                 FROM model_pricing WHERE model_id = 'claude-sonnet-5'",
-                [],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
-            )
-            .expect("query repaired Sonnet 5 price");
-        assert_eq!(
-            sonnet,
-            (
-                "2".to_string(),
-                "10".to_string(),
-                "0.20".to_string(),
-                "2.50".to_string(),
-            )
-        );
-
-        // 用户手改过的价（不匹配旧 seed 值）不动
-        conn.execute(
-            "UPDATE model_pricing
-             SET input_cost_per_million = '9',
-                 output_cost_per_million = '9',
-                 cache_read_cost_per_million = '9',
-                 cache_creation_cost_per_million = '9'
-             WHERE model_id = 'claude-sonnet-5'",
-            [],
-        )
-        .expect("set custom Sonnet 5 price");
-    }
-
-    db.ensure_model_pricing_seeded()
-        .expect("ensure pricing seeded again");
-
     let conn = db.conn.lock().expect("lock conn");
-    let custom: (String, String, String, String) = conn
+    let sonnet: (String, String) = conn
         .query_row(
-            "SELECT input_cost_per_million, output_cost_per_million,
-                    cache_read_cost_per_million, cache_creation_cost_per_million
+            "SELECT input_cost_per_million, output_cost_per_million
              FROM model_pricing WHERE model_id = 'claude-sonnet-5'",
             [],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            |row| Ok((row.get(0)?, row.get(1)?)),
         )
-        .expect("query custom Sonnet 5 price");
-    assert_eq!(
-        custom,
-        (
-            "9".to_string(),
-            "9".to_string(),
-            "9".to_string(),
-            "9".to_string(),
+        .expect("query Sonnet 5 price");
+    assert_eq!(sonnet, ("2".to_string(), "10".to_string()));
+
+    // GPT-5.6 Sol 和它带推理强度后缀的行都有 272K 档位和 priority 倍率
+    for model_id in ["gpt-5.6-sol", "gpt-5.5-high"] {
+        let tiers: String = conn
+            .query_row(
+                "SELECT long_context_tiers FROM model_pricing WHERE model_id = ?1",
+                [model_id],
+                |row| row.get(0),
+            )
+            .expect("query tier");
+        assert_eq!(
+            crate::services::model_pricing::long_context_tiers_from_json(model_id, &tiers),
+            vec![crate::services::model_pricing::LongContextTier {
+                threshold_tokens: 272_000,
+                input_multiplier: "2".to_string(),
+                output_multiplier: "1.5".to_string(),
+            }],
+            "{model_id}"
+        );
+    }
+    let sonnet_5_5: String = conn
+        .query_row(
+            "SELECT input_cost_per_million FROM model_pricing WHERE model_id = 'claude-sonnet-5-5'",
+            [],
+            |row| row.get(0),
         )
-    );
+        .expect("Sonnet 5.5 is seeded");
+    assert_eq!(sonnet_5_5, "2");
 }
 
 #[test]

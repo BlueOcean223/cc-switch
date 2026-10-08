@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import { providerPresets } from "@/config/claudeProviderPresets";
-import { isOAuthProviderType } from "@/config/constants";
 import fields from "./claudeKeyFields.json";
 
 // 切换时 CC Switch 只写关键字段（地址、凭据、模型名、协议）和供应商独有字段（上游
@@ -51,11 +50,6 @@ describe("Claude presets project an endpoint and a credential", () => {
     if (preset.category === "official") return;
     const env = presetEnv(preset.settingsConfig);
     const keys = Object.keys(env);
-    // 托管 OAuth（Copilot、Codex、xAI）不带 Key：本地路由按请求注入登录凭据。
-    if (isOAuthProviderType(preset.providerType)) {
-      expect(keys).toContain("ANTHROPIC_BASE_URL");
-      return;
-    }
     if (env.CLAUDE_CODE_USE_BEDROCK) {
       expect(keys).toContain("AWS_REGION");
       expect(

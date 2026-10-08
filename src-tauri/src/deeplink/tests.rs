@@ -123,7 +123,43 @@ fn test_parse_grokbuild_provider() {
     assert_eq!(model["name"].as_str(), Some("Grok Relay"));
     assert_eq!(model["api_key"].as_str(), Some("secret"));
     assert_eq!(model["api_backend"].as_str(), Some("responses"));
-    assert_eq!(model["context_window"].as_integer(), Some(500_000));
+    // 不写上下文窗口，由 Grok Build 按模型决定（写死 500000 会让它到 50 万才压缩）
+    assert!(model.get("context_window").is_none(), "{config}");
+    crate::grok_config::validate_config_toml(config).expect("valid Grok Build config");
+}
+
+#[test]
+fn test_parse_accepts_both_ccslite_and_upstream_schemes() {
+    for scheme in ["ccslite", "ccswitch"] {
+        let url = format!("{scheme}://v1/import?resource=provider&app=claude&name=Test");
+        let request = parse_deeplink_url(&url).unwrap();
+        assert_eq!(request.name.as_deref(), Some("Test"), "{scheme}");
+        assert!(super::is_deeplink_url(&url));
+    }
+    assert!(!super::is_deeplink_url("https://example.com"));
+    assert!(!super::is_deeplink_url("ccslite:"));
+    assert!(super::is_deeplink_url(
+        "CCSLite://v1/import?resource=provider"
+    ));
+}
+
+/// single-instance 把第二个实例的全部参数交给它，第一个是可执行文件路径：多字节字符
+/// 落在 scheme 长度的位置上时不能 panic。
+#[test]
+fn test_is_deeplink_url_accepts_any_command_line_argument() {
+    for arg in [
+        "D:\\软件\\ccs-lite\\ccs-lite.exe",
+        "/home/用户/.local/bin/ccs-lite",
+        "测试用例参数",
+        "ccslit€://v1",
+        "ccswitc€://v1",
+        "",
+        "ccslite",
+        "ccslite://",
+    ] {
+        assert!(!super::is_deeplink_url(arg), "{arg:?}");
+    }
+    assert!(super::is_deeplink_url("ccslite://v1/import?name=供应商"));
 }
 
 #[test]

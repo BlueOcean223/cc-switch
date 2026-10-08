@@ -268,7 +268,7 @@ describe("RequestLogTable", () => {
     // 应用列：短名 + 全名在悬停提示和读屏文字里
     const appCell = screen.getByTitle("Claude Code");
     expect(appCell).toHaveTextContent("Claude");
-    expect(appShortName("claude-desktop")).toBe("Desktop");
+    // 未知应用：原样显示
     expect(appShortName("unknown-app")).toBe("unknown-app");
   });
 });

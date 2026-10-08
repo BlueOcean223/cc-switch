@@ -29,14 +29,11 @@ import { UniversalProviderPanel } from "@/components/universal";
 import { providerPresets } from "@/config/claudeProviderPresets";
 import { codexProviderPresets } from "@/config/codexProviderPresets";
 import { geminiProviderPresets } from "@/config/geminiProviderPresets";
-import { claudeDesktopProviderPresets } from "@/config/claudeDesktopProviderPresets";
 import { extractCodexBaseUrl } from "@/utils/providerConfigUtils";
 import { extractGrokBuildBaseUrl } from "@/utils/grokBuildConfig";
 import { GROKBUILD_OFFICIAL_PROVIDER_ID } from "@/utils/providerCapabilities";
 import type { OpenClawSuggestedDefaults } from "@/config/openclawProviderPresets";
 import type { UniversalProviderPreset } from "@/config/universalProviderPresets";
-import type { ManagedAuthProvider } from "@/lib/api";
-import type { AppMode } from "@/types/proxy";
 
 interface AddProviderDialogProps {
   open: boolean;
@@ -46,13 +43,10 @@ interface AddProviderDialogProps {
     provider: Omit<Provider, "id"> & {
       providerKey?: string;
       suggestedDefaults?: OpenClawSuggestedDefaults;
-      ensureClaudeDesktopOfficialSeed?: boolean;
       ensureGrokBuildOfficialSeed?: boolean;
       editorSave?: ProviderEditorSave;
     },
   ) => Promise<void> | void;
-  /** 从供应商页哪一格打开的，见 ProviderForm 的同名参数 */
-  modeView?: AppMode;
 }
 
 export function AddProviderDialog({
@@ -60,7 +54,6 @@ export function AddProviderDialog({
   onOpenChange,
   appId,
   onSubmit,
-  modeView,
 }: AddProviderDialogProps) {
   const { t } = useTranslation();
   // OpenCode and OpenClaw don't support universal providers
@@ -70,8 +63,7 @@ export function AddProviderDialog({
     appId !== "hermes" &&
     appId !== "pi" &&
     appId !== "mcode" &&
-    appId !== "grokbuild" &&
-    appId !== "claude-desktop";
+    appId !== "grokbuild";
   // 两步：先选预设，再填写（每次打开都从第 1 步开始）
   const [step, setStep] = useState<"pick" | "form">("pick");
   const [pickerHost, setPickerHost] = useState<HTMLDivElement | null>(null);
@@ -94,13 +86,10 @@ export function AddProviderDialog({
   const [selectedUniversalPreset, setSelectedUniversalPreset] =
     useState<UniversalProviderPreset | null>(null);
   const [isFormSubmitting, setIsFormSubmitting] = useState(false);
-  // 表单用了聚合的简化布局：页头应用名后标「聚合模式」
-  const [stackLayout, setStackLayout] = useState(false);
-  const [authSettingsTarget, setAuthSettingsTarget] =
-    useState<ManagedAuthProvider | null>(null);
+  const [authSettingsOpen, setAuthSettingsOpen] = useState(false);
 
   useEffect(() => {
-    setAuthSettingsTarget(null);
+    setAuthSettingsOpen(false);
   }, [appId, open]);
 
   // Claude：预设的关键字段套在当前 live 上显示（去掉当前供应商的关键字段），保存时
@@ -154,15 +143,15 @@ export function AddProviderDialog({
   }, [open, appId, t]);
 
   const closeDialog = useCallback(() => {
-    setAuthSettingsTarget(null);
+    setAuthSettingsOpen(false);
     // 表单每次打开都会重新投影；这里清掉，免得下次打开时先用上一次的底。
     setDraftEditorBase(null);
     onOpenChange(false);
   }, [onOpenChange]);
 
   const handlePanelClose = useCallback(() => {
-    if (authSettingsTarget) {
-      setAuthSettingsTarget(null);
+    if (authSettingsOpen) {
+      setAuthSettingsOpen(false);
       return;
     }
     // 第 2 步的返回回到选预设
@@ -171,7 +160,7 @@ export function AddProviderDialog({
       return;
     }
     closeDialog();
-  }, [authSettingsTarget, closeDialog, step]);
+  }, [authSettingsOpen, closeDialog, step]);
   const formReadyToken = useMemo(
     () => Symbol("provider-form-ready"),
     [appId, open],
@@ -254,7 +243,6 @@ export function AddProviderDialog({
       const providerData: Omit<Provider, "id"> & {
         providerKey?: string;
         suggestedDefaults?: OpenClawSuggestedDefaults;
-        ensureClaudeDesktopOfficialSeed?: boolean;
         ensureGrokBuildOfficialSeed?: boolean;
       } = {
         name: values.name.trim(),
@@ -266,16 +254,6 @@ export function AddProviderDialog({
         ...(values.presetCategory ? { category: values.presetCategory } : {}),
         ...(values.meta ? { meta: values.meta } : {}),
       };
-      if (appId === "claude-desktop" && values.presetId) {
-        const presetIndex = parseInt(
-          values.presetId.replace("claude-desktop-", ""),
-        );
-        const preset = claudeDesktopProviderPresets[presetIndex];
-        providerData.ensureClaudeDesktopOfficialSeed =
-          values.presetCategory === "official" &&
-          preset?.category === "official";
-      }
-
       if (appId === "grokbuild" && values.presetId) {
         providerData.ensureGrokBuildOfficialSeed =
           values.presetCategory === "official" &&
@@ -352,31 +330,10 @@ export function AddProviderDialog({
                 preset.endpointCandidates.forEach(addUrl);
               }
             }
-          } else if (appId === "claude-desktop") {
-            const presets = claudeDesktopProviderPresets;
-            const presetIndex = parseInt(
-              values.presetId.replace("claude-desktop-", ""),
-            );
-            if (
-              !isNaN(presetIndex) &&
-              presetIndex >= 0 &&
-              presetIndex < presets.length
-            ) {
-              const preset = presets[presetIndex];
-              if (Array.isArray(preset.endpointCandidates)) {
-                preset.endpointCandidates.forEach(addUrl);
-              }
-              addUrl(preset.baseUrl);
-            }
           }
         }
 
         if (appId === "claude") {
-          const env = parsedConfig.env as Record<string, any> | undefined;
-          if (env?.ANTHROPIC_BASE_URL) {
-            addUrl(env.ANTHROPIC_BASE_URL);
-          }
-        } else if (appId === "claude-desktop") {
           const env = parsedConfig.env as Record<string, any> | undefined;
           if (env?.ANTHROPIC_BASE_URL) {
             addUrl(env.ANTHROPIC_BASE_URL);
@@ -505,11 +462,9 @@ export function AddProviderDialog({
     <ProviderForm
       appId={appId}
       submitLabel={t("common.add")}
-      modeView={modeView}
-      onStackLayoutChange={setStackLayout}
       onSubmit={handleSubmit}
       onCancel={closeDialog}
-      onManageAuthAccounts={setAuthSettingsTarget}
+      onManageAuthAccounts={() => setAuthSettingsOpen(true)}
       onSubmittingChange={setIsFormSubmitting}
       onSubmitReadyChange={handleSubmitReadyChange}
       showButtons={false}
@@ -536,14 +491,7 @@ export function AddProviderDialog({
       isOpen={open}
       trackUnsavedChanges={step === "form"}
       title={t("provider.addNewProvider")}
-      subtitle={
-        stackLayout
-          ? t("provider.formSubtitleStack", {
-              app: APP_DISPLAY_NAME[appId],
-              defaultValue: "{{app}}（聚合模式）",
-            })
-          : APP_DISPLAY_NAME[appId]
-      }
+      subtitle={APP_DISPLAY_NAME[appId]}
       backLabel={
         step === "form"
           ? t("providerPreset.backToPick")
@@ -594,8 +542,8 @@ export function AddProviderDialog({
       )}
 
       <AuthSettingsPanel
-        target={authSettingsTarget}
-        onClose={() => setAuthSettingsTarget(null)}
+        isOpen={authSettingsOpen}
+        onClose={() => setAuthSettingsOpen(false)}
       />
       {conflictDialog}
     </FullScreenPanel>

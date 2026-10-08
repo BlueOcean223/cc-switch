@@ -1,7 +1,7 @@
 //! Skills 服务层
 //!
 //! v3.10.0+ 统一管理架构：
-//! - SSOT（单一事实源）：`~/.cc-switch/skills/`
+//! - SSOT（单一事实源）：`~/.ccs-lite/skills/`
 //! - 安装时下载到 SSOT，按需同步到各应用目录
 //! - 数据库存储安装记录和启用状态
 
@@ -65,7 +65,7 @@ pub enum SyncMethod {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum SkillStorageLocation {
-    /// CC Switch 管理目录 (~/.cc-switch/skills/)
+    /// CC Switch 管理目录 (~/.ccs-lite/skills/)
     #[default]
     CcSwitch,
     /// Agent Skills 统一标准目录 (~/.agents/skills/)
@@ -431,7 +431,7 @@ struct AgentsLockFile {
     skills: HashMap<String, AgentsLockSkill>,
 }
 
-/// lock 文件中单个 skill 的信息
+/// lock 文件中单个 skill 的信息（字段见 vercel-labs/skills 的 `SkillLockEntry`）
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct AgentsLockSkill {
@@ -439,8 +439,9 @@ struct AgentsLockSkill {
     source_type: Option<String>,
     source_url: Option<String>,
     skill_path: Option<String>,
-    branch: Option<String>,
-    source_branch: Option<String>,
+    /// 安装时用的分支或 tag
+    #[serde(rename = "ref")]
+    git_ref: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -545,8 +546,7 @@ fn parse_agents_lock() -> HashMap<String, LockRepoInfo> {
                 return None;
             }
             let (owner, repo) = source.split_once('/')?;
-            let branch = normalize_optional_branch(skill.branch)
-                .or_else(|| normalize_optional_branch(skill.source_branch))
+            let branch = normalize_optional_branch(skill.git_ref)
                 .or_else(|| parse_branch_from_source_url(skill.source_url.as_deref()));
             Some((
                 name,
@@ -571,6 +571,9 @@ fn parse_agents_lock() -> HashMap<String, LockRepoInfo> {
 pub struct SkillService {
     #[cfg(test)]
     repo_fixture: Option<PathBuf>,
+    /// 测试里仓库「当前提交」；None 时更新检查查不到提交，每次都下载
+    #[cfg(test)]
+    commit_fixture: Option<String>,
 }
 
 impl Default for SkillService {
@@ -579,11 +582,16 @@ impl Default for SkillService {
     }
 }
 
+/// 检查更新时同时下载的仓库数：每个请求最多等 15 + 60 秒，串行时仓库多就要等很久。
+const UPDATE_CHECK_CONCURRENCY: usize = 4;
+
 impl SkillService {
     pub fn new() -> Self {
         Self {
             #[cfg(test)]
             repo_fixture: None,
+            #[cfg(test)]
+            commit_fixture: None,
         }
     }
 
@@ -626,7 +634,7 @@ impl SkillService {
 
     // ========== 路径管理 ==========
 
-    /// 获取 SSOT 目录（根据设置返回 ~/.cc-switch/skills/ 或 ~/.agents/skills/）
+    /// 获取 SSOT 目录（根据设置返回 ~/.ccs-lite/skills/ 或 ~/.agents/skills/）
     pub fn get_ssot_dir() -> Result<PathBuf> {
         let location = crate::settings::get_skill_storage_location();
         let dir = match location {
@@ -639,7 +647,7 @@ impl SkillService {
         Ok(dir)
     }
 
-    /// 获取 Skill 卸载备份目录（~/.cc-switch/skill-backups/）
+    /// 获取 Skill 卸载备份目录（~/.ccs-lite/skill-backups/）
     fn get_backup_dir() -> Result<PathBuf> {
         let dir = get_app_config_dir().join("skill-backups");
         fs::create_dir_all(&dir)?;
@@ -655,7 +663,7 @@ impl SkillService {
                     return Ok(custom.join("skills"));
                 }
             }
-            AppType::ClaudeDesktop | AppType::Mcode => {}
+            AppType::Mcode => {}
             AppType::Codex => {
                 if let Some(custom) = crate::settings::get_codex_override_dir() {
                     return Ok(custom.join("skills"));
@@ -699,7 +707,6 @@ impl SkillService {
         Ok(match app {
             AppType::Mcode => crate::mcode_config::data_dir().join("skills"),
             AppType::Claude => home.join(".claude").join("skills"),
-            AppType::ClaudeDesktop => home.join(".claude-desktop").join("skills"),
             AppType::Codex => home.join(".codex").join("skills"),
             AppType::Gemini => home.join(".gemini").join("skills"),
             AppType::GrokBuild => home.join(".grok").join("skills"),
@@ -764,9 +771,6 @@ impl SkillService {
 
     fn validate_skill_storage_destination(ssot_dir: &Path) -> Result<()> {
         for app in AppType::all() {
-            if matches!(app, AppType::ClaudeDesktop) {
-                continue;
-            }
             let app_dir = Self::get_app_skills_dir(&app)?;
             Self::ensure_distinct_skill_roots(ssot_dir, &app_dir, &app)?;
         }
@@ -1284,7 +1288,7 @@ impl SkillService {
         Ok(())
     }
 
-    /// 判定 check_updates 应使用的本地哈希。
+    /// 判定 check_updates_report 应使用的本地哈希。
     ///
     /// 次序关键：必须先确认 SSOT 目录存在，再信任数据库缓存的 content_hash。
     /// 换机恢复数据库备份后 Skill 文件不随库迁移，此时缓存哈希仍在而目录已
@@ -1325,15 +1329,10 @@ impl SkillService {
         }
     }
 
-    /// 检查所有已安装 Skill 的更新
+    /// 检查所有已安装 Skill 的更新，并逐仓库报告没读到的仓库（下载失败 / 超时 / 扫描失败）。
     ///
     /// 仅检查有 repo_owner 的 Skill（本地 Skill 跳过），
-    /// 按仓库分组下载，避免重复下载同一仓库。
-    pub async fn check_updates(&self, db: &Arc<Database>) -> Result<Vec<SkillUpdateInfo>> {
-        Ok(self.check_updates_report(db).await?.updates)
-    }
-
-    /// 检查更新，并逐仓库报告没读到的仓库（下载失败 / 超时 / 扫描失败）。
+    /// 按仓库分组下载，避免重复下载同一仓库；最多同时查 [`UPDATE_CHECK_CONCURRENCY`] 个仓库。
     pub async fn check_updates_report(&self, db: &Arc<Database>) -> Result<SkillUpdateCheckResult> {
         let skills = db.get_all_installed_skills()?;
         let mut updates = Vec::new();
@@ -1357,101 +1356,187 @@ impl SkillService {
         }
 
         let ssot_dir = Self::get_ssot_dir()?;
+        let remote_commits = db.get_skill_remote_commits()?;
 
-        for ((owner, name, branch), group_skills) in &repo_groups {
-            let repo = SkillRepo {
-                owner: owner.clone(),
-                name: name.clone(),
-                branch: branch.clone(),
-                enabled: true,
-            };
-
-            // 下载仓库 ZIP
-            let (temp_guard, _used_branch) = match timeout(
-                std::time::Duration::from_secs(60),
-                self.download_repo(&repo),
-            )
-            .await
-            {
-                Ok(Ok(result)) => result,
-                Ok(Err(e)) => {
-                    log::warn!("检查更新时下载 {}/{} 失败: {e}", owner, name);
-                    failures.push(Self::repo_failure(&repo, e.to_string()));
-                    continue;
-                }
-                Err(_) => {
-                    log::warn!("检查更新时下载 {}/{} 超时", owner, name);
-                    failures.push(Self::repo_failure(
-                        &repo,
-                        Self::download_timeout_error(&repo),
-                    ));
-                    continue;
-                }
-            };
-            let temp_dir = temp_guard.path();
-
-            // 扫描仓库中的所有 Skill 目录
-            let mut remote_skills: Vec<DiscoverableSkill> = Vec::new();
-            if let Err(e) = self.scan_dir_recursive(temp_dir, temp_dir, &repo, &mut remote_skills) {
-                // 扫到一半失败：已扫到的照常比对，但如实报告这个仓库可能不完整
-                log::warn!("检查更新时扫描 {}/{} 失败: {e}", owner, name);
-                failures.push(Self::repo_failure(&repo, e.to_string()));
-            }
-
-            // Remote I/O is complete. Stabilize the local DB + SSOT while hashes
-            // are read and any missing hash metadata is backfilled.
-            let _state_guard = skill_state_read_guard();
-
-            for skill in group_skills {
-                let remote_match = Self::find_remote_skill_for_install(
-                    &remote_skills,
-                    &skill.directory,
-                    skill.readme_url.as_deref(),
-                );
-                let remote_skill_dir = match remote_match {
-                    Some(rs) => match Self::resolve_skill_source_dir(temp_dir, &rs.directory) {
-                        Some(path) => path,
-                        None => continue,
-                    },
-                    None => continue,
-                };
-
-                let remote_hash = match Self::compute_dir_hash(&remote_skill_dir) {
-                    Ok(h) => h,
-                    Err(e) => {
-                        log::warn!("计算远程哈希失败 {}: {e}", skill.id);
-                        continue;
-                    }
-                };
-
-                let local_hash = match Self::local_hash_for_update_check(
+        use futures::StreamExt;
+        let checks: Vec<_> = repo_groups
+            .iter()
+            .map(|((owner, name, branch), group_skills)| {
+                self.check_repo_updates(
+                    db,
                     &ssot_dir,
-                    &skill.directory,
-                    skill.content_hash.as_deref(),
-                ) {
-                    Some((h, freshly_computed)) => {
-                        if freshly_computed {
-                            let _ = db.update_skill_hash(&skill.id, &h, 0);
-                        }
-                        Some(h)
-                    }
-                    None => None,
-                };
+                    &remote_commits,
+                    SkillRepo {
+                        owner: owner.clone(),
+                        name: name.clone(),
+                        branch: branch.clone(),
+                        enabled: true,
+                    },
+                    group_skills,
+                )
+            })
+            .collect();
+        let results: Vec<(Vec<SkillUpdateInfo>, Vec<SkillRepoFailure>)> =
+            futures::stream::iter(checks)
+                .buffer_unordered(UPDATE_CHECK_CONCURRENCY)
+                .collect()
+                .await;
+        for (repo_updates, repo_failures) in results {
+            updates.extend(repo_updates);
+            failures.extend(repo_failures);
+        }
 
-                if local_hash.as_deref() != Some(&remote_hash) {
-                    updates.push(SkillUpdateInfo {
-                        id: skill.id.clone(),
-                        name: skill.name.clone(),
-                        current_hash: local_hash,
-                        remote_hash,
-                    });
+        // 仓库并发检查、分组用的是 HashMap，排一下让结果稳定
+        updates.sort_by(|a: &SkillUpdateInfo, b| a.id.cmp(&b.id));
+        failures.sort_by(|a: &SkillRepoFailure, b| (&a.owner, &a.name).cmp(&(&b.owner, &b.name)));
+        Ok(SkillUpdateCheckResult { updates, failures })
+    }
+
+    /// 检查一个仓库里已安装 Skill 的更新，见 [`Self::check_updates_report`]。
+    async fn check_repo_updates(
+        &self,
+        db: &Arc<Database>,
+        ssot_dir: &Path,
+        remote_commits: &HashMap<String, (String, String)>,
+        repo: SkillRepo,
+        group_skills: &[InstalledSkill],
+    ) -> (Vec<SkillUpdateInfo>, Vec<SkillRepoFailure>) {
+        let mut updates = Vec::new();
+        let mut failures = Vec::new();
+        let (owner, name) = (&repo.owner, &repo.name);
+        // 先问仓库现在指向哪个提交（一百多字节）。技能记着哪个提交里的版本与本地
+        // 内容相同，提交和本地内容都没变的不用再比；都不用比就不下载整包。
+        // 查不到提交时照旧下载比对。
+        let commit = match timeout(
+            std::time::Duration::from_secs(15),
+            self.resolve_repo_commit(&repo),
+        )
+        .await
+        {
+            Ok(Ok(commit)) => commit,
+            Ok(Err(e)) => {
+                log::debug!("查询 {owner}/{name} 的当前提交失败，改为下载比对: {e}");
+                None
+            }
+            Err(_) => {
+                log::debug!("查询 {owner}/{name} 的当前提交超时，改为下载比对");
+                None
+            }
+        };
+        let pending: Vec<&InstalledSkill> = {
+            let _state_guard = skill_state_read_guard();
+            group_skills
+                .iter()
+                .filter(|skill| {
+                    let Some(commit) = commit.as_deref() else {
+                        return true;
+                    };
+                    let Some((local_hash, freshly_computed)) = Self::local_hash_for_update_check(
+                        ssot_dir,
+                        &skill.directory,
+                        skill.content_hash.as_deref(),
+                    ) else {
+                        return true;
+                    };
+                    if freshly_computed {
+                        let _ = db.update_skill_hash(&skill.id, &local_hash, 0);
+                    }
+                    remote_commits.get(&skill.id) != Some(&(commit.to_string(), local_hash))
+                })
+                .collect()
+        };
+        if pending.is_empty() {
+            return (updates, failures);
+        }
+
+        // 下载仓库 ZIP；查到了提交就下载那个提交，比对结果与记下的提交一致
+        let download = async {
+            match commit.as_deref() {
+                Some(commit) => self.download_repo_at(&repo, commit).await,
+                None => self.download_repo(&repo).await.map(|(dir, _)| dir),
+            }
+        };
+        let temp_guard = match timeout(std::time::Duration::from_secs(60), download).await {
+            Ok(Ok(result)) => result,
+            Ok(Err(e)) => {
+                log::warn!("检查更新时下载 {}/{} 失败: {e}", owner, name);
+                failures.push(Self::repo_failure(&repo, e.to_string()));
+                return (updates, failures);
+            }
+            Err(_) => {
+                log::warn!("检查更新时下载 {}/{} 超时", owner, name);
+                failures.push(Self::repo_failure(
+                    &repo,
+                    Self::download_timeout_error(&repo),
+                ));
+                return (updates, failures);
+            }
+        };
+        let temp_dir = temp_guard.path();
+
+        // 扫描仓库中的所有 Skill 目录
+        let mut remote_skills: Vec<DiscoverableSkill> = Vec::new();
+        if let Err(e) = self.scan_dir_recursive(temp_dir, temp_dir, &repo, &mut remote_skills) {
+            // 扫到一半失败：已扫到的照常比对，但如实报告这个仓库可能不完整
+            log::warn!("检查更新时扫描 {}/{} 失败: {e}", owner, name);
+            failures.push(Self::repo_failure(&repo, e.to_string()));
+        }
+
+        // Remote I/O is complete. Stabilize the local DB + SSOT while hashes
+        // are read and any missing hash metadata is backfilled.
+        let _state_guard = skill_state_read_guard();
+
+        for skill in pending {
+            let remote_match = Self::find_remote_skill_for_install(
+                &remote_skills,
+                &skill.directory,
+                skill.readme_url.as_deref(),
+            );
+            let remote_skill_dir = match remote_match {
+                Some(rs) => match Self::resolve_skill_source_dir(temp_dir, &rs.directory) {
+                    Some(path) => path,
+                    None => continue,
+                },
+                None => continue,
+            };
+
+            let remote_hash = match Self::compute_dir_hash(&remote_skill_dir) {
+                Ok(h) => h,
+                Err(e) => {
+                    log::warn!("计算远程哈希失败 {}: {e}", skill.id);
+                    continue;
                 }
+            };
+
+            let local_hash = match Self::local_hash_for_update_check(
+                ssot_dir,
+                &skill.directory,
+                skill.content_hash.as_deref(),
+            ) {
+                Some((h, freshly_computed)) => {
+                    if freshly_computed {
+                        let _ = db.update_skill_hash(&skill.id, &h, 0);
+                    }
+                    Some(h)
+                }
+                None => None,
+            };
+
+            if local_hash.as_deref() == Some(&remote_hash) {
+                if let Some(commit) = commit.as_deref() {
+                    let _ = db.set_skill_remote_commit(&skill.id, commit, &remote_hash);
+                }
+            } else {
+                updates.push(SkillUpdateInfo {
+                    id: skill.id.clone(),
+                    name: skill.name.clone(),
+                    current_hash: local_hash,
+                    remote_hash,
+                });
             }
         }
 
-        // 分组用的是 HashMap，排一下让结果稳定
-        failures.sort_by(|a: &SkillRepoFailure, b| (&a.owner, &a.name).cmp(&(&b.owner, &b.name)));
-        Ok(SkillUpdateCheckResult { updates, failures })
+        (updates, failures)
     }
 
     fn repo_failure(repo: &SkillRepo, error: String) -> SkillRepoFailure {
@@ -1771,42 +1856,6 @@ impl SkillService {
             return Err(error);
         }
         result
-    }
-
-    /// 为缺少 content_hash 的已安装 Skill 补算哈希
-    pub fn backfill_content_hashes(db: &Arc<Database>) -> Result<usize> {
-        let _state_guard = skill_state_write_guard();
-        let skills = db.get_all_installed_skills()?;
-        let ssot_dir = Self::get_ssot_dir()?;
-        let mut count = 0;
-
-        for skill in skills.values() {
-            if skill.content_hash.is_some() {
-                continue;
-            }
-            let Ok(directory) = Self::require_valid_directory(&skill.directory) else {
-                log::warn!("跳过非法 directory 的哈希回填: {:?}", skill.directory);
-                continue;
-            };
-            let skill_dir = ssot_dir.join(&directory);
-            if !skill_dir.exists() {
-                continue;
-            }
-            match Self::compute_dir_hash(&skill_dir) {
-                Ok(hash) => {
-                    let _ = db.update_skill_hash(&skill.id, &hash, 0);
-                    count += 1;
-                }
-                Err(e) => {
-                    log::warn!("补算哈希失败 {}: {e}", skill.id);
-                }
-            }
-        }
-
-        if count > 0 {
-            log::info!("已为 {count} 个 Skill 补算内容哈希");
-        }
-        Ok(count)
     }
 
     /// 迁移 Skill 存储位置（在两个 SSOT 目录间移动文件）
@@ -2578,10 +2627,6 @@ impl SkillService {
     /// - Symlink: 仅使用 symlink
     /// - Copy: 仅使用文件复制
     pub fn sync_to_app_dir(directory: &str, app: &AppType) -> Result<()> {
-        if matches!(app, AppType::ClaudeDesktop) {
-            return Ok(());
-        }
-
         // directory 可能来自被污染的 DB 行（如同步导入的远端快照），join 前必须校验。
         let directory = Self::require_valid_directory(directory)?;
 
@@ -2646,12 +2691,6 @@ impl SkillService {
         }
 
         Ok(())
-    }
-
-    /// 复制 Skill 到应用目录（保留用于向后兼容）
-    #[deprecated(note = "请使用 sync_to_app_dir() 代替")]
-    pub fn copy_to_app(directory: &str, app: &AppType) -> Result<()> {
-        Self::sync_to_app_dir(directory, app)
     }
 
     /// 删除路径（支持 symlink 和真实目录）
@@ -2766,10 +2805,6 @@ impl SkillService {
         app: &AppType,
         preserved_path: Option<&Path>,
     ) -> Result<()> {
-        if matches!(app, AppType::ClaudeDesktop) {
-            return Ok(());
-        }
-
         // directory 可能来自被污染的 DB 行（如同步导入的远端快照），
         // 这里执行的是删除操作，join 前必须校验，防止任意目录删除。
         let directory = Self::require_valid_directory(directory)?;
@@ -2801,19 +2836,16 @@ impl SkillService {
         Self::sync_to_app_unlocked(db, app).map(|_| ())
     }
 
-    /// Skills 不由 `sync_to_app` 投影的应用：Claude Desktop、OpenClaw 不支持 Skills，
+    /// Skills 不由 `sync_to_app` 投影的应用：OpenClaw 不支持 Skills，
     /// Pi 没有数据库列、按目录是否存在现算。这些应用的 skills 目录不归 CC Switch 管，
     /// 同步时一个字节都不能碰——OpenClaw 自己的 `~/.openclaw/skills` 里和受管
     /// Skill 同名的真实目录，否则会被当成「已关掉的投影」删掉。
     fn is_sync_managed_app(app: &AppType) -> bool {
-        !matches!(
-            app,
-            AppType::ClaudeDesktop | AppType::OpenClaw | AppType::Pi
-        )
+        !matches!(app, AppType::OpenClaw | AppType::Pi)
     }
 
     /// 「立即重新同步」：按数据库里的开关和当前同步方式，把 Skill 重新投影到各应用目录，
-    /// 逐应用报告结果（Claude Desktop、OpenClaw、Pi 不由这里同步，不在结果里）。
+    /// 逐应用报告结果（OpenClaw、Pi 不由这里同步，不在结果里）。
     pub fn resync_all_apps(db: &Arc<Database>) -> Vec<SkillAppSyncOutcome> {
         let _state_guard = skill_state_read_guard();
         AppType::all()
@@ -3252,8 +3284,8 @@ impl SkillService {
     /// 前者会把 URL 后半截变成 fragment，后者可用百分号编码绕过字符检查。
     fn is_valid_git_branch(branch: &str) -> bool {
         // 空串和 "HEAD" 都是 `download_repo` 的哨兵，语义都是「用仓库默认分支」：
-        // 分支候选表对两者一视同仁地跳过，改试 main / master，所以它们**永远不会
-        // 被拼进 URL**，也就没有可校验的攻击面。空串必须放行——`skill_repos` 的
+        // 分支候选表对两者一视同仁地跳过，改试 main / master 和固定写法的
+        // `archive/HEAD.zip`，所以它们**永远不会被拼进 URL**，也就没有可校验的攻击面。空串必须放行——`skill_repos` 的
         // 存量行可以是空 branch（建表默认值是 'main'，但不禁止空串），前端两处
         // `repo.branch || "main"` 就是照着这个前提写的。把它当非法会让那些仓库
         // 在 download_repo 第一行就报 INVALID_REPO_REF，技能面板直接列不出来。
@@ -3316,11 +3348,19 @@ impl SkillService {
     /// 分隔符语义等），这里也能拦住落点被改写的请求。
     fn assert_github_archive_url(url: &str, owner: &str, name: &str) -> Result<()> {
         let parsed = url::Url::parse(url).map_err(|e| anyhow!("Invalid archive URL: {e}"))?;
-        let expected_prefix = format!("/{owner}/{name}/archive/refs/heads/");
-        if parsed.scheme() != "https"
-            || parsed.host_str() != Some("github.com")
-            || !parsed.path().starts_with(&expected_prefix)
-        {
+        let archive = format!("/{owner}/{name}/archive/");
+        let is_commit_archive = |rest: &str| {
+            rest.strip_suffix(".zip").is_some_and(|commit| {
+                matches!(commit.len(), 40 | 64) && commit.bytes().all(|b| b.is_ascii_hexdigit())
+            })
+        };
+        let allowed = parsed.path().strip_prefix(&archive).is_some_and(|rest| {
+            rest == "HEAD.zip"
+                || rest.starts_with("refs/heads/")
+                || rest.starts_with("refs/tags/")
+                || is_commit_archive(rest)
+        });
+        if parsed.scheme() != "https" || parsed.host_str() != Some("github.com") || !allowed {
             return Err(anyhow!(format_skill_error(
                 "INVALID_REPO_REF",
                 &[("owner", owner), ("name", name)],
@@ -3524,7 +3564,7 @@ impl SkillService {
     /// 下载仓库
     ///
     /// 这里是仓库坐标进入 URL 的**唯一收敛点**——`fetch_repo_skills`、`install`、
-    /// `check_updates`、`update_skill` 四条路径都经过它，而 `skill_repos` / `skills`
+    /// `check_updates_report`、`update_skill` 四条路径都经过它，而 `skill_repos` / `skills`
     /// 两张表都会被同步导入的远端快照整表覆盖，入库校验管不住它们。所以主防线放这里。
     async fn download_repo(&self, repo: &SkillRepo) -> Result<(tempfile::TempDir, String)> {
         Self::validate_repo_ref(&repo.owner, &repo.name, &repo.branch)?;
@@ -3542,22 +3582,11 @@ impl SkillService {
             return Ok((temp_dir, repo.branch.clone()));
         }
 
-        let mut branches = Vec::new();
-        if !repo.branch.is_empty() && !repo.branch.eq_ignore_ascii_case("HEAD") {
-            branches.push(repo.branch.as_str());
-        }
-        if !branches.contains(&"main") {
-            branches.push("main");
-        }
-        if !branches.contains(&"master") {
-            branches.push("master");
-        }
-
         let mut last_error = None;
-        for branch in branches {
+        for (archive_ref, branch) in Self::archive_candidates(&repo.branch) {
             let url = format!(
-                "https://github.com/{}/{}/archive/refs/heads/{}.zip",
-                repo.owner, repo.name, branch
+                "https://github.com/{}/{}/archive/{}.zip",
+                repo.owner, repo.name, archive_ref
             );
             Self::assert_github_archive_url(&url, &repo.owner, &repo.name)?;
 
@@ -3577,9 +3606,154 @@ impl SkillService {
         Err(last_error.unwrap_or_else(|| anyhow::anyhow!("所有分支下载失败")))
     }
 
+    /// 下载指定提交的归档（`archive/<commit>.zip`），更新检查用。
+    async fn download_repo_at(&self, repo: &SkillRepo, commit: &str) -> Result<tempfile::TempDir> {
+        Self::validate_repo_ref(&repo.owner, &repo.name, &repo.branch)?;
+        let temp_dir = tempfile::tempdir()?;
+
+        #[cfg(test)]
+        if let Some(fixture) = &self.repo_fixture {
+            Self::copy_dir_recursive(fixture, temp_dir.path())?;
+            return Ok(temp_dir);
+        }
+
+        let url = format!(
+            "https://github.com/{}/{}/archive/{commit}.zip",
+            repo.owner, repo.name
+        );
+        Self::assert_github_archive_url(&url, &repo.owner, &repo.name)?;
+        self.download_and_extract(&url, temp_dir.path()).await?;
+        Ok(temp_dir)
+    }
+
+    /// 查仓库按 [`Self::archive_candidates`] 的顺序会下载到哪个提交。
+    ///
+    /// 用 git 协议 v2 的 `ls-refs`（gitprotocol-v2、gitprotocol-http），只列候选的几个
+    /// ref，响应一百多字节，也不占 GitHub REST API 的匿名额度。附注标签取它指向的
+    /// 提交。没有任何候选 ref 时返回 None。
+    async fn resolve_repo_commit(&self, repo: &SkillRepo) -> Result<Option<String>> {
+        Self::validate_repo_ref(&repo.owner, &repo.name, &repo.branch)?;
+
+        #[cfg(test)]
+        if self.repo_fixture.is_some() {
+            return Ok(self.commit_fixture.clone());
+        }
+
+        let refs: Vec<String> = Self::archive_candidates(&repo.branch)
+            .into_iter()
+            .map(|(archive_ref, _)| archive_ref)
+            .collect();
+        let url = format!(
+            "https://github.com/{}/{}.git/git-upload-pack",
+            repo.owner, repo.name
+        );
+        let response = crate::http_client::get()
+            .post(&url)
+            .header("Git-Protocol", "version=2")
+            .header("Content-Type", "application/x-git-upload-pack-request")
+            .header("Accept", "application/x-git-upload-pack-result")
+            .body(Self::ls_refs_request(&refs))
+            .send()
+            .await?;
+        if !response.status().is_success() {
+            return Err(anyhow!("ls-refs returned HTTP {}", response.status()));
+        }
+        // 前缀匹配会带出同前缀的其他 ref（v1 → v1.0、v1.1 …），正常只有几 KB
+        let mut response = response;
+        let mut body = Vec::new();
+        while let Some(chunk) = response.chunk().await? {
+            if body.len() + chunk.len() > 1024 * 1024 {
+                return Err(anyhow!("ls-refs response is larger than 1 MiB"));
+            }
+            body.extend_from_slice(&chunk);
+        }
+        let advertised = Self::parse_ls_refs(&body)?;
+        Ok(refs.iter().find_map(|name| advertised.get(name).cloned()))
+    }
+
+    /// `ls-refs` 请求体：命令、分隔包、参数、结束包，每行一个 pkt-line。
+    fn ls_refs_request(refs: &[String]) -> Vec<u8> {
+        fn pkt_line(body: &mut Vec<u8>, line: &str) {
+            body.extend_from_slice(format!("{:04x}", line.len() + 4).as_bytes());
+            body.extend_from_slice(line.as_bytes());
+        }
+        let mut body = Vec::new();
+        pkt_line(&mut body, "command=ls-refs\n");
+        body.extend_from_slice(b"0001");
+        pkt_line(&mut body, "peel\n");
+        for name in refs {
+            pkt_line(&mut body, &format!("ref-prefix {name}\n"));
+        }
+        body.extend_from_slice(b"0000");
+        body
+    }
+
+    /// 解析 `ls-refs` 响应：每行 `<提交> <ref>[ peeled:<提交>][ symref-target:<ref>]`，
+    /// 以结束包收尾。返回 ref → 提交（附注标签取 peeled）。
+    fn parse_ls_refs(body: &[u8]) -> Result<HashMap<String, String>> {
+        let is_object_id =
+            |id: &str| matches!(id.len(), 40 | 64) && id.bytes().all(|b| b.is_ascii_hexdigit());
+        let mut refs = HashMap::new();
+        let mut rest = body;
+        loop {
+            let (len, after) = match rest {
+                [a, b, c, d, after @ ..] => (
+                    std::str::from_utf8(&[*a, *b, *c, *d])
+                        .ok()
+                        .and_then(|hex| usize::from_str_radix(hex, 16).ok())
+                        .ok_or_else(|| anyhow!("invalid pkt-line length"))?,
+                    after,
+                ),
+                _ => return Err(anyhow!("ls-refs response ended without a flush packet")),
+            };
+            if len == 0 {
+                return Ok(refs);
+            }
+            if len < 4 || len - 4 > after.len() {
+                return Err(anyhow!("invalid pkt-line length {len}"));
+            }
+            let line = std::str::from_utf8(&after[..len - 4])
+                .map_err(|_| anyhow!("ls-refs line is not UTF-8"))?
+                .trim_end_matches('\n');
+            rest = &after[len - 4..];
+            let mut fields = line.split(' ');
+            let (Some(id), Some(name)) = (fields.next(), fields.next()) else {
+                return Err(anyhow!("unexpected ls-refs line: {line}"));
+            };
+            if !is_object_id(id) {
+                return Err(anyhow!("unexpected ls-refs line: {line}"));
+            }
+            let peeled = fields
+                .find_map(|attr| attr.strip_prefix("peeled:"))
+                .filter(|peeled| is_object_id(peeled));
+            refs.insert(name.to_string(), peeled.unwrap_or(id).to_ascii_lowercase());
+        }
+    }
+
+    /// 依次尝试的归档（`archive/` 之后的路径，以及成功时记下的分支名）。
+    ///
+    /// 指定的 ref 先当分支、再当 tag（`.skill-lock.json` 的 `ref` 两种都可能）。之后照旧
+    /// 试 main、master，记下真实分支名，已安装技能和仓库按分支名对应；都不存在时取
+    /// 仓库默认分支（`archive/HEAD.zip`），记为 `HEAD`。
+    fn archive_candidates(branch: &str) -> Vec<(String, String)> {
+        let mut candidates = Vec::new();
+        let explicit = !branch.is_empty() && !branch.eq_ignore_ascii_case("HEAD");
+        if explicit {
+            candidates.push((format!("refs/heads/{branch}"), branch.to_string()));
+            candidates.push((format!("refs/tags/{branch}"), branch.to_string()));
+        }
+        for fallback in ["main", "master"] {
+            if !(explicit && branch == fallback) {
+                candidates.push((format!("refs/heads/{fallback}"), fallback.to_string()));
+            }
+        }
+        candidates.push(("HEAD".to_string(), "HEAD".to_string()));
+        candidates
+    }
+
     /// 下载并解压 ZIP
     async fn download_and_extract(&self, url: &str, dest: &Path) -> Result<()> {
-        let client = crate::proxy::http_client::get();
+        let client = crate::http_client::get();
         let response = client.get(url).send().await?;
         if !response.status().is_success() {
             let status = response.status().as_u16().to_string();
@@ -3860,7 +4034,7 @@ impl SkillService {
         skill: &InstalledSkill,
         excluded_path: Option<&Path>,
     ) -> Result<Option<PathBuf>> {
-        // 返回值会被整目录复制进 ~/.cc-switch/skill-backups/ 并由 get_skill_backups
+        // 返回值会被整目录复制进 ~/.ccs-lite/skill-backups/ 并由 get_skill_backups
         // 在界面上列出——脏 directory 在这里等于任意文件读取 + 外泄通道。
         let directory = Self::require_valid_directory(&skill.directory)?;
 
@@ -4388,37 +4562,6 @@ impl SkillService {
         Ok(())
     }
 
-    // ========== 仓库管理（保留原有逻辑）==========
-
-    /// 列出仓库
-    pub fn list_repos(&self, store: &SkillStore) -> Vec<SkillRepo> {
-        store.repos.clone()
-    }
-
-    /// 添加仓库
-    pub fn add_repo(&self, store: &mut SkillStore, repo: SkillRepo) -> Result<()> {
-        if let Some(pos) = store
-            .repos
-            .iter()
-            .position(|r| r.owner == repo.owner && r.name == repo.name)
-        {
-            store.repos[pos] = repo;
-        } else {
-            store.repos.push(repo);
-        }
-
-        Ok(())
-    }
-
-    /// 删除仓库
-    pub fn remove_repo(&self, store: &mut SkillStore, owner: String, name: String) -> Result<()> {
-        store
-            .repos
-            .retain(|r| !(r.owner == owner && r.name == name));
-
-        Ok(())
-    }
-
     // ========== skills.sh 搜索 ==========
 
     /// 搜索 skills.sh 公共目录
@@ -4427,7 +4570,7 @@ impl SkillService {
         limit: usize,
         offset: usize,
     ) -> Result<SkillsShSearchResult> {
-        let client = crate::proxy::http_client::get();
+        let client = crate::http_client::get();
 
         let url = url::Url::parse_with_params(
             "https://skills.sh/api/search",
@@ -4781,7 +4924,7 @@ mod tests {
     #[test]
     fn validate_repo_ref_accepts_the_empty_branch_sentinel() {
         // 空 branch 与 "HEAD" 在 download_repo 里是同一个哨兵：分支候选表跳过
-        // 两者，改试 main / master，所以它们从不进 URL。校验若把空串当非法，
+        // 两者，改试 main / master / 默认分支，所以它们从不进 URL。校验若把空串当非法，
         // 存量 skill_repos 行（建表默认 'main'，但空串没被禁）会在 download_repo
         // 第一行就 INVALID_REPO_REF，整个技能面板列不出东西——前端两处
         // `repo.branch || "main"` 正是照着"空串可用"写的。
@@ -4834,9 +4977,74 @@ mod tests {
     }
 
     #[test]
+    fn agents_lock_reads_the_ref_field() {
+        // vercel-labs/skills 写出的条目形态（src/skill-lock.ts 的 SkillLockEntry）
+        let lock: AgentsLockFile = serde_json::from_str(
+            r#"{"version":3,"skills":{"find-skills":{
+                "source":"vercel-labs/skills","sourceType":"github",
+                "sourceUrl":"https://github.com/vercel-labs/skills.git","ref":"v1.7.1",
+                "skillPath":"skills/find-skills/SKILL.md","skillFolderHash":"abc",
+                "installedAt":"2026-01-01T00:00:00Z","updatedAt":"2026-01-01T00:00:00Z"}}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            lock.skills["find-skills"].git_ref.as_deref(),
+            Some("v1.7.1")
+        );
+    }
+
+    #[test]
+    fn archive_candidates_try_tags_and_the_default_branch() {
+        let refs = |branch: &str| {
+            SkillService::archive_candidates(branch)
+                .into_iter()
+                .map(|(archive, _)| archive)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            refs("v1.0.0"),
+            [
+                "refs/heads/v1.0.0",
+                "refs/tags/v1.0.0",
+                "refs/heads/main",
+                "refs/heads/master",
+                "HEAD"
+            ]
+        );
+        assert_eq!(
+            refs("main"),
+            [
+                "refs/heads/main",
+                "refs/tags/main",
+                "refs/heads/master",
+                "HEAD"
+            ]
+        );
+        for sentinel in ["", "HEAD", "head"] {
+            assert_eq!(
+                refs(sentinel),
+                ["refs/heads/main", "refs/heads/master", "HEAD"]
+            );
+        }
+        assert_eq!(
+            SkillService::archive_candidates("").last().unwrap().1,
+            "HEAD"
+        );
+    }
+
+    #[test]
     fn assert_github_archive_url_pins_host_and_path() {
-        let ok = "https://github.com/owner/repo/archive/refs/heads/main.zip";
-        assert!(SkillService::assert_github_archive_url(ok, "owner", "repo").is_ok());
+        for ok in [
+            "https://github.com/owner/repo/archive/refs/heads/main.zip",
+            "https://github.com/owner/repo/archive/refs/tags/v1.0.0.zip",
+            "https://github.com/owner/repo/archive/HEAD.zip",
+            "https://github.com/owner/repo/archive/683bc88e56f3e09ba94f7055977f3d3aa499f202.zip",
+        ] {
+            assert!(
+                SkillService::assert_github_archive_url(ok, "owner", "repo").is_ok(),
+                "{ok}"
+            );
+        }
 
         // 出口断言必须挡住落点被改写到 release asset 的情况
         for bad in [
@@ -4844,6 +5052,8 @@ mod tests {
             "https://evil.example/owner/repo/archive/refs/heads/main.zip",
             "http://github.com/owner/repo/archive/refs/heads/main.zip",
             "https://github.com/other/repo/archive/refs/heads/main.zip",
+            "https://github.com/owner/repo/archive/HEAD.tar.gz",
+            "https://github.com/owner/repo/archive/683bc88e.zip",
         ] {
             assert!(
                 SkillService::assert_github_archive_url(bad, "owner", "repo").is_err(),
@@ -6464,7 +6674,7 @@ mod tests {
         let _guard = TestHomeGuard::set(temp.path());
 
         // 手工放置一个备份：meta.json 里的 directory 指向 SSOT 之外。
-        // SSOT 位于 {home}/.cc-switch/skills，"../../pwned-restore" 若生效会写到 {home}/pwned-restore。
+        // SSOT 位于 {home}/.ccs-lite/skills，"../../pwned-restore" 若生效会写到 {home}/pwned-restore。
         let backup_id = "20260727_120000_evil";
         let backup_dir = SkillService::get_backup_dir()
             .expect("backup dir")
@@ -6595,7 +6805,7 @@ mod tests {
             .expect("migrate away from alias");
         let new_source = temp
             .path()
-            .join(".cc-switch")
+            .join(crate::config::APP_DIR_NAME)
             .join("skills")
             .join("test-skill");
         let pi_skill = temp
@@ -6620,7 +6830,7 @@ mod tests {
         let _guard = TestHomeGuard::set(temp.path());
 
         // 模拟同步导入灌进来的脏数据：directory 含路径穿越（save_skill 不校验，
-        // 与 import_sql_string_for_sync 的效果一致）。SSOT = {home}/.cc-switch/skills，
+        // 与 import_sql_string_for_sync 的效果一致）。SSOT = {home}/.ccs-lite/skills，
         // "../../victim-uninstall" 解析为 {home}/victim-uninstall。
         let victim = temp.path().join("victim-uninstall");
         fs::create_dir_all(&victim).expect("create victim dir");
@@ -6710,7 +6920,7 @@ mod tests {
             .join("test-skill");
         fs::create_dir_all(pi_skill.parent().expect("Pi skills directory"))
             .expect("create Pi skills directory");
-        std::os::unix::fs::symlink(Path::new("../../.cc-switch/skills/test-skill"), &pi_skill)
+        std::os::unix::fs::symlink(Path::new("../../.ccs-lite/skills/test-skill"), &pi_skill)
             .expect("create relative Pi symlink");
 
         let result = SkillService::migrate_storage(&db, SkillStorageLocation::Unified)
@@ -7002,11 +7212,7 @@ mod tests {
                 ("weread-skills", "skills", "."),
             ] {
                 let home = tempdir().expect("home");
-                let config_dir = home.path().join(".cc-switch");
-                fs::create_dir_all(&config_dir).expect("isolated config directory");
-                // Keep Windows' legacy-HOME fallback out of this destructive test.
-                fs::File::create(config_dir.join("cc-switch.db"))
-                    .expect("isolated database sentinel");
+                let config_dir = home.path().join(crate::config::APP_DIR_NAME);
                 let _home = TestHomeGuard::set(home.path());
                 assert_eq!(crate::config::get_app_config_dir(), config_dir);
                 let _storage = StorageLocationGuard::set(location);
@@ -7015,6 +7221,7 @@ mod tests {
                 let db = Arc::new(Database::memory().expect("memory db"));
                 let service = SkillService {
                     repo_fixture: Some(remote.path().to_path_buf()),
+                    commit_fixture: None,
                 };
                 let mut installed = poisoned_skill("owner/repo:skill", directory);
                 installed.name = directory.to_string();
@@ -7060,15 +7267,21 @@ mod tests {
                     saved.content_hash,
                     Some(SkillService::compute_dir_hash(&local).unwrap())
                 );
-                assert!(service.check_updates(&db).await.unwrap().is_empty());
+                assert!(service
+                    .check_updates_report(&db)
+                    .await
+                    .unwrap()
+                    .updates
+                    .is_empty());
 
                 write_skill(&remote.path().join(new_path), "renamed-skill");
                 // Competing directory/name matches must not override the saved source.
                 write_skill(&remote.path().join(directory), directory);
                 let updates = service
-                    .check_updates(&db)
+                    .check_updates_report(&db)
                     .await
-                    .expect("check renamed skill");
+                    .expect("check renamed skill")
+                    .updates;
                 assert_eq!(
                     updates.len(),
                     1,
@@ -7086,7 +7299,12 @@ mod tests {
                     SkillService::read_skill_name_desc(&local.join("SKILL.md"), directory).0,
                     "renamed-skill"
                 );
-                assert!(service.check_updates(&db).await.unwrap().is_empty());
+                assert!(service
+                    .check_updates_report(&db)
+                    .await
+                    .unwrap()
+                    .updates
+                    .is_empty());
             }
         }
     }
@@ -7265,6 +7483,7 @@ mod tests {
         write_skill(&remote.path().join("pdf"), "pdf");
         let service = SkillService {
             repo_fixture: Some(remote.path().to_path_buf()),
+            commit_fixture: None,
         };
 
         let report = service
@@ -7335,6 +7554,98 @@ mod tests {
         assert_eq!(report.failures[0].owner, "bad owner!");
         assert_eq!(report.failures[0].name, "broken");
         assert!(report.failures[0].error.contains("INVALID_REPO_REF"));
+    }
+
+    #[test]
+    fn ls_refs_request_lists_each_candidate_ref() {
+        let body =
+            SkillService::ls_refs_request(&["refs/heads/main".to_string(), "HEAD".to_string()]);
+        assert_eq!(
+            String::from_utf8(body).unwrap(),
+            "0014command=ls-refs\n00010009peel\n001fref-prefix refs/heads/main\n\
+             0014ref-prefix HEAD\n0000"
+        );
+    }
+
+    #[test]
+    fn parse_ls_refs_reads_commits_and_peels_annotated_tags() {
+        // GitHub 的实际响应（anthropics/skills 的 HEAD 和 main；git/git 的附注标签）
+        let body = "0050683bc88e56f3e09ba94f7055977f3d3aa499f202 HEAD symref-target:refs/heads/main\n\
+                    003d683bc88e56f3e09ba94f7055977f3d3aa499f202 refs/heads/main\n\
+                    006fd4ca2e3147b409459955613c152220f4db848ee1 refs/tags/v2.40.0 peeled:73876f4861cd3d187a4682290ab75c9dccadbc56\n\
+                    0000";
+        let refs = SkillService::parse_ls_refs(body.as_bytes()).expect("parse ls-refs");
+        assert_eq!(
+            refs.get("HEAD").map(String::as_str),
+            Some("683bc88e56f3e09ba94f7055977f3d3aa499f202")
+        );
+        assert_eq!(
+            refs.get("refs/heads/main").map(String::as_str),
+            Some("683bc88e56f3e09ba94f7055977f3d3aa499f202")
+        );
+        assert_eq!(
+            refs.get("refs/tags/v2.40.0").map(String::as_str),
+            Some("73876f4861cd3d187a4682290ab75c9dccadbc56")
+        );
+
+        assert!(SkillService::parse_ls_refs(b"0000").unwrap().is_empty());
+        assert!(SkillService::parse_ls_refs(b"003dnot-an-id refs/heads/main\n").is_err());
+        assert!(
+            SkillService::parse_ls_refs(b"").is_err(),
+            "missing flush packet"
+        );
+    }
+
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn update_check_skips_the_download_while_commit_and_content_are_unchanged() {
+        let home = tempdir().expect("home");
+        let _home = TestHomeGuard::set(home.path());
+        let db = Arc::new(Database::memory().expect("memory db"));
+        let remote = tempdir().expect("remote repo");
+        write_skill(&remote.path().join("my-skill"), "my-skill");
+        let mut installed = poisoned_skill("owner/repo:my-skill", "my-skill");
+        installed.repo_owner = Some("owner".to_string());
+        installed.repo_name = Some("repo".to_string());
+        installed.repo_branch = Some("main".to_string());
+        installed.content_hash = None;
+        db.save_skill(&installed).expect("seed installed skill");
+        write_skill(
+            &SkillService::get_ssot_dir().unwrap().join("my-skill"),
+            "my-skill",
+        );
+
+        let mut service = SkillService {
+            repo_fixture: Some(remote.path().to_path_buf()),
+            commit_fixture: Some("a".repeat(40)),
+        };
+        let report = service
+            .check_updates_report(&db)
+            .await
+            .expect("first check");
+        assert!(report.updates.is_empty() && report.failures.is_empty());
+
+        // 仓库没了：再下载就会失败。提交没变时不下载，所以没有失败
+        let remote_path = remote.path().to_path_buf();
+        drop(remote);
+        let report = service
+            .check_updates_report(&db)
+            .await
+            .expect("second check");
+        assert!(report.updates.is_empty() && report.failures.is_empty());
+
+        // 提交变了才下载
+        service.commit_fixture = Some("b".repeat(40));
+        let report = service
+            .check_updates_report(&db)
+            .await
+            .expect("third check");
+        assert_eq!(report.failures.len(), 1, "{:?}", report.failures);
+        assert!(!remote_path.exists());
+
+        // 卸载时一并删掉记录
+        db.delete_skill(&installed.id).expect("delete skill");
+        assert!(db.get_skill_remote_commits().unwrap().is_empty());
     }
 
     fn build_skills_zip(dirs: &[&str]) -> Vec<u8> {
@@ -7420,7 +7731,7 @@ mod tests {
         let outcomes = SkillService::resync_all_apps(&db);
 
         let apps: Vec<&str> = outcomes.iter().map(|o| o.app.as_str()).collect();
-        assert!(!apps.contains(&"claude-desktop") && !apps.contains(&"pi"));
+        assert!(!apps.contains(&"openclaw") && !apps.contains(&"pi"));
         assert!(apps.contains(&"claude") && apps.contains(&"codex"));
 
         let claude = outcomes.iter().find(|o| o.app == "claude").unwrap();

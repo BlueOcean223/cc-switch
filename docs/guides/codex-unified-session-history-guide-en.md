@@ -80,7 +80,7 @@ After the unified switch is on:
 "Merging the drawers" requires changing the tag of some official sessions from `openai` to `custom` (this step is called **migration**, and it's **optional and requires you to opt in**). And **before any rewrite, CC Switch first copies the original file untouched** to here:
 
 ```text
-~/.cc-switch/backups/codex-official-history-unify-v1/<timestamp>/
+~/.ccs-lite/backups/codex-official-history-unify-v1/<timestamp>/
 ```
 
 This backup is the sole basis for "restore exactly from backup" later. It makes the whole process **reversible**: at any time you can turn off the switch and precisely flip the official sessions you migrated in back to the `openai` drawer.
@@ -116,7 +116,7 @@ The moment you flip the switch on, CC Switch **does not save immediately**; inst
 
   > When enabled, the official subscription and third-party providers share one session history list. Note: resuming an old session across providers may fail because its encrypted_content reasoning cannot be decrypted by another backend.
   >
-  > You can also migrate your existing official session history into the shared list (originals are backed up to ~/.cc-switch/backups first and can be restored when you turn this off).
+  > You can also migrate your existing official session history into the shared list (originals are backed up to ~/.ccs-lite/backups first and can be restored when you turn this off).
 
 - **Checkbox**: Also migrate existing official session history
 - **Confirm button**: I understand, enable
@@ -147,7 +147,7 @@ For each official (openai tag) session file:
    ③ Update the index database state_5.sqlite to switch the tag in the same transaction
 ```
 
-- **Backup location**: `~/.cc-switch/backups/codex-official-history-unify-v1/<timestamp>/`. Each migration produces one timestamped "generation directory," containing `jsonl/` (session copies), `state/` (index DB copy), and `meta.json` (recording which Codex directory this migration belongs to).
+- **Backup location**: `~/.ccs-lite/backups/codex-official-history-unify-v1/<timestamp>/`. Each migration produces one timestamped "generation directory," containing `jsonl/` (session copies), `state/` (index DB copy), and `meta.json` (recording which Codex directory this migration belongs to).
 - **What's changed**: only the value of the single field `model_provider`. Your conversation content, reasoning content, and all body text are **kept exactly as is**.
 - **What's deleted**: **nothing**. The backup is a "copy," the rewrite is an "atomic replacement of the same file," and at no point is any session or index deleted. The file is complete at every moment (either the old content or the new content, never empty or half-written).
 
@@ -184,7 +184,7 @@ If you keep the box checked and click "Turn off," CC Switch's restore flow goes 
 
 ```text
 ① First copy the current state once more into a separate restore-backup directory
-   ~/.cc-switch/backups/codex-official-history-unify-restore-v1/<timestamp>/
+   ~/.ccs-lite/backups/codex-official-history-unify-restore-v1/<timestamp>/
    (restore itself backs up first, so restore won't lose data either)
 ② Comb through all migration backup generations, find the session ids "whose tag was originally openai," and assemble a "ledger"
 ③ Only for sessions that are [both in the ledger AND currently still custom], change the tag back to "openai"
@@ -218,7 +218,7 @@ The six scenarios below are the situations where users most easily believe "sess
 |---|---|---|---|
 | **A** Didn't check migration | Old official sessions not in the unified list | All present, still carry the `openai` tag | Re-enable and check migration, or turn off the switch |
 | **B** Cross-provider resume fails | Can't resume / errors out | Files intact, the ciphertext just can't be decrypted across backends | Resume on the original provider; to only read content, read the jsonl directly |
-| **C** Routing takeover / injection refused | No migration and no restore | Migration was safely skipped, files untouched | Exit takeover -> restart and retry; or just turn off the switch |
+| **C** Injection refused | No migration and no restore | Migration was safely skipped, files untouched | Clean up the conflicting route -> restart and retry; or just turn off the switch |
 | **D** New sessions didn't return to official after restore | New sessions from the unified period aren't on the official side | They're in the `custom` drawer, untouched by design | Switch to a third-party provider to see them |
 | **E** Toast "no restorable backup" | Restore "failed" | Usually nothing was ever migrated, sessions are in the original drawer | Turn off the switch and the official sessions reappear automatically |
 | **F** Toast "switch was re-enabled, restore skipped" | Restore refused | Prevents a torn data state, nothing was changed | Fully turn off the switch first, then restore |
@@ -250,16 +250,14 @@ The six scenarios below are the situations where users most easily believe "sess
 
 **Symptom**: you enabled the switch and checked migration, but the old official sessions neither entered the unified list nor could be restored when you turned the switch off (or the restore checkbox didn't even appear in the disable dialog, see scenario E). You suspect migration lost the sessions during the process.
 
-**The truth**: migration **never ran**, so it couldn't have lost anything—not a single character of your sessions was changed. CC Switch has a safety gate before migration: it checks whether Codex's live config (`~/.codex/config.toml`) is **actually** routed to the shared `custom` drawer right now, and only migrates if the routing truly went there. The following two situations are judged "not yet unified" (internal reason code `live_not_unified`), so CC Switch **deliberately skips the migration, preserves your switch and migration intent, and migrates later once the conditions are met**:
+**The truth**: migration **never ran**, so it couldn't have lost anything—not a single character of your sessions was changed. CC Switch has a safety gate before migration: it checks whether Codex's live config (`~/.codex/config.toml`) is **actually** routed to the shared `custom` drawer right now, and only migrates if the routing truly went there. The following situation is judged "not yet unified" (internal reason code `live_not_unified`), so CC Switch **deliberately skips the migration, preserves your switch and migration intent, and migrates later once the conditions are met**:
 
-- **During routing takeover**: CC Switch's local routing has taken over the live config, and the live config during takeover doesn't carry the unified routing marker.
 - **Injection refused**: your `config.toml` already has a manually specified `model_provider`, or there's already a differently-shaped `[model_providers.custom]` table (possibly with a third-party address). To avoid incorrectly routing official traffic to a third-party backend, CC Switch would rather not inject and not migrate.
 
 Skipping migration = touching no session files. **No migration means nothing moved, so there's nothing to lose.** This is "safe deferral," not "failure with data loss."
 
 **What to do**:
-- Exit routing takeover -> **restart CC Switch**: on startup it automatically retries migration (your migration intent is preserved the whole time).
-- Check `~/.codex/config.toml`: if there's a conflicting route you wrote by hand, clean up the conflict before enabling the switch.
+- Check `~/.codex/config.toml`: if there's a conflicting route you wrote by hand, clean up the conflict, then **restart CC Switch**: on startup it automatically retries migration (your migration intent is preserved the whole time).
 - If you'd rather not bother: just turn off the switch, the official sessions still display normally on the `openai` drawer, completely intact.
 
 ### Scenario D: You turned off the switch and restored, but "the new sessions chatted during the unified period" didn't return to official -> you think "the new sessions are gone"
@@ -285,7 +283,7 @@ Skipping migration = touching no session files. **No migration means nothing mov
 
 In all three cases, no session was deleted.
 
-**What to do**: use the end-of-guide commands to count the total session files in `~/.codex/sessions/` and confirm the files are all there; then check whether `~/.cc-switch/backups/` contains a `codex-official-history-unify-v1` directory—if even this directory is absent, you never triggered a migration and the sessions have been in their original drawer all along.
+**What to do**: use the end-of-guide commands to count the total session files in `~/.codex/sessions/` and confirm the files are all there; then check whether `~/.ccs-lite/backups/` contains a `codex-official-history-unify-v1` directory—if even this directory is absent, you never triggered a migration and the sessions have been in their original drawer all along.
 
 ### Scenario F: Restore refused, toast "Unified session history was re-enabled; restore skipped"
 
@@ -305,8 +303,8 @@ No amount of text beats seeing it for yourself. Below are the **real paths** (ta
 
 ### The simplest way: open it directly in a file manager (no command line at all)
 
-- **macOS (Finder)**: press `Cmd + Shift + G`, paste `~/.codex/sessions` and hit Enter to see a pile of `.jsonl` session files and their modification times; for the backup directory paste `~/.cc-switch/backups`.
-- **Windows (File Explorer)**: paste `%USERPROFILE%\.codex\sessions` into the address bar and hit Enter to see the session folders and the `.jsonl` files inside; for the backup directory paste `%USERPROFILE%\.cc-switch\backups`.
+- **macOS (Finder)**: press `Cmd + Shift + G`, paste `~/.codex/sessions` and hit Enter to see a pile of `.jsonl` session files and their modification times; for the backup directory paste `~/.ccs-lite/backups`.
+- **Windows (File Explorer)**: paste `%USERPROFILE%\.codex\sessions` into the address bar and hit Enter to see the session folders and the `.jsonl` files inside; for the backup directory paste `%USERPROFILE%\.ccs-lite\backups`.
 
 **As long as you can see a batch of `.jsonl` files here, that proves your session data is intact on disk.** The file count and modification times are more intuitive than any amount of text.
 
@@ -317,8 +315,8 @@ No amount of text beats seeing it for yourself. Below are the **real paths** (ta
 | **Session body (the core)** | `~/.codex/sessions/` (includes date-based subdirectories, recursive) | One `.jsonl` text file per session—**this is your conversation content** |
 | **Archived sessions** | `~/.codex/archived_sessions/` | Also `.jsonl` |
 | **Session index database** | `~/.codex/state_5.sqlite` | The `model_provider` column of the `threads` table is the "drawer tag"—**this is the actual classification source the resume list reads** |
-| **Migration backup** (auto-created when migration is enabled) | `~/.cc-switch/backups/codex-official-history-unify-v1/<timestamp>/` | Contains `jsonl/`, `state/`, `meta.json` |
-| **Restore backup** (auto-created when you restore) | `~/.cc-switch/backups/codex-official-history-unify-restore-v1/<timestamp>/` | A safety copy taken before restore |
+| **Migration backup** (auto-created when migration is enabled) | `~/.ccs-lite/backups/codex-official-history-unify-v1/<timestamp>/` | Contains `jsonl/`, `state/`, `meta.json` |
+| **Restore backup** (auto-created when you restore) | `~/.ccs-lite/backups/codex-official-history-unify-restore-v1/<timestamp>/` | A safety copy taken before restore |
 
 > **Note**: if you've changed the Codex directory in CC Switch, or set `sqlite_home` in `config.toml`, replace `~/.codex` above with your actual directory. Below, `~` = your user home directory.
 
@@ -373,13 +371,13 @@ open -e "<filename>.jsonl"      # macOS
 **5. Look at CC Switch's backup directory (proof that a copy was kept before migration / restore)**
 
 ```bash
-ls -la ~/.cc-switch/backups/codex-official-history-unify-v1/ 2>/dev/null
-ls -la ~/.cc-switch/backups/codex-official-history-unify-restore-v1/ 2>/dev/null
+ls -la ~/.ccs-lite/backups/codex-official-history-unify-v1/ 2>/dev/null
+ls -la ~/.ccs-lite/backups/codex-official-history-unify-restore-v1/ 2>/dev/null
 ```
 
 ### Windows commands (PowerShell)
 
-The session directory is usually at `C:\Users\<your username>\.codex\`, and backups at `C:\Users\<your username>\.cc-switch\backups\`.
+The session directory is usually at `C:\Users\<your username>\.codex\`, and backups at `C:\Users\<your username>\.ccs-lite\backups\`.
 
 ```powershell
 # 1. Total number of session files (hard evidence of "nothing lost")
@@ -396,8 +394,8 @@ Get-ChildItem "$env:USERPROFILE\.codex\sessions" -Recurse -Filter *.jsonl |
   Select-String -Pattern 'model_provider"\s*:\s*"custom"' -List).Count
 
 # 4. Look at the backup directories
-Get-ChildItem "$env:USERPROFILE\.cc-switch\backups\codex-official-history-unify-v1" -ErrorAction SilentlyContinue
-Get-ChildItem "$env:USERPROFILE\.cc-switch\backups\codex-official-history-unify-restore-v1" -ErrorAction SilentlyContinue
+Get-ChildItem "$env:USERPROFILE\.ccs-lite\backups\codex-official-history-unify-v1" -ErrorAction SilentlyContinue
+Get-ChildItem "$env:USERPROFILE\.ccs-lite\backups\codex-official-history-unify-restore-v1" -ErrorAction SilentlyContinue
 ```
 
 > Same reminder: the step-3 grep counting **fewer** than the total file count is normal (old sessions don't write that field); judge "nothing lost" by the **total file count** from step 1.
@@ -459,9 +457,8 @@ The reasoning ciphertext inside a session can only be decrypted by the backend t
 ## References
 
 - [Keep Codex Remote Control and Official Plugins While Using Third-Party APIs: CC Switch Setup Guide](./codex-official-auth-preservation-guide-en.md)
-- [Using Chat-Format APIs in Codex: Local Routing Guide](./codex-deepseek-routing-guide-en.md)
 - The "Codex App Enhancements" section in the CC Switch user manual
 
 ---
 
-**One last word for you**: what you see as "sessions disappeared / resume failed" is essentially **the session being moved to another history list (drawer), or the other backend being unable to decrypt the old reasoning content**; the files always sit untouched in `~/.codex/sessions/` (and `state_5.sqlite`). Checking "restore from backup" when you turn off the switch precisely flips the official sessions you migrated in back to the official list; and even if you don't restore, both the original `.jsonl` files and the backup copies under `~/.cc-switch/backups/codex-official-history-unify-*/` are all still there—**the data is never truly lost.**
+**One last word for you**: what you see as "sessions disappeared / resume failed" is essentially **the session being moved to another history list (drawer), or the other backend being unable to decrypt the old reasoning content**; the files always sit untouched in `~/.codex/sessions/` (and `state_5.sqlite`). Checking "restore from backup" when you turn off the switch precisely flips the official sessions you migrated in back to the official list; and even if you don't restore, both the original `.jsonl` files and the backup copies under `~/.ccs-lite/backups/codex-official-history-unify-*/` are all still there—**the data is never truly lost.**

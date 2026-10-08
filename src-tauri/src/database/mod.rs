@@ -24,7 +24,9 @@
 //! ```
 
 pub(crate) mod backup;
-mod dao;
+pub(crate) mod builtin_pricing_export;
+pub(crate) mod dao;
+pub(crate) mod lineage;
 mod migration;
 mod schema;
 
@@ -33,12 +35,9 @@ mod tests;
 
 // DAO 类型导出供外部使用
 pub(crate) use dao::providers_seed::{
-    is_official_seed_id, CLAUDE_DESKTOP_OFFICIAL_PROVIDER_ID, CODEX_OFFICIAL_PROVIDER_ID,
-    GROKBUILD_OFFICIAL_PROVIDER_ID,
+    is_official_seed_id, CODEX_OFFICIAL_PROVIDER_ID, GROKBUILD_OFFICIAL_PROVIDER_ID,
 };
-pub(crate) use dao::proxy::{PRICING_SOURCE_REQUEST, PRICING_SOURCE_RESPONSE};
-pub use dao::FailoverQueueItem;
-pub use dao::Profile;
+pub use dao::{LogConfig, Profile};
 
 use crate::config::get_app_config_dir;
 use crate::error::AppError;
@@ -50,7 +49,7 @@ use std::sync::Mutex;
 
 /// 当前 Schema 版本号
 /// 每次修改表结构时递增，并在 schema.rs 中添加相应的迁移逻辑
-pub(crate) const SCHEMA_VERSION: i32 = 20;
+pub(crate) const SCHEMA_VERSION: i32 = 21;
 
 /// 安全地序列化 JSON，避免 unwrap panic
 pub(crate) fn to_json_string<T: Serialize>(value: &T) -> Result<String, AppError> {
@@ -69,6 +68,7 @@ macro_rules! lock_conn {
 
 // 导出宏供子模块使用
 pub(crate) use lock_conn;
+pub(crate) use schema::has_builtin_long_context;
 
 /// 数据库连接封装
 ///
@@ -95,7 +95,7 @@ fn register_db_change_hook(conn: &Connection) {
 impl Database {
     /// 初始化数据库连接并创建表
     ///
-    /// 数据库文件位于 `~/.cc-switch/cc-switch.db`
+    /// 数据库文件位于 `<数据目录>/cc-switch.db`（默认 `~/.ccs-lite/cc-switch.db`）
     pub fn init() -> Result<Self, AppError> {
         let db_path = get_app_config_dir().join("cc-switch.db");
         let db_exists = db_path.exists();
@@ -106,6 +106,10 @@ impl Database {
         }
 
         let conn = Connection::open(&db_path).map_err(|e| AppError::Database(e.to_string()))?;
+        // 不能打开的库（更新版本的上游库、别的应用的库）必须在任何 schema 写入之前拒绝
+        if db_exists {
+            lineage::ensure_supported(&conn)?;
+        }
 
         // 启用外键约束
         conn.execute("PRAGMA foreign_keys = ON;", [])
@@ -149,10 +153,9 @@ impl Database {
         }
 
         // Startup cleanup: prune old logs and reclaim space
-        if let Err(e) = db.cleanup_old_stream_check_logs(7) {
-            log::warn!("Startup stream_check_logs cleanup failed: {e}");
-        }
-        if let Err(e) = db.rollup_and_prune(30) {
+        if let Err(e) =
+            db.rollup_and_prune(crate::database::dao::usage_rollup::USAGE_DETAIL_RETENTION_DAYS)
+        {
             log::warn!("Startup rollup_and_prune failed: {e}");
         }
         // Reclaim disk space after cleanup
@@ -166,8 +169,9 @@ impl Database {
         Ok(db)
     }
 
-    /// 读取磁盘上数据库的 `user_version`；仅当它比应用支持的 [`SCHEMA_VERSION`]
-    /// 更新时返回 `Some(version)`。
+    /// 读取磁盘上 ccs-lite 数据库的 `user_version`；仅当它比应用支持的
+    /// [`SCHEMA_VERSION`] 更新时返回 `Some(version)`。上游 CC Switch 的库不算，
+    /// 由 [`Database::init`] 按血统报错。
     ///
     /// 用于初始化失败后判断是否为「数据库版本过新（应用过旧，需升级应用）」的可恢复
     /// 场景——此时不应反复弹出无效的重试对话框，而应引导用户在应用内升级。
@@ -177,7 +181,14 @@ impl Database {
         if !db_path.exists() {
             return Ok(None);
         }
-        let conn = Connection::open(db_path).map_err(|e| AppError::Database(e.to_string()))?;
+        let conn = Connection::open_with_flags(
+            db_path,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )
+        .map_err(|e| AppError::Database(e.to_string()))?;
+        if !lineage::classify(&conn)?.is_fork() {
+            return Ok(None);
+        }
         let version = Self::get_user_version(&conn)?;
         Ok((version > SCHEMA_VERSION).then_some(version))
     }
@@ -198,7 +209,11 @@ impl Database {
             log_count_cache: Mutex::new(None),
         };
         db.create_tables()?;
-        db.ensure_model_pricing_seeded()?;
+        {
+            let conn = lock_conn!(db.conn);
+            lineage::mark_fork(&conn)?;
+            Self::seed_builtin_model_pricing_on_conn(&conn)?;
+        }
 
         Ok(db)
     }

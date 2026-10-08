@@ -9,6 +9,7 @@ import {
 } from "@testing-library/react";
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { http, HttpResponse } from "msw";
+import i18n from "i18next";
 import { providersApi } from "@/lib/api/providers";
 import {
   resetProviderState,
@@ -21,6 +22,7 @@ import { server } from "../msw/server";
 
 const toastSuccessMock = vi.fn();
 const toastErrorMock = vi.fn();
+const toastInfoMock = vi.fn();
 const skillsPanelMocks = vi.hoisted(() => ({
   initialViews: [] as string[],
 }));
@@ -29,6 +31,7 @@ vi.mock("sonner", () => ({
   toast: {
     success: (...args: unknown[]) => toastSuccessMock(...args),
     error: (...args: unknown[]) => toastErrorMock(...args),
+    info: (...args: unknown[]) => toastInfoMock(...args),
   },
 }));
 
@@ -197,6 +200,7 @@ describe("App integration with MSW", () => {
     resetProviderState();
     toastSuccessMock.mockReset();
     toastErrorMock.mockReset();
+    toastInfoMock.mockReset();
     skillsPanelMocks.initialViews = [];
     localStorage.removeItem("cc-switch-last-view");
     localStorage.removeItem("cc-switch-last-app");
@@ -427,6 +431,52 @@ describe("App integration with MSW", () => {
     await waitFor(() => {
       expect(toastErrorMock).toHaveBeenCalled();
     });
+  });
+
+  it("lists the built-in prices moved into model-pricing.json", async () => {
+    // 测试里的翻译是空的，补上这一条才能看到插值后的模型列表
+    i18n.addResourceBundle("zh", "translation", {
+      pricingExport: { description: "models: {{models}}" },
+    });
+    server.use(
+      http.post("http://tauri.local/get_exported_builtin_prices", () =>
+        HttpResponse.json(["claude-opus-4-8", "gpt-5.5"]),
+      ),
+    );
+
+    try {
+      const { default: App } = await import("@/App");
+      renderApp(App);
+
+      await waitFor(() =>
+        expect(toastInfoMock).toHaveBeenCalledWith(
+          "pricingExport.title",
+          expect.objectContaining({
+            description: "models: claude-opus-4-8, gpt-5.5",
+          }),
+        ),
+      );
+      expect(toastInfoMock).toHaveBeenCalledTimes(1);
+    } finally {
+      i18n
+        .removeResourceBundle("zh", "translation")
+        .addResourceBundle("zh", "translation", {});
+    }
+  });
+
+  it("shows no pricing notice when nothing was exported", async () => {
+    const { default: App } = await import("@/App");
+    renderApp(App);
+
+    await waitFor(() =>
+      expect(screen.getByTestId("provider-list").textContent).toContain(
+        "claude-1",
+      ),
+    );
+    expect(toastInfoMock).not.toHaveBeenCalledWith(
+      "pricingExport.title",
+      expect.anything(),
+    );
   });
 
   it("duplicates openclaw providers with a generated key that avoids live-only ids", async () => {

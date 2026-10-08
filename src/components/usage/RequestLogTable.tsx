@@ -6,7 +6,6 @@ import { HelpTip } from "@/components/ui/help-tip";
 import { AppGlyph, APP_DISPLAY_NAME } from "@/components/shell/AppGlyph";
 import type { AppId } from "@/lib/api";
 import {
-  getFreshInputTokens,
   isUnpricedUsage,
   type LogFilters,
   type RequestLog,
@@ -78,12 +77,11 @@ export function appDisplayName(appType: string): string {
 }
 
 /**
- * 请求日志「应用」列用的短名：图标已经区分了品牌（Claude Code / Desktop 靠角标），
- * 列里只留最短能认出的名字，把宽度让给供应商列。全名在悬停提示里。
+ * 请求日志「应用」列用的短名：图标已经区分了品牌，列里只留最短能认出的名字，
+ * 把宽度让给供应商列。全名在悬停提示里。
  */
 const APP_SHORT_NAME: Record<AppId, string> = {
   claude: "Claude",
-  "claude-desktop": "Desktop",
   codex: "Codex",
   gemini: "Gemini",
   grokbuild: "Grok",
@@ -160,8 +158,7 @@ export function RequestLogTable({
 
   const renderRow = (log: RequestLog) => {
     const unpriced = isUnpricedUsage(log);
-    const freshInput = getFreshInputTokens(log);
-    const isCacheInclusive = log.inputTokens !== freshInput;
+    const freshInput = log.inputTokens;
     const time = formatLogTime(log.createdAt, now);
     const fullTime = formatLogFullTime(log.createdAt);
     const providerLabel = getUsageProviderLabel(log.providerName, t);
@@ -229,11 +226,7 @@ export function RequestLogTable({
             title={appDisplayName(log.appType)}
           >
             {isKnownAppId(log.appType) && (
-              <AppGlyph
-                app={log.appType}
-                size={14}
-                badgeClassName="bg-surface"
-              />
+              <AppGlyph app={log.appType} size={14} />
             )}
             <span className="truncate" aria-hidden="true">
               {appShortName(log.appType)}
@@ -256,14 +249,7 @@ export function RequestLogTable({
             {log.model}
           </span>
         </td>
-        <td
-          className={usageTable.tdEnd}
-          title={
-            isCacheInclusive
-              ? `${fmtInt(freshInput, locale)} (${t("usage.rawInputLabel")}: ${fmtInt(log.inputTokens, locale)})`
-              : fmtInt(freshInput, locale)
-          }
-        >
+        <td className={usageTable.tdEnd} title={fmtInt(freshInput, locale)}>
           {formatTokensCompact(freshInput, locale)}
         </td>
         <td

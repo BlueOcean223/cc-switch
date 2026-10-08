@@ -73,7 +73,7 @@ pub async fn check_for_updates(handle: AppHandle) -> Result<bool, String> {
     handle
         .opener()
         .open_url(
-            "https://github.com/farion1231/cc-switch/releases/latest",
+            "https://github.com/BlueOcean223/cc-switch/releases/latest",
             None::<String>,
         )
         .map_err(|e| format!("打开更新页面失败: {e}"))?;
@@ -104,6 +104,22 @@ pub async fn get_init_error() -> Result<Option<InitErrorPayload>, String> {
 #[tauri::command]
 pub async fn get_migration_result() -> Result<bool, String> {
     Ok(crate::init_status::take_migration_success())
+}
+
+/// 获取本次启动从上游 CC Switch 导入的结果（若有）。只返回一次，用于前端提示。
+/// 没找到上游数据（全新安装）时不提示。
+#[tauri::command]
+pub async fn get_upstream_import_result(
+) -> Result<Option<crate::upstream_import::ImportRecord>, String> {
+    Ok(crate::init_status::take_upstream_import()
+        .filter(|record| record.result != crate::upstream_import::ImportResult::NoUpstream))
+}
+
+/// 升级时当作手改价导出到 `model-pricing.json` 的内置模型。只返回一次，用于前端提示；
+/// 没有导出时返回空数组。
+#[tauri::command]
+pub async fn get_exported_builtin_prices() -> Result<Vec<String>, String> {
+    Ok(crate::init_status::take_exported_builtin_prices())
 }
 
 /// 获取 Skills 自动导入（SSOT）迁移结果（若有）。
@@ -1028,15 +1044,6 @@ fn probe_local_version(
     }
 }
 
-/// 本机实际安装的工具版本（和「关于」页探测的是同一个）；拿不到为 `None`。
-pub(crate) fn local_tool_version(tool: &str) -> Option<String> {
-    let (_, wsl_distro) = tool_env_type_and_wsl_distro(tool);
-    match probe_local_version(tool, wsl_distro.as_deref(), None, None) {
-        ShellProbe::Found(version) => Some(version),
-        _ => None,
-    }
-}
-
 async fn get_single_tool_version_impl(
     tool: &str,
     wsl_shell: Option<&str>,
@@ -1051,7 +1058,7 @@ async fn get_single_tool_version_impl(
     let (env_type, wsl_distro) = tool_env_type_and_wsl_distro(tool);
 
     // 使用全局 HTTP 客户端（已包含代理配置）
-    let client = crate::proxy::http_client::get();
+    let client = crate::http_client::get();
 
     // 1. 获取本地版本
     let probe = probe_local_version(tool, wsl_distro.as_deref(), wsl_shell, wsl_shell_flag);
@@ -4399,7 +4406,7 @@ fn extract_env_vars_from_config(
 
         // 处理 base_url: 根据应用类型添加对应的环境变量
         let base_url_key = match app_type {
-            AppType::Claude | AppType::ClaudeDesktop => Some("ANTHROPIC_BASE_URL"),
+            AppType::Claude => Some("ANTHROPIC_BASE_URL"),
             AppType::Gemini => Some("GOOGLE_GEMINI_BASE_URL"),
             _ => None,
         };

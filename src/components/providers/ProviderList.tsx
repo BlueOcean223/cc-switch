@@ -45,23 +45,19 @@ import { Notice } from "@/components/ui/notice";
 import { isTextEditableTarget } from "@/utils/domUtils";
 import { usePiCurrentState } from "@/lib/query/pi";
 import { isHermesReadOnlyProvider } from "@/config/hermesProviderPresets";
+import { isAdditiveAppId } from "@/config/appConfig";
 import {
   buildAdditiveSections,
-  buildDesktopSections,
   buildSwitchSections,
   type CardPresentation,
   type ProviderSection,
-  type SwitchModeInput,
 } from "@/components/providers/presentation";
-
-/** 切换式应用（Claude Code / Codex / Gemini CLI / Grok Build）的模式状态和动作，由供应商页传入。 */
-export type SwitchModeProps = Omit<SwitchModeInput, "app" | "t" | "providers">;
 
 interface ProviderListProps {
   providers: Record<string, Provider>;
   currentProviderId: string;
   appId: AppId;
-  /** 直连切换 / 共存式的添加 / Pi 的启用 / Claude Desktop 的切换 */
+  /** 切换式应用的切换 / 共存式的添加 / Pi 的启用 */
   onSwitch: (provider: Provider) => void;
   onEdit: (provider: Provider) => void;
   onDelete: (provider: Provider) => void;
@@ -75,8 +71,6 @@ interface ProviderListProps {
   onCreate?: () => void;
   /** OpenClaw 的默认模型、Hermes 的当前供应商 */
   onSetAsDefault?: (provider: Provider, modelId?: string) => void;
-  /** 切换式应用必传：按模式 tab 算卡片 */
-  switchMode?: SwitchModeProps;
   isLoading?: boolean;
 }
 
@@ -96,7 +90,6 @@ export function ProviderList({
   onOpenTerminal,
   onCreate,
   onSetAsDefault,
-  switchMode,
   isLoading = false,
 }: ProviderListProps) {
   const { t } = useTranslation();
@@ -121,6 +114,36 @@ export function ProviderList({
     appId === "openclaw",
   );
   const isOpenCode = appId === "opencode";
+  const queryClient = useQueryClient();
+  // 上游 CC Switch 只接管这四个应用：它们的配置可能停在上游的路由状态
+  const checksLiveRouting =
+    appId === "claude" ||
+    appId === "codex" ||
+    appId === "gemini" ||
+    appId === "grokbuild";
+  const { data: liveRouting } = useQuery({
+    queryKey: ["liveRoutingState", appId],
+    queryFn: () => providersApi.getLiveRoutingState(appId),
+    enabled: checksLiveRouting && Boolean(currentProviderId),
+  });
+  const { mutate: reapplyCurrent } = useMutation({
+    mutationFn: () => providersApi.reapplyCurrent(appId),
+    onSuccess: async (reapplied) => {
+      await queryClient.invalidateQueries({
+        queryKey: ["liveRoutingState", appId],
+      });
+      if (reapplied) {
+        toast.success(t("provider.liveRouting.reapplied"));
+      }
+    },
+    onError: (error: unknown) => {
+      toast.error(
+        t("provider.liveRouting.reapplyFailed", {
+          error: extractErrorMessage(error),
+        }),
+      );
+    },
+  });
   const { data: currentOmoId } = useCurrentOmoProviderId(isOpenCode);
   const { data: currentOmoSlimId } = useCurrentOmoSlimProviderId(isOpenCode);
   const {
@@ -177,7 +200,6 @@ export function ProviderList({
     [checkProvider],
   );
 
-  const queryClient = useQueryClient();
   const importMutation = useMutation({
     mutationFn: async (): Promise<boolean> => {
       if (appId === "opencode") {
@@ -189,17 +211,11 @@ export function ProviderList({
       if (appId === "hermes") {
         return (await providersApi.importHermesFromLive()) > 0;
       }
-      if (appId === "claude-desktop") {
-        return (await providersApi.importClaudeDesktopFromClaude()) > 0;
-      }
       return providersApi.importDefault(appId);
     },
     onSuccess: (imported) => {
       if (imported) {
         queryClient.invalidateQueries({ queryKey: ["providers", appId] });
-        if (appId === "claude-desktop") {
-          queryClient.invalidateQueries({ queryKey: ["claudeDesktopStatus"] });
-        }
         toast.success(t("provider.importCurrentDescription"));
       } else {
         toast.info(t("provider.noProviders"));
@@ -264,24 +280,15 @@ export function ProviderList({
   }, [searchTerm, sortedProviders]);
 
   const sections = useMemo<ProviderSection[]>(() => {
-    if (switchMode) {
-      // 队列按没过滤的全部供应商剔掉已不存在的 id：序号和上下移要按完整队列算，
-      // 搜索只决定画哪些卡
-      const known = new Set(sortedProviders.map((p) => p.id));
+    if (!isAdditiveAppId(appId)) {
       return buildSwitchSections({
-        ...switchMode,
         app: appId,
-        t,
-        providers: filteredProviders,
-        queue: switchMode.queue.filter((id) => known.has(id)),
-      });
-    }
-    if (appId === "claude-desktop") {
-      return buildDesktopSections({
         t,
         providers: filteredProviders,
         currentId: currentProviderId,
         onSwitch,
+        liveRouting: checksLiveRouting ? liveRouting : null,
+        onReapply: () => reapplyCurrent(),
       });
     }
     const defaultPrimary = openclawDefaultModel?.primary ?? "";
@@ -325,13 +332,14 @@ export function ProviderList({
       },
     });
   }, [
-    switchMode,
     appId,
     t,
-    sortedProviders,
     filteredProviders,
     currentProviderId,
     onSwitch,
+    checksLiveRouting,
+    liveRouting,
+    reapplyCurrent,
     openclawDefaultModel?.primary,
     isInConfig,
     currentOmoId,

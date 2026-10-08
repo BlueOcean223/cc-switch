@@ -1,7 +1,7 @@
 //! Deep link import functionality for CC Switch
 //!
-//! This module implements the ccswitch:// protocol for importing configurations
-//! via deep links. Supports importing:
+//! This module implements the ccslite:// protocol (and accepts upstream's
+//! ccswitch:// links) for importing configurations via deep links. Supports importing:
 //! - Provider configurations (Claude/Codex/Gemini)
 //! - MCP server configurations
 //! - Prompts
@@ -27,9 +27,27 @@ pub use prompt::import_prompt_from_deeplink;
 pub use provider::{import_provider_from_deeplink, parse_and_merge_config};
 pub use skill::import_skill_from_deeplink;
 
+/// 系统注册给 ccs-lite 的 URL scheme。上游 CC Switch 注册的是 `ccswitch`。
+pub const DEEPLINK_SCHEME: &str = "ccslite";
+/// 解析时接受的 scheme：自己的，以及上游一键导入链接用的 `ccswitch`
+pub const DEEPLINK_SCHEMES: &[&str] = &[DEEPLINK_SCHEME, "ccswitch"];
+
+/// 是否是 ccs-lite 能处理的深链接（`ccslite://` 或 `ccswitch://`）
+///
+/// 按字节比较：参数可能是任意命令行参数（第二个实例的可执行文件路径等），按字符串
+/// 下标切片遇到多字节字符会 panic。
+pub fn is_deeplink_url(url: &str) -> bool {
+    let bytes = url.as_bytes();
+    DEEPLINK_SCHEMES.iter().any(|scheme| {
+        bytes.len() > scheme.len() + 3
+            && bytes[..scheme.len()].eq_ignore_ascii_case(scheme.as_bytes())
+            && bytes[scheme.len()..].starts_with(b"://")
+    })
+}
+
 /// Deep link import request model
 ///
-/// Represents a parsed ccswitch:// URL ready for processing.
+/// Represents a parsed deep link URL ready for processing.
 /// This struct contains all possible fields for all resource types.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

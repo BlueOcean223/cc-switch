@@ -50,10 +50,8 @@ export const TIER_I18N_KEYS: Record<string, string> = {
   weekly_limit: "subscription.sevenDay",
   // 火山方舟 Agent Plan / Coding Plan 的月窗口
   monthly: "subscription.monthly",
-  // Grok credit 额度的兜底窗口（重置距离可识别时归入 weekly_limit/monthly）
+  // Grok credit 额度的兜底窗口（账单周期为周/月时归入 weekly_limit/monthly）
   credits: "subscription.credits",
-  // GitHub Copilot
-  premium: "subscription.copilotPremium",
 };
 
 /** 卡片上不显示的档（展开时仍列出） */

@@ -11,8 +11,7 @@ import type { AppId } from "@/lib/api";
  * 供应商连通性检查。
  *
  * 只探测 base_url 是否可达（任何 HTTP 响应都算可达），不发真实大模型请求。
- * 刻意 **不** 重置故障转移熔断器——可达 ≠ 配置正确，一个端口通但鉴权废的供应商
- * 不应被误判为"健康"而切回线上。熔断器只由真实转发流量驱动（见 proxy/forwarder.rs）。
+ * 可达不代表配置正确：端口通但鉴权失败的供应商也会报可达。
  */
 export function useStreamCheck(appId: AppId) {
   const { t } = useTranslation();

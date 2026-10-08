@@ -36,6 +36,15 @@ export const piModelCatalog = {
       maxTokens: 128_000,
     },
   },
+  "anthropic/claude-haiku-5.5": {
+    capabilities: {
+      name: "Claude Haiku 5.5",
+      reasoning: true,
+      input: ["text", "image"],
+      contextWindow: 1_000_000,
+      maxTokens: 128_000,
+    },
+  },
   "anthropic/claude-haiku-4.5": {
     capabilities: {
       name: "Claude Haiku 4.5 (latest)",
@@ -506,13 +515,14 @@ export const piModelCatalog = {
       maxTokens: 256_000,
     },
   },
-  "streamlake/kat-coder-pro": {
+  // https://www.streamlake.ai/document/DOC/mh1gbfvrdn6hpbzxixv
+  "streamlake/kat-coder-pro-v2.5": {
     capabilities: {
-      name: "KAT-Coder Pro",
+      name: "KAT-Coder Pro V2.5",
       reasoning: true,
       input: ["text"],
       contextWindow: 256_000,
-      maxTokens: 32_000,
+      maxTokens: 80_000,
     },
   },
   "volcengine/ark-code-latest": {

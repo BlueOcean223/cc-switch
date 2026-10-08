@@ -140,8 +140,6 @@ interface UsageDashboardProps {
   ) => Promise<boolean> | boolean | void;
   /** 从应用页「查看此应用的用量」进入时带上的应用筛选 */
   initialAppType?: AppTypeFilter;
-  /** 「数据来源」里的「修改记录请求用量」：打开设置 → 本地路由 */
-  onOpenRoutingSettings?: () => void;
 }
 
 /**
@@ -153,7 +151,6 @@ export function UsageDashboard({
   sessionAutoSyncEnabled = true,
   onSessionAutoSyncEnabledChange,
   initialAppType = "all",
-  onOpenRoutingSettings,
 }: UsageDashboardProps = {}) {
   const { t, i18n } = useTranslation();
   const queryClient = useQueryClient();
@@ -175,7 +172,7 @@ export function UsageDashboard({
   const [detailRequestId, setDetailRequestId] = useState<string | null>(null);
   const [sourcesOpen, setSourcesOpen] = useState(false);
   const [showRebuildConfirm, setShowRebuildConfirm] = useState(false);
-  const [rebuildingCodex, setRebuildingCodex] = useState(false);
+  const [rebuildingUsage, setRebuildingUsage] = useState(false);
   const [syncingSession, setSyncingSession] = useState(false);
   const [lastManualSyncAt, setLastManualSyncAt] = useState(
     lastManualSessionSyncAt,
@@ -238,16 +235,15 @@ export function UsageDashboard({
     }
   };
 
-  const rebuildCodexUsage = async () => {
+  const rebuildSessionUsage = async () => {
     setShowRebuildConfirm(false);
-    setRebuildingCodex(true);
+    setRebuildingUsage(true);
     try {
-      const result = await usageApi.rebuildCodexUsage();
+      const result = await usageApi.rebuildSessionUsage();
       await queryClient.invalidateQueries({ queryKey: usageKeys.all });
-      const message = t("usage.rebuildCodex.completed", {
+      const message = t("usage.rebuildUsage.completed", {
         imported: result.imported,
         errors: result.errors.length,
-        suspected: result.suspectedDuplicates,
         deferred: result.deferredFiles,
       });
       if (result.errors.length > 0 || result.deferredFiles > 0) {
@@ -256,9 +252,9 @@ export function UsageDashboard({
         toast.success(message);
       }
     } catch (error) {
-      toast.error(t("usage.rebuildCodex.failed", { error: String(error) }));
+      toast.error(t("usage.rebuildUsage.failed", { error: String(error) }));
     } finally {
-      setRebuildingCodex(false);
+      setRebuildingUsage(false);
     }
   };
 
@@ -506,11 +502,7 @@ export function UsageDashboard({
               )}
               onClick={() => changeAppType(app)}
             >
-              <AppGlyph
-                app={app}
-                size={16}
-                badgeClassName={appType === app ? "bg-surface" : "bg-subtle"}
-              />
+              <AppGlyph app={app} size={16} />
             </button>
           </HoverTip>
         ))}
@@ -839,19 +831,18 @@ export function UsageDashboard({
         syncedLabel={drawerSyncedLabel}
         syncing={syncingSession}
         onSyncNow={() => void runManualSessionSync()}
-        onOpenRoutingSettings={onOpenRoutingSettings}
-        rebuildingCodex={rebuildingCodex}
-        onRebuildCodex={() => setShowRebuildConfirm(true)}
+        rebuildingUsage={rebuildingUsage}
+        onRebuildUsage={() => setShowRebuildConfirm(true)}
       />
       <ConfirmDialog
         isOpen={showRebuildConfirm}
-        title={t("usage.rebuildCodex.confirmTitle")}
-        message={t("usage.rebuildCodex.confirmMessage")}
-        confirmText={t("usage.rebuildCodex.confirmAction")}
+        title={t("usage.rebuildUsage.confirmTitle")}
+        message={t("usage.rebuildUsage.confirmMessage")}
+        confirmText={t("usage.rebuildUsage.confirmAction")}
         // 重建前会自动备份数据库，可从备份恢复：不算不可撤销，不用红色确认键
         variant="info"
         zIndex="top"
-        onConfirm={() => void rebuildCodexUsage()}
+        onConfirm={() => void rebuildSessionUsage()}
         onCancel={() => setShowRebuildConfirm(false)}
       />
     </div>

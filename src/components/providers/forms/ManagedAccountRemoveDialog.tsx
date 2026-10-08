@@ -18,12 +18,10 @@ export type ManagedAccountRemoveTarget =
 
 interface ManagedAccountRemoveDialogProps {
   target: ManagedAccountRemoveTarget | null;
-  /** 服务名：GitHub Copilot / ChatGPT / xAI */
+  /** 服务名（ChatGPT） */
   serviceName: string;
   /** 在用要删的账号的供应商（findManagedAccountUsers 的结果） */
   users: ManagedAccountUser[];
-  /** 删掉这一个之后还剩别的账号：跟着默认账号的供应商会改用新的默认账号 */
-  othersRemain: boolean;
   pending?: boolean;
   onConfirm: () => void;
   onCancel: () => void;
@@ -37,7 +35,6 @@ export function ManagedAccountRemoveDialog({
   target,
   serviceName,
   users,
-  othersRemain,
   pending = false,
   onConfirm,
   onCancel,
@@ -45,11 +42,6 @@ export function ManagedAccountRemoveDialog({
   const { t } = useTranslation();
   const one = target?.kind === "one";
   const count = target?.kind === "all" ? target.accountIds.length : 1;
-
-  // 只删一个、且还剩别的账号时，跟着默认账号的供应商不会坏，而是换到新的默认账号
-  const moved = one && othersRemain ? users.filter((u) => u.viaDefault) : [];
-  const broken =
-    one && othersRemain ? users.filter((u) => !u.viaDefault) : users;
 
   const appSeparator = t("managedAuth.remove.appSeparator", {
     defaultValue: "：",
@@ -68,11 +60,7 @@ export function ManagedAccountRemoveDialog({
             className="flex items-start gap-2.5 text-caption"
           >
             <span className="flex h-[18px] w-4 shrink-0 items-center">
-              <AppGlyph
-                app={group.appId}
-                size={14}
-                badgeClassName="bg-subtle"
-              />
+              <AppGlyph app={group.appId} size={14} />
             </span>
             <span className="min-w-0 [overflow-wrap:anywhere]">
               <span className="font-semibold text-fg-1">
@@ -139,28 +127,17 @@ export function ManagedAccountRemoveDialog({
                   })}
             </p>
           ) : (
-            <>
-              {broken.length > 0 &&
-                renderList(
-                  one
-                    ? t("managedAuth.remove.brokenOne", {
-                        defaultValue:
-                          "这些供应商会无法使用，直到重新登录或改选别的账号：",
-                      })
-                    : t("managedAuth.remove.brokenAll", {
-                        defaultValue: "这些供应商会无法使用，直到重新登录：",
-                      }),
-                  broken,
-                )}
-              {moved.length > 0 &&
-                renderList(
-                  t("managedAuth.remove.moved", {
+            renderList(
+              one
+                ? t("managedAuth.remove.brokenOne", {
                     defaultValue:
-                      "这些供应商用的是默认账号，删除后改用新的默认账号：",
+                      "这些供应商会无法使用，直到重新登录或改选别的账号：",
+                  })
+                : t("managedAuth.remove.brokenAll", {
+                    defaultValue: "这些供应商会无法使用，直到重新登录：",
                   }),
-                  moved,
-                )}
-            </>
+              users,
+            )
           )}
 
           <div className="flex flex-wrap justify-end gap-2 pt-1">

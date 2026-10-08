@@ -1,5 +1,4 @@
 import type { AppId } from "@/lib/api";
-import type { Provider } from "@/types";
 import {
   PRESET_FAMILIES,
   PRESET_REGION_KEYS,
@@ -9,7 +8,6 @@ import {
   type PresetRegionKey,
 } from "@/config/presetFamilies";
 import { PRESET_SEARCH_ALIASES } from "@/config/presetSearchAliases";
-import { providerNeedsRouting } from "@/utils/providerCapabilities";
 import type { AnyPreset, PresetEntry } from "./ProviderPresetSelector";
 
 type Translate = (key: string) => unknown;
@@ -35,14 +33,12 @@ export const PRESET_GROUP_ORDER: PresetGroup[] = [
 
 type PresetFields = AnyPreset & {
   websiteUrl?: string;
-  requiresOAuth?: boolean;
   providerType?: string;
-  apiFormat?: string;
 };
 
 export function presetGroup(preset: AnyPreset): PresetGroup {
   const p = preset as PresetFields;
-  if (p.category === "official" || p.requiresOAuth || p.providerType) {
+  if (p.category === "official" || p.providerType) {
     return "login";
   }
   switch (p.category) {
@@ -285,7 +281,7 @@ export function presetVersionLayout(
       ? { kind: "single", dimension: "region" }
       : { kind: "list" };
   }
-  // 两维都没变化：靠域名区分（SudoCode）；连域名都一样就只能下拉
+  // 两维都没变化：靠域名区分；连域名都一样就只能下拉
   return unique(versions.map((entry) => presetDomain(entry.preset)))
     ? { kind: "single", dimension: null }
     : { kind: "list" };
@@ -418,48 +414,13 @@ export function sortPresetRowsByName<T extends { row: PresetRowItem }>(
   return sortByName(items, (item) => presetRowName(item.row, t));
 }
 
-/** 预设需要经过路由才能用（托管 OAuth、要转换格式的） */
-export function presetNeedsRouting(
-  appId: AppId | undefined,
-  entry: PresetEntry,
-): boolean {
-  if (!appId) return false;
-  const p = entry.preset as PresetFields;
-  const provider = {
-    id: entry.id,
-    name: p.name,
-    settingsConfig: (p as { settingsConfig?: Record<string, unknown> })
-      .settingsConfig as Provider["settingsConfig"],
-    category: p.category,
-    meta: {
-      ...(p.apiFormat ? { apiFormat: p.apiFormat } : {}),
-      ...(p.providerType ? { providerType: p.providerType } : {}),
-    },
-  } as Provider;
-  try {
-    return providerNeedsRouting(appId, provider);
-  } catch {
-    return false;
-  }
-}
-
-/** 合成的一行只有所有版本都要路由时才挂「需要路由」 */
-export function presetRowNeedsRouting(
-  appId: AppId | undefined,
-  row: PresetRowItem,
-): boolean {
-  return row.versions.every((entry) => presetNeedsRouting(appId, entry));
-}
-
 /** 账号登录类的副行：用哪家的账号登录 */
 export function loginAccountKey(
   appId: AppId | undefined,
   preset: AnyPreset,
 ): string {
   const type = (preset as PresetFields).providerType;
-  if (type === "github_copilot") return "github";
   if (type === "codex_oauth") return "chatgpt";
-  if (type === "xai_oauth") return "xai";
   switch (appId) {
     case "codex":
       return "chatgpt";

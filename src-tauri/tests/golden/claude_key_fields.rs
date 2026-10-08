@@ -128,9 +128,7 @@ fn bedrock_to_official_leaves_no_provider_keys() {
                 "AWS_REGION": "us-west-2",
                 "AWS_BEARER_TOKEN_BEDROCK": "bedrock-key",
                 "ANTHROPIC_MODEL": "us.anthropic.claude-sonnet-4-5-v1:0"
-            },
-            // 旧版 Bedrock API Key 预设写在顶层的 Key。
-            "apiKey": "legacy-bedrock-key"
+            }
         }),
         None,
     );
@@ -142,47 +140,6 @@ fn bedrock_to_official_leaves_no_provider_keys() {
     switch_and_check(&state, "claude-official");
     let live = read_home_json(LIVE);
     assert!(floor_view(&live).is_empty(), "official live: {live:#}");
-
-    // 按计划改变：旧 Bedrock API Key 行顶层的 `apiKey` 投影成
-    // `env.AWS_BEARER_TOKEN_BEDROCK`（`env` 里已有就以它为准），不再写进 live 顶层。
-    ProviderService::switch(&state, AppType::Claude, "bedrock").expect("switch back");
-    let live = read_home_json(LIVE);
-    assert_eq!(
-        live["env"]["AWS_BEARER_TOKEN_BEDROCK"],
-        json!("bedrock-key")
-    );
-    assert!(live.get("apiKey").is_none(), "live: {live:#}");
-}
-
-/// 只在顶层 `apiKey` 里存着 Key 的存量 Bedrock 行：切过去后 Key 出现在 Claude Code
-/// 真正读取的 `AWS_BEARER_TOKEN_BEDROCK` 里，行本身不改写。
-#[test]
-fn legacy_bedrock_api_key_row_is_projected_to_the_bearer_env() {
-    let _guard = test_mutex().lock().unwrap_or_else(|e| e.into_inner());
-    reset_test_fs();
-    let legacy = provider(
-        "bedrock",
-        json!({
-            "env": { "CLAUDE_CODE_USE_BEDROCK": "1", "AWS_REGION": "us-west-2" },
-            "apiKey": "legacy-bedrock-key"
-        }),
-        None,
-    );
-    let state = setup(&[relay("a", None), legacy.clone()], "a");
-
-    ProviderService::switch(&state, AppType::Claude, "bedrock").expect("switch");
-    let live = read_home_json(LIVE);
-    assert_eq!(
-        live["env"]["AWS_BEARER_TOKEN_BEDROCK"],
-        json!("legacy-bedrock-key")
-    );
-    assert!(live.get("apiKey").is_none(), "live: {live:#}");
-    let row = state
-        .db
-        .get_provider_by_id("bedrock", AppType::Claude.as_str())
-        .expect("query")
-        .expect("row");
-    assert_eq!(row.settings_config, legacy.settings_config);
 }
 
 #[test]

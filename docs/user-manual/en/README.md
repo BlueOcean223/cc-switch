@@ -1,6 +1,6 @@
 # CC Switch User Manual
 
-> All-in-One Assistant for Claude Code / Claude Desktop / Codex / Gemini CLI / Grok Build / OpenCode / OpenClaw / Hermes / Pi / MiniMax Code
+> All-in-One Assistant for Claude Code / Codex / Gemini CLI / Grok Build / OpenCode / OpenClaw / Hermes / Pi / MiniMax Code
 
 ## Table of Contents
 
@@ -19,8 +19,7 @@
 │   ├── 2.2 Switch Provider
 │   ├── 2.3 Edit Provider
 │   ├── 2.4 Sort & Duplicate
-│   ├── 2.5 Usage Query
-│   └── 2.6 Claude Desktop
+│   └── 2.5 Usage Query
 │
 ├── 3. Extensions
 │   ├── 3.1 MCP Server Management
@@ -29,12 +28,9 @@
 │   ├── 3.4 Session Manager
 │   └── 3.5 Workspace & Memory
 │
-├── 4. Local Routing & High Availability
-│   ├── 4.1 Local Routing Service
-│   ├── 4.2 App Routing
-│   ├── 4.3 Failover
-│   ├── 4.4 Usage Statistics
-│   └── 4.5 Connectivity Check
+├── 4. Usage & Connectivity
+│   ├── 4.1 Usage Statistics
+│   └── 4.2 Connectivity Check
 │
 └── 5. FAQ
     ├── 5.1 Configuration Files
@@ -64,7 +60,6 @@
 | [2.3-edit.md](./2-providers/2.3-edit.md) | Edit configuration, modify API Key, global settings and edit conflicts |
 | [2.4-sort-duplicate.md](./2-providers/2.4-sort-duplicate.md) | Drag-to-reorder, duplicate provider, delete |
 | [2.5-usage-query.md](./2-providers/2.5-usage-query.md) | Usage query, remaining balance, multi-plan display |
-| [2.6-claude-desktop.md](./2-providers/2.6-claude-desktop.md) | Claude Desktop third-party providers, direct mode, and model mapping |
 
 ### 3. Extensions
 
@@ -76,15 +71,12 @@
 | [3.4-sessions.md](./3-extensions/3.4-sessions.md) | Session Manager: browse, search, resume, delete sessions |
 | [3.5-workspace.md](./3-extensions/3.5-workspace.md) | Workspace files and daily memory (OpenClaw) |
 
-### 4. Local Routing & High Availability
+### 4. Usage & Connectivity
 
 | File | Description |
 |------|-------------|
-| [4.1-service.md](./4-proxy/4.1-service.md) | Start local routing, configuration, API format conversion |
-| [4.2-routing.md](./4-proxy/4.2-routing.md) | App routing, configuration changes, status indicators |
-| [4.3-failover.md](./4-proxy/4.3-failover.md) | Failover queue, circuit breaker, health status |
-| [4.4-usage.md](./4-proxy/4.4-usage.md) | Usage statistics, trend charts, pricing configuration |
-| [4.5-model-test.md](./4-proxy/4.5-model-test.md) | Connectivity check, check parameters |
+| [4.1-usage.md](./4-usage/4.1-usage.md) | Usage statistics, trend charts, pricing configuration |
+| [4.2-connectivity-check.md](./4-usage/4.2-connectivity-check.md) | Connectivity check, check parameters |
 
 ### 5. FAQ
 
@@ -100,29 +92,27 @@
 - **New users**: Start with [1.1 Introduction](./1-getting-started/1.1-introduction.md)
 - **Installation issues**: See [1.2 Installation Guide](./1-getting-started/1.2-installation.md)
 - **Configure providers**: See [2.1 Add Provider](./2-providers/2.1-add.md)
-- **Use Claude Desktop**: See [2.6 Claude Desktop](./2-providers/2.6-claude-desktop.md)
-- **Use local routing**: See [4.1 Local Routing Service](./4-proxy/4.1-service.md)
 - **Having trouble**: See [5.2 FAQ](./5-faq/5.2-questions.md)
 
 ## Version Information
 
-- Documentation version: v3.20.4
-- Last updated: 2026-09-26
-- Applicable to CC Switch v3.20.4+
+- Documentation version: v5.0.0
+- Last updated: 2026-10-06
+- Applicable to CC Switch v5.0.0+
 
 ### Recent Major Changes
 
-- **New managed apps**: Grok Build (v3.18.0), Pi (v3.20.0), and MiniMax Code (v3.20.4), bringing the total to 10 managed apps — see [1.1 Introduction](./1-getting-started/1.1-introduction.md)
-- **Official Codex presets now connect directly via native Responses**: DeepSeek, Zhipu GLM (v3.20.2), Kimi (v3.20.3), and others no longer need local routing for protocol conversion — see [2.1 Add Provider](./2-providers/2.1-add.md)
+- **New managed apps**: Grok Build (v3.18.0), Pi (v3.20.0), and MiniMax Code (v3.20.4), bringing the total to 9 managed apps — see [1.1 Introduction](./1-getting-started/1.1-introduction.md)
+- **Local routing, failover, Claude Desktop, and GitHub Copilot / xAI sign-in removed**: CC Switch now only writes each tool's config files; Codex providers connect directly through native Responses endpoints (v5.0.0) — see [2.1 Add Provider](./2-providers/2.1-add.md)
+- **Usage costs corrected**: requests are priced at the rate in effect when they were made, with 1-hour cache writes, the priority tier and long-context tiers counted; usage is rebuilt from the session logs once after upgrading (v5.0.0) — see [4.1 Usage Statistics → How Cost Is Calculated](./4-usage/4.1-usage.md#how-cost-is-calculated)
 - **Codex switching writes only config.toml**: third-party API keys are no longer written to `auth.json` (v3.20.1) — see [1.5 Personalization → Codex App Enhancements](./1-getting-started/1.5-settings.md#codex-app-enhancements)
-- **"Upstream Format" replaces the "Needs Local Routing" toggle** (v3.16.5) — see [2.1 Add Provider](./2-providers/2.1-add.md#upstream-format-and-model-mapping-for-codex--grok-build)
-- **Connectivity check replaces model test**: it only checks whether the address is reachable and no longer sends real model requests (v3.16.3) — see [4.5 Connectivity Check](./4-proxy/4.5-model-test.md)
-- **Usage statistics without local routing**: usage is imported from each tool's local session logs — see [4.4 Usage Statistics](./4-proxy/4.4-usage.md)
+- **Connectivity check replaces model test**: it only checks whether the address is reachable and no longer sends real model requests (v3.16.3) — see [4.2 Connectivity Check](./4-usage/4.2-connectivity-check.md)
+- **Usage statistics from session logs**: usage is imported from each tool's local session logs — see [4.1 Usage Statistics](./4-usage/4.1-usage.md)
 - **Cloud sync supports S3-compatible storage** — see [1.5 Personalization](./1-getting-started/1.5-settings.md)
 
 ## Contributing
 
 Feel free to submit Issues or PRs to improve the documentation:
 
-- [GitHub Issues](https://github.com/farion1231/cc-switch/issues)
-- [GitHub Repository](https://github.com/farion1231/cc-switch)
+- [GitHub Issues](https://github.com/BlueOcean223/cc-switch/issues)
+- [GitHub Repository](https://github.com/BlueOcean223/cc-switch)

@@ -5,7 +5,7 @@ import type { AppId } from "@/lib/api";
  *
  * - 应用页：点侧栏应用行进入供应商页；OpenClaw、Hermes 在页头下用分段控件切到自己的专属页。
  * - 全局页：用量统计、授权中心、MCP、Skills、提示词、会话、应用（安装与显示），每样只出现一次。
- * - 设置：侧栏换成设置目录，6 个分组。
+ * - 设置：侧栏换成设置目录，5 个分组。
  */
 
 export type AppPage =
@@ -29,19 +29,9 @@ export type View = AppPage | GlobalPage | "settings";
 export type SettingsSection =
   | "general"
   | "appConfig"
-  | "routing"
   | "network"
   | "data"
   | "about";
-
-export const SETTINGS_SECTIONS: SettingsSection[] = [
-  "general",
-  "appConfig",
-  "routing",
-  "network",
-  "data",
-  "about",
-];
 
 const APP_PAGES: AppPage[] = [
   "providers",
@@ -73,10 +63,6 @@ const LEGACY_VIEWS: Record<string, View> = {
 
 export function isAppPage(view: View): view is AppPage {
   return (APP_PAGES as string[]).includes(view);
-}
-
-export function isGlobalPage(view: View): view is GlobalPage {
-  return (GLOBAL_PAGES as string[]).includes(view);
 }
 
 export function parseView(value: string | null | undefined): View | null {
@@ -115,32 +101,4 @@ export function storeView(view: View) {
   } catch {
     // 存不了就算了：下次启动回到供应商页
   }
-}
-
-/**
- * 旧的设置页签名 → 新的设置分组。用量统计、认证已经搬成全局页，由调用方改走全局页。
- */
-export function normalizeSettingsSection(
-  tab: string | null | undefined,
-): SettingsSection {
-  switch (tab) {
-    case "proxy":
-    case "routing":
-      return "routing";
-    case "advanced":
-    case "data":
-      return "data";
-    case "appConfig":
-    case "network":
-    case "about":
-    case "general":
-      return tab;
-    default:
-      return "general";
-  }
-}
-
-/** 提示词、会话页在 Claude Desktop 上看的是 Claude Code 的内容（两者共用）。 */
-export function sharedFeatureAppOf(app: AppId): AppId {
-  return app === "claude-desktop" ? "claude" : app;
 }

@@ -15,19 +15,14 @@ use toml_edit::{DocumentMut, InlineTable, Item, Table, TableLike, Value as TomlV
 
 use crate::error::AppError;
 use crate::live::floor;
+use crate::live::legacy_routing::{OFFICIAL_PROXY_ROUTE_ID, PROXY_PLACEHOLDER};
 use crate::live::patch::toml::{same_value, shape_error, TomlDocPatch};
 use crate::live::patch::LiveWriteError;
 
 /// CC Switch 写入的路由表 id。
 pub const ROUTE_ID: &str = "custom";
-/// 旧版代理官方路由写的表 id。会话按选中的 id 分桶，它让代理下的官方会话自成一桶，
-/// 表一删就 resume 不了，新版不再写；live 里留着的只清理。
-pub const OFFICIAL_PROXY_ROUTE_ID: &str = "cc-switch-official";
-/// 把内置 openai 改道到别的地址的顶层键。
-const OPENAI_BASE_URL: &str = "openai_base_url";
 /// CC Switch 生成的模型目录文件名。
 pub const CATALOG_FILENAME: &str = "cc-switch-model-catalog.json";
-pub use super::claude::PROXY_TOKEN_PLACEHOLDER;
 /// `web_search` 的禁用值。
 pub const WEB_SEARCH_DISABLED: &str = "disabled";
 pub const MODEL_CATALOG_JSON: &str = "model_catalog_json";
@@ -54,7 +49,6 @@ const ROW_TOP_FIELDS: &[&str] = &[
     "review_model",
     "model_reasoning_effort",
     "plan_mode_reasoning_effort",
-    "disable_response_storage",
 ];
 
 fn is_built_in_id(id: &str) -> bool {
@@ -81,7 +75,7 @@ pub enum RouteAuth {
 /// `false` 而旁边留着 ChatGPT 登录，Codex 当成已登出（账号信息不显示、token 不刷新）。
 /// 所以只有凭据走自己的通道（Bearer、EnvKey）时才跟着「写完后盘上有没有登录」走；
 /// Headers、None 恒为 `false`，否则请求会回退去读 `auth.json` 里的官方登录，把它发给
-/// 第三方地址。官方镜像形态（统一会话历史、代理的官方路由）恒为 `true`，不经过这里。
+/// 第三方地址。官方镜像形态（统一会话历史）恒为 `true`，不经过这里。
 pub fn requires_openai_auth(auth: RouteAuth, login_on_disk: bool) -> bool {
     matches!(auth, RouteAuth::EnvKey | RouteAuth::Bearer) && login_on_disk
 }
@@ -104,7 +98,7 @@ pub enum Route {
 #[derive(Debug, Clone)]
 pub struct CodexProjection {
     pub route: Route,
-    /// 顶层关键字段（模型名、推理档位、`disable_response_storage`）。
+    /// 顶层关键字段（模型名、推理档位）。
     pub top: Vec<(String, TomlValue)>,
     /// 嵌在用户表里的模型名（`agents.default_subagent_model` 等）。
     pub nested: Vec<(Vec<String>, TomlValue)>,
@@ -119,9 +113,6 @@ pub struct RowInput<'a> {
     pub settings: &'a Value,
     /// 官方卡（`category == "official"`，或按 `is_codex_official_provider` 认出来的）。
     pub official: bool,
-    /// 代理注入凭据的 OAuth 卡（xai_oauth、github_copilot…）：本来就没有 Key，行里的
-    /// `requires_openai_auth = true` 是旧模板留下的。
-    pub proxy_injected_oauth: bool,
 }
 
 fn config_error(zh: impl Into<String>, en: impl Into<String>) -> AppError {
@@ -351,8 +342,8 @@ pub fn is_keyless_fallback(error: &AppError) -> bool {
 fn keyless_fallback_error() -> AppError {
     AppError::localized(
         KEYLESS_FALLBACK_ERROR,
-        "该 Codex 配置没有可用的 API 密钥，而 requires_openai_auth = true（或顶层 openai_base_url）会让 Codex 回退使用 auth.json 里的登录凭据访问第三方地址。请为供应商填写 API 密钥，或移除该回退指令",
-        "This Codex config has no usable API key, and requires_openai_auth = true (or a top-level openai_base_url) would make Codex fall back to whatever login auth.json holds for a third-party route. Add an API key to the provider or remove the fallback directive",
+        "该 Codex 配置没有可用的 API 密钥，而 requires_openai_auth = true（或顶层 openai_base_url）会让 Codex 回退使用 auth.json 里的登录凭据访问第三方地址。上游 CC Switch 靠本地路由给这类配置补凭据，ccs-lite 没有本地路由。请为供应商填写 API 密钥，或移除该回退指令",
+        "This Codex config has no usable API key, and requires_openai_auth = true (or a top-level openai_base_url) would make Codex fall back to whatever login auth.json holds for a third-party route. Upstream CC Switch supplied the credentials for such configs through its local routing, which ccs-lite does not have. Add an API key to the provider or remove the fallback directive",
     )
 }
 
@@ -377,7 +368,7 @@ fn custom_route(
                 let requires = table_bool(&table, "requires_openai_auth");
                 let rerouted =
                     doc.get("openai_base_url").is_some() && doc.get("model_providers").is_none();
-                if (requires || rerouted) && !input.proxy_injected_oauth {
+                if requires || rerouted {
                     return Err(keyless_fallback_error());
                 }
                 if table.get("query_params").is_some()
@@ -437,71 +428,75 @@ fn default_route(_doc: &DocumentMut, _input: &RowInput<'_>) -> Result<Route, App
 /// 写进 `config.toml` 的路由。
 #[derive(Debug, Clone)]
 pub enum RouteWrite {
-    /// 官方直连：不写选路。live 里已有 custom 表时改写成休眠形态（本地代理地址加占位
-    /// Key）：Codex 按 provider id 给会话分桶，表一删，第三方的旧会话就 resume 不了。
-    Official { dormant_base_url: String },
+    /// 官方直连：不写选路。live 里已有 custom 表时改写成休眠形态（占位地址加占位 Key）：
+    /// Codex 按 provider id 给会话分桶，表一删，第三方的旧会话就 resume 不了。
+    Official,
     /// 官方直连且开了「统一会话历史」：选路写 custom，表是官方镜像（认证走官方登录）。
     OfficialMirror,
-    /// 第三方（直连或代理契约）：选路写 custom。
+    /// 第三方：选路写 custom。
     Custom(Table),
     /// Codex 内置的其他 provider。
     BuiltIn { id: String, table: Option<Table> },
     /// 第三方行没有路由：不写选路。
     Default,
-    /// 代理的官方路由，客户端带自己的登录。写法和官方直连对齐，进出代理不换会话的桶：
-    /// 没开「统一会话历史」时不写选路，顶层 `openai_base_url` 把内置 openai 改道到代理
-    /// （会话仍记在 `openai` 下）；开了时写 custom 官方镜像表，指向代理。
-    OfficialProxy { base_url: String, unified: bool },
 }
 
 impl RouteWrite {
     fn selector(&self) -> Option<&str> {
         match self {
-            Self::Official { .. } | Self::Default => None,
+            Self::Official | Self::Default => None,
             Self::OfficialMirror | Self::Custom(_) => Some(ROUTE_ID),
             Self::BuiltIn { id, .. } => Some(id),
-            Self::OfficialProxy { unified, .. } => unified.then_some(ROUTE_ID),
-        }
-    }
-
-    /// 要写进顶层 `openai_base_url` 的地址（只有代理的官方路由、没开统一会话历史时有）。
-    fn openai_base_url(&self) -> Option<&str> {
-        match self {
-            Self::OfficialProxy {
-                base_url,
-                unified: false,
-            } => Some(base_url),
-            _ => None,
         }
     }
 }
 
-/// 官方镜像表：`name = "OpenAI"`、认证走官方登录。统一会话历史和代理的官方路由用。
-pub fn official_mirror_table(base_url: Option<&str>, supports_websockets: bool) -> Table {
+/// 官方镜像表：`name = "OpenAI"`、认证走官方登录。统一会话历史用。
+fn official_mirror_table() -> Table {
     let mut table = Table::new();
     table.insert("name", toml_edit::value("OpenAI"));
     table.insert("requires_openai_auth", toml_edit::value(true));
-    table.insert("supports_websockets", toml_edit::value(supports_websockets));
+    table.insert("supports_websockets", toml_edit::value(true));
     table.insert("wire_api", toml_edit::value("responses"));
-    if let Some(base_url) = base_url {
-        table.insert("base_url", toml_edit::value(base_url.trim_end_matches('/')));
-    }
     table
 }
 
-/// 指向本地代理的第三方路由表（代理契约和官方直连的休眠表共用）。
-pub fn proxy_route_table(name: &str, base_url: &str, requires_openai_auth: bool) -> Table {
+/// 休眠形态 custom 表的占位地址。`.invalid` 是保留域名，解析不到任何主机：仍选着
+/// `custom` 的 profile 或会话发请求会直接失败，不会发到别人的服务上。
+pub(crate) const DORMANT_BASE_URL: &str = "https://dormant.invalid/v1";
+/// 休眠形态 custom 表的占位 Key。
+pub(crate) const DORMANT_BEARER_TOKEN: &str = "CCS_LITE_DORMANT";
+/// 旧版休眠表指向上游 CC Switch 的路由端口：共存时上游的代理可能正在那里监听，
+/// 请求会被它转发给上游当前的供应商。认出来以后换成新形态。
+const LEGACY_DORMANT_BASE_URL: &str = "http://127.0.0.1:15721/v1";
+const LEGACY_DORMANT_BEARER_TOKEN: &str = "PROXY_MANAGED";
+
+/// custom 表是不是休眠形态（新旧两种都认）。
+fn is_dormant_table(item: &Item) -> bool {
+    let Some(table) = item.as_table_like() else {
+        return false;
+    };
+    let base_url = table.get("base_url").and_then(Item::as_str);
+    let token = table
+        .get("experimental_bearer_token")
+        .and_then(Item::as_str);
+    matches!(base_url, Some(DORMANT_BASE_URL | LEGACY_DORMANT_BASE_URL))
+        && matches!(
+            token,
+            None | Some(DORMANT_BEARER_TOKEN | LEGACY_DORMANT_BEARER_TOKEN)
+        )
+}
+
+/// 官方直连时 custom 表的休眠形态：占位地址加占位 Key。
+fn dormant_route_table() -> Table {
     let mut table = Table::new();
-    table.insert("name", toml_edit::value(name));
-    table.insert("base_url", toml_edit::value(base_url));
+    table.insert("name", toml_edit::value(ROUTE_ID));
+    table.insert("base_url", toml_edit::value(DORMANT_BASE_URL));
     table.insert("wire_api", toml_edit::value("responses"));
     table.insert(
         "experimental_bearer_token",
-        toml_edit::value(PROXY_TOKEN_PLACEHOLDER),
+        toml_edit::value(DORMANT_BEARER_TOKEN),
     );
-    if requires_openai_auth {
-        table.insert("requires_openai_auth", toml_edit::value(true));
-    }
     table
 }
 
@@ -554,15 +549,6 @@ fn is_cc_switch_catalog(value: &str) -> bool {
     Path::new(value).file_name().and_then(|name| name.to_str()) == Some(CATALOG_FILENAME)
 }
 
-/// 去掉行里自己指定的模型目录指针（[`row_catalog_pointer`]），其余内容原样；行里没有时为
-/// `None`。
-pub fn without_row_catalog(config_text: &str) -> Option<String> {
-    let mut doc = config_text.parse::<DocumentMut>().ok()?;
-    foreign_catalog(&doc)?;
-    doc.remove(MODEL_CATALOG_JSON);
-    Some(doc.to_string())
-}
-
 /// 顶层指向别的目录（不是 CC Switch 生成的那个）的 `model_catalog_json`。
 pub fn foreign_catalog(doc: &DocumentMut) -> Option<&TomlValue> {
     doc.get(MODEL_CATALOG_JSON)
@@ -572,21 +558,6 @@ pub fn foreign_catalog(doc: &DocumentMut) -> Option<&TomlValue> {
                 .as_str()
                 .is_some_and(|path| !is_cc_switch_catalog(path))
         })
-}
-
-/// live 的 `model_catalog_json` 指向 CC Switch 生成的目录：新启动的 Codex 读的是它。
-pub fn live_catalog_is_ours(config_text: &str) -> bool {
-    config_text.parse::<DocumentMut>().ok().is_some_and(|doc| {
-        doc.get(MODEL_CATALOG_JSON)
-            .and_then(Item::as_str)
-            .is_some_and(is_cc_switch_catalog)
-    })
-}
-
-/// 行里自己指定的模型目录指针（投影的 `top` 只收不是 CC Switch 的指针）。它和别的关键
-/// 字段一样只属于这一家：切到别家时第 1 步清掉。
-pub fn row_catalog_pointer(top: &[(String, TomlValue)]) -> Option<&(String, TomlValue)> {
-    top.iter().find(|(key, _)| key == MODEL_CATALOG_JSON)
 }
 
 impl CodexConfigPatch {
@@ -599,11 +570,7 @@ impl CodexConfigPatch {
             .collect();
         let selector = self.route.selector();
         // 第 4 步选路要写的顶层键。
-        let route_keys: Vec<&str> = selector
-            .map(|_| "model_provider")
-            .into_iter()
-            .chain(self.route.openai_base_url().map(|_| OPENAI_BASE_URL))
-            .collect();
+        let route_keys: Vec<&str> = selector.map(|_| "model_provider").into_iter().collect();
         let root = doc.as_table_mut();
 
         // 1. 清空顶层关键字段。目标里也有的（含选路要写的）留给后面原位改值。模型目录指针
@@ -699,9 +666,6 @@ impl CodexConfigPatch {
                 root.remove("model_provider");
             }
         }
-        if let Some(base_url) = self.route.openai_base_url() {
-            put_value(root, OPENAI_BASE_URL, &TomlValue::from(base_url));
-        }
 
         let referenced = profile_selectors(root);
         let container_inline = matches!(root.get("model_providers"), Some(Item::Value(_)));
@@ -737,8 +701,8 @@ impl CodexConfigPatch {
             providers.insert(&renamed, item);
         }
 
-        // 旧版按别的 id 写进去的表（含旧版代理官方路由表）、残留的代理占位表。被 profile
-        // 引用的不动。
+        // 旧版按别的 id 写进去、能证明是 CC Switch 写的表，以及上游本地路由留下的表
+        // （官方代理路由表、Key 是占位符的表）。被 profile 引用的不动。
         let doomed: Vec<String> = providers
             .iter()
             .filter(|(id, item)| {
@@ -755,16 +719,17 @@ impl CodexConfigPatch {
         }
 
         match &self.route {
-            RouteWrite::Official { dormant_base_url } => {
+            RouteWrite::Official => {
                 if providers.contains_key(ROUTE_ID) {
-                    let dormant = proxy_route_table(ROUTE_ID, dormant_base_url, false);
-                    put_table(providers, ROUTE_ID, dormant, container_inline);
+                    put_table(providers, ROUTE_ID, dormant_route_table(), container_inline);
                 }
             }
             RouteWrite::Default | RouteWrite::BuiltIn { table: None, .. } => {
                 // custom 表是 CC Switch 的，没人选它了也留着（改成不带真实 Key 的休眠形态
-                // 由切回官方负责）：这里保持原样，只保证不留真实 Key。
-                if let Some(item) = providers.get_mut(ROUTE_ID) {
+                // 由切回官方负责）：这里保持原样，只保证不留真实 Key。旧版休眠表换成新形态
+                if providers.get(ROUTE_ID).is_some_and(is_dormant_table) {
+                    put_table(providers, ROUTE_ID, dormant_route_table(), container_inline);
+                } else if let Some(item) = providers.get_mut(ROUTE_ID) {
                     if let Some(table) = item.as_table_like_mut() {
                         table.remove("experimental_bearer_token");
                     }
@@ -780,33 +745,12 @@ impl CodexConfigPatch {
                 put_table(
                     providers,
                     ROUTE_ID,
-                    official_mirror_table(None, true),
+                    official_mirror_table(),
                     container_inline,
                 );
             }
             RouteWrite::Custom(table) => {
                 put_table(providers, ROUTE_ID, table.clone(), container_inline);
-            }
-            RouteWrite::OfficialProxy {
-                base_url,
-                unified: false,
-            } => {
-                // 之前第三方路由留下的 custom 表改成休眠形态（同样指向本地代理）。
-                if providers.contains_key(ROUTE_ID) {
-                    let dormant = proxy_route_table(ROUTE_ID, base_url, false);
-                    put_table(providers, ROUTE_ID, dormant, container_inline);
-                }
-            }
-            RouteWrite::OfficialProxy {
-                base_url,
-                unified: true,
-            } => {
-                put_table(
-                    providers,
-                    ROUTE_ID,
-                    official_mirror_table(Some(base_url), false),
-                    container_inline,
-                );
             }
         }
 
@@ -820,11 +764,7 @@ impl CodexConfigPatch {
     fn owned_table(&self) -> Option<(&str, Table)> {
         match &self.route {
             RouteWrite::Custom(table) => Some((ROUTE_ID, table.clone())),
-            RouteWrite::OfficialMirror => Some((ROUTE_ID, official_mirror_table(None, true))),
-            RouteWrite::OfficialProxy {
-                base_url,
-                unified: true,
-            } => Some((ROUTE_ID, official_mirror_table(Some(base_url), false))),
+            RouteWrite::OfficialMirror => Some((ROUTE_ID, official_mirror_table())),
             RouteWrite::BuiltIn {
                 id,
                 table: Some(table),
@@ -843,11 +783,12 @@ impl CodexConfigPatch {
     }
 }
 
+/// 上游本地路由写的表：`experimental_bearer_token` 是占位符。
 fn holds_placeholder(item: &Item) -> bool {
     item.as_table_like()
         .and_then(|table| table.get("experimental_bearer_token"))
         .and_then(Item::as_str)
-        == Some(PROXY_TOKEN_PLACEHOLDER)
+        == Some(PROXY_PLACEHOLDER)
 }
 
 fn first_free_id(providers: &dyn TableLike, base: &str) -> String {
@@ -955,7 +896,6 @@ mod tests {
         CodexProjection::of(&RowInput {
             settings,
             official: false,
-            proxy_injected_oauth: false,
         })
     }
 
@@ -1073,82 +1013,90 @@ mod tests {
         doc
     }
 
-    const PROXY: &str = "http://127.0.0.1:15721/v1";
-
-    fn official_proxy(unified: bool) -> RouteWrite {
-        RouteWrite::OfficialProxy {
-            base_url: PROXY.to_string(),
-            unified,
+    #[test]
+    fn legacy_dormant_table_is_replaced_by_the_unreachable_form() {
+        // 旧版休眠表指向上游 CC Switch 的路由端口，下一次写入换成新形态
+        let live = "model = \"gpt-5.5\"\n\n[model_providers.custom]\nname = \"custom\"\nbase_url = \"http://127.0.0.1:15721/v1\"\nwire_api = \"responses\"\nexperimental_bearer_token = \"PROXY_MANAGED\"\n";
+        for route in [RouteWrite::Default, RouteWrite::Official] {
+            let doc = apply(route, live);
+            let dormant = doc["model_providers"][ROUTE_ID].as_table().unwrap();
+            assert_eq!(dormant["base_url"].as_str(), Some(DORMANT_BASE_URL));
+            assert_eq!(
+                dormant["experimental_bearer_token"].as_str(),
+                Some(DORMANT_BEARER_TOKEN)
+            );
         }
+
+        // 用户自己的 custom 表只去掉 Key
+        let own = "model = \"gpt-5.5\"\n\n[model_providers.custom]\nname = \"custom\"\nbase_url = \"http://127.0.0.1:4000/v1\"\nexperimental_bearer_token = \"sk-own\"\n";
+        let doc = apply(RouteWrite::Default, own);
+        let table = doc["model_providers"][ROUTE_ID].as_table().unwrap();
+        assert_eq!(table["base_url"].as_str(), Some("http://127.0.0.1:4000/v1"));
+        assert!(table.get("experimental_bearer_token").is_none());
     }
 
     #[test]
-    fn the_official_proxy_route_stays_in_the_built_in_openai_bucket() {
-        // 旧版写的 cc-switch-official 表删掉；第三方留下的 custom 表改成休眠形态。
-        let live = "model_provider = \"cc-switch-official\"\nopenai_base_url = \"https://stale.example/v1\"\nmodel = \"gpt-5.5\"\n\n[model_providers.cc-switch-official]\nname = \"OpenAI\"\nbase_url = \"http://127.0.0.1:15721/v1\"\nrequires_openai_auth = true\n\n[model_providers.custom]\nname = \"custom\"\nbase_url = \"https://relay.example/v1\"\nexperimental_bearer_token = \"sk-relay\"\n";
-        let doc = apply(official_proxy(false), live);
+    fn upstream_proxy_tables_are_removed_unless_a_profile_uses_them() {
+        let live = "model_provider = \"cc-switch-official\"\nmodel = \"gpt-5.5\"\n\n[profiles.p]\nmodel_provider = \"kept\"\n\n[model_providers.cc-switch-official]\nname = \"OpenAI\"\nbase_url = \"http://127.0.0.1:15721/v1\"\nrequires_openai_auth = true\n\n[model_providers.routed]\nbase_url = \"http://127.0.0.1:15721/v1\"\nexperimental_bearer_token = \"PROXY_MANAGED\"\n\n[model_providers.openai]\nbase_url = \"http://127.0.0.1:15721/v1\"\nexperimental_bearer_token = \"PROXY_MANAGED\"\n\n[model_providers.kept]\nbase_url = \"http://127.0.0.1:15721/v1\"\nexperimental_bearer_token = \"PROXY_MANAGED\"\n\n[model_providers.mine]\nbase_url = \"http://127.0.0.1:4000/v1\"\n";
+        let doc = apply(RouteWrite::Official, live);
         assert!(doc.get("model_provider").is_none(), "{doc}");
-        assert_eq!(doc["openai_base_url"].as_str(), Some(PROXY));
         let providers = doc["model_providers"].as_table().unwrap();
-        assert!(!providers.contains_key(OFFICIAL_PROXY_ROUTE_ID), "{doc}");
+        let ids: Vec<&str> = providers.iter().map(|(id, _)| id).collect();
+        assert_eq!(ids, ["kept", "mine"], "{doc}");
+    }
+
+    #[test]
+    fn official_route_leaves_a_dormant_custom_table() {
+        // 切回官方：选路和顶层改道删掉，第三方留下的 custom 表改成休眠形态（不留真实 Key）。
+        let live = "model_provider = \"custom\"\nopenai_base_url = \"https://relay.example/v1\"\nmodel = \"gpt-5.5\"\n\n[model_providers.custom]\nname = \"custom\"\nbase_url = \"https://relay.example/v1\"\nexperimental_bearer_token = \"sk-relay\"\n";
+        let doc = apply(RouteWrite::Official, live);
+        assert!(doc.get("model_provider").is_none(), "{doc}");
+        assert!(doc.get("openai_base_url").is_none(), "{doc}");
+        let providers = doc["model_providers"].as_table().unwrap();
         let dormant = providers[ROUTE_ID].as_table().unwrap();
-        assert_eq!(dormant["base_url"].as_str(), Some(PROXY));
+        assert_eq!(dormant["base_url"].as_str(), Some(DORMANT_BASE_URL));
         assert_eq!(
             dormant["experimental_bearer_token"].as_str(),
-            Some(PROXY_TOKEN_PLACEHOLDER)
+            Some(DORMANT_BEARER_TOKEN)
         );
         assert!(!doc.to_string().contains("sk-relay"));
 
-        // 已有的改道原位改值，重写不挪位置。
-        let settled =
-            "openai_base_url = \"http://127.0.0.1:15721/v1\"\napproval_policy = \"never\"\n";
-        assert_eq!(apply(official_proxy(false), settled).to_string(), settled);
-
         // 没有 model_providers 时不建表。
-        let bare = apply(official_proxy(false), "model = \"gpt-5.5\"\n");
+        let bare = apply(RouteWrite::Official, "model = \"gpt-5.5\"\n");
         assert!(bare.get("model_providers").is_none(), "{bare}");
-        assert_eq!(bare["openai_base_url"].as_str(), Some(PROXY));
-    }
-
-    #[test]
-    fn the_unified_official_proxy_route_is_a_custom_mirror_of_the_proxy() {
-        for live in [
-            "model = \"gpt-5.5\"\n",
-            "openai_base_url = \"http://127.0.0.1:15721/v1\"\n",
-        ] {
-            let doc = apply(official_proxy(true), live);
-            assert_eq!(doc["model_provider"].as_str(), Some(ROUTE_ID), "{doc}");
-            assert!(doc.get("openai_base_url").is_none(), "{doc}");
-            let mirror = doc["model_providers"][ROUTE_ID].as_table().unwrap();
-            assert_eq!(mirror["name"].as_str(), Some("OpenAI"));
-            assert_eq!(mirror["base_url"].as_str(), Some(PROXY));
-            assert_eq!(mirror["requires_openai_auth"].as_bool(), Some(true));
-            assert_eq!(mirror["supports_websockets"].as_bool(), Some(false));
-            assert!(mirror.get("experimental_bearer_token").is_none());
-        }
-    }
-
-    #[test]
-    fn leaving_the_official_proxy_route_drops_the_reroute() {
-        let proxied = apply(official_proxy(false), "model = \"gpt-5.5\"\n").to_string();
-        let direct = apply(
-            RouteWrite::Official {
-                dormant_base_url: PROXY.to_string(),
-            },
-            &proxied,
-        );
-        assert!(direct.get("openai_base_url").is_none(), "{direct}");
-        assert!(direct.get("model_provider").is_none(), "{direct}");
 
         let mut relay = Table::new();
         relay.insert("name", toml_edit::value("relay"));
         relay.insert("base_url", toml_edit::value("https://relay.example/v1"));
-        let third_party = apply(RouteWrite::Custom(relay), &proxied);
+        let third_party = apply(RouteWrite::Custom(relay), live);
         assert!(
             third_party.get("openai_base_url").is_none(),
             "{third_party}"
         );
         assert_eq!(third_party["model_provider"].as_str(), Some(ROUTE_ID));
+    }
+
+    #[test]
+    fn retired_disable_response_storage_is_dropped_from_live() {
+        let settings = row(
+            json!({ "OPENAI_API_KEY": "sk" }),
+            &format!("disable_response_storage = true\n{RELAY}"),
+        );
+        let projection = project(&settings).unwrap();
+        assert!(
+            projection
+                .top
+                .iter()
+                .all(|(key, _)| key != "disable_response_storage"),
+            "{:?}",
+            projection.top
+        );
+
+        let doc = apply(
+            RouteWrite::Official,
+            "model = \"gpt-5.5\"\ndisable_response_storage = true\n",
+        );
+        assert!(doc.get("disable_response_storage").is_none(), "{doc}");
     }
 
     #[test]
@@ -1165,17 +1113,6 @@ mod tests {
             "model_provider = \"relay\"\nmodel = \"m\"\n",
         );
         assert!(project(&key_without_slot).is_err());
-
-        // 代理注入凭据的 OAuth 卡本来就没有 Key：放行，且不带 requires_openai_auth。
-        let oauth = CodexProjection::of(&RowInput {
-            settings: &keyless,
-            official: false,
-            proxy_injected_oauth: true,
-        })
-        .unwrap();
-        let (table, auth) = custom(&oauth);
-        assert_eq!(auth, RouteAuth::None);
-        assert!(table.get("requires_openai_auth").is_none());
 
         // 只有 model、没有路由的卡：有意放行（带 Key 也一样，Key 没有第三方地址可发）。
         for auth in [json!({}), json!({ "OPENAI_API_KEY": "sk" })] {

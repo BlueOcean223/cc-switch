@@ -33,8 +33,8 @@ use super::codex_items::{
 };
 
 use super::utils::{
-    extract_text, parse_timestamp_to_ms, path_basename, read_head_tail_lines, truncate_summary,
-    FileParseCache, JsonlSpan, LineSpans, TITLE_MAX_CHARS,
+    collect_files_with_extension, extract_text, parse_timestamp_to_ms, path_basename,
+    read_head_tail_lines, truncate_summary, FileParseCache, JsonlSpan, LineSpans, TITLE_MAX_CHARS,
 };
 
 const PROVIDER_ID: &str = "codex";
@@ -77,7 +77,7 @@ fn scan_sessions_in_roots_with_titles(
 ) -> Vec<SessionMeta> {
     let mut files = Vec::new();
     for root in roots {
-        collect_jsonl_files(root, &mut files);
+        collect_files_with_extension(root, "jsonl", &mut files);
     }
 
     // 缓存里只放文件本身解析出的结果；线程标题来自外部索引 / 数据库，
@@ -2111,26 +2111,6 @@ fn codex_request_heading_payload(line: &str) -> Option<&str> {
 fn infer_session_id_from_filename(path: &Path) -> Option<String> {
     let file_name = path.file_name()?.to_string_lossy();
     UUID_RE.find(&file_name).map(|mat| mat.as_str().to_string())
-}
-
-fn collect_jsonl_files(root: &Path, files: &mut Vec<PathBuf>) {
-    if !root.exists() {
-        return;
-    }
-
-    let entries = match std::fs::read_dir(root) {
-        Ok(entries) => entries,
-        Err(_) => return,
-    };
-
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            collect_jsonl_files(&path, files);
-        } else if path.extension().and_then(|ext| ext.to_str()) == Some("jsonl") {
-            files.push(path);
-        }
-    }
 }
 
 #[cfg(test)]

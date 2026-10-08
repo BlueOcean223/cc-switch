@@ -5,20 +5,23 @@ use std::path::PathBuf;
 use crate::config::get_home_dir;
 use crate::error::AppError;
 
-pub const DEFAULT_MODEL: &str = "grok-4.5";
+pub const DEFAULT_MODEL: &str = "grok-4.7";
 pub const DEFAULT_API_BACKEND: &str = "responses";
-pub const DEFAULT_CONTEXT_WINDOW: i64 = 500_000;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GrokModelConfig {
     pub profile: String,
     pub model: String,
     pub base_url: String,
+    /// 选择器里显示的名字；没写时用 profile
     pub name: String,
     pub api_key: Option<String>,
-    pub env_key: Option<String>,
+    /// `env_key` 里的变量名。Grok 接受单个名字或数组，取第一个有值的
+    pub env_keys: Vec<String>,
+    /// 没写时是 Grok 的默认值 `chat_completions`
     pub api_backend: String,
-    pub context_window: i64,
+    /// 没写时 Grok 对新模型按 200,000 处理，对覆盖的内置模型沿用其窗口
+    pub context_window: Option<i64>,
 }
 
 /// Grok Build configuration directory (`~/.grok`).
@@ -47,6 +50,22 @@ fn required_non_empty_string<'a>(
                 format!("Grok Build configuration is missing a valid {key} field"),
             )
         })
+}
+
+/// `env_key` 可以是一个变量名，也可以是变量名数组。
+fn env_key_names(table: &toml::value::Table) -> Vec<String> {
+    let names: Vec<&toml::Value> = match table.get("env_key") {
+        Some(toml::Value::Array(items)) => items.iter().collect(),
+        Some(value) => vec![value],
+        None => Vec::new(),
+    };
+    names
+        .into_iter()
+        .filter_map(toml::Value::as_str)
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .map(ToString::to_string)
+        .collect()
 }
 
 fn optional_non_empty_string(table: &toml::value::Table, key: &str) -> Option<String> {
@@ -143,11 +162,13 @@ pub fn validate_config_toml(config_toml: &str) -> Result<(), AppError> {
             )
         })?;
 
+    // 只要求 CC Switch 用得到的字段：模型、地址和凭据。`name`、`api_backend`、
+    // `context_window` 在 Grok 里都可以省略（见 Grok 自带文档 custom-models）。
     required_non_empty_string(selected_model, "model")?;
     required_non_empty_string(selected_model, "base_url")?;
-    required_non_empty_string(selected_model, "name")?;
+    // 没有自己的凭据时 Grok 会改用登录 token 或 XAI_API_KEY，第三方地址不能这样配。
     if optional_non_empty_string(selected_model, "api_key").is_none()
-        && optional_non_empty_string(selected_model, "env_key").is_none()
+        && env_key_names(selected_model).is_empty()
     {
         return Err(AppError::localized(
             "provider.grokbuild.credentials.missing",
@@ -155,19 +176,22 @@ pub fn validate_config_toml(config_toml: &str) -> Result<(), AppError> {
             "Grok Build configuration is missing a valid api_key or env_key field",
         ));
     }
-    required_non_empty_string(selected_model, "api_backend")?;
+    if selected_model.contains_key("api_backend") {
+        required_non_empty_string(selected_model, "api_backend")?;
+    }
 
-    selected_model
-        .get("context_window")
-        .and_then(toml::Value::as_integer)
-        .filter(|value| *value > 0)
-        .ok_or_else(|| {
-            AppError::localized(
-                "provider.grokbuild.context_window.invalid",
-                "Grok Build context_window 必须是正整数",
-                "Grok Build context_window must be a positive integer",
-            )
-        })?;
+    if let Some(context_window) = selected_model.get("context_window") {
+        context_window
+            .as_integer()
+            .filter(|value| *value > 0)
+            .ok_or_else(|| {
+                AppError::localized(
+                    "provider.grokbuild.context_window.invalid",
+                    "Grok Build context_window 必须是正整数",
+                    "Grok Build context_window must be a positive integer",
+                )
+            })?;
+    }
 
     Ok(())
 }
@@ -194,15 +218,15 @@ pub fn extract_model_config(config_toml: &str) -> Option<GrokModelConfig> {
             .as_str()?
             .trim_end_matches('/')
             .to_string(),
-        name: selected_model.get("name")?.as_str()?.trim().to_string(),
+        name: optional_non_empty_string(selected_model, "name")
+            .unwrap_or_else(|| default_model.to_string()),
         api_key: optional_non_empty_string(selected_model, "api_key"),
-        env_key: optional_non_empty_string(selected_model, "env_key"),
-        api_backend: selected_model
-            .get("api_backend")?
-            .as_str()?
-            .trim()
-            .to_string(),
-        context_window: selected_model.get("context_window")?.as_integer()?,
+        env_keys: env_key_names(selected_model),
+        api_backend: optional_non_empty_string(selected_model, "api_backend")
+            .unwrap_or_else(|| "chat_completions".to_string()),
+        context_window: selected_model
+            .get("context_window")
+            .and_then(toml::Value::as_integer),
     })
 }
 
@@ -210,7 +234,8 @@ pub fn extract_credentials(config_toml: &str) -> Option<(String, String)> {
     let config = extract_model_config(config_toml)?;
     // Credentials only come from two explicit, config-declared sources:
     //   1. an inline `api_key`, or
-    //   2. the process env var named by `env_key`.
+    //   2. the first set process env var named by `env_key` (a name or a list,
+    //      resolved in order like Grok does).
     //
     // Deliberately NO unconditional fallback to `XAI_API_KEY`: silently
     // substituting a different account's key (when the declared `env_key` var is
@@ -218,24 +243,18 @@ pub fn extract_credentials(config_toml: &str) -> Option<(String, String)> {
     // An unset/missing declared credential must surface as "no credential"
     // (None) so callers can fail loudly rather than transmit the wrong secret.
     let api_key = config.api_key.or_else(|| {
-        config
-            .env_key
-            .as_deref()
-            .and_then(|key| std::env::var(key).ok())
-            .map(|value| value.trim().to_string())
-            .filter(|value| !value.is_empty())
+        config.env_keys.iter().find_map(|key| {
+            std::env::var(key)
+                .ok()
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty())
+        })
     })?;
     Some((config.base_url, api_key))
 }
 
 pub fn extract_base_url(config_toml: &str) -> Option<String> {
     Some(extract_model_config(config_toml)?.base_url)
-}
-
-pub fn has_proxy_placeholder(config_toml: &str, token_placeholder: &str) -> bool {
-    extract_model_config(config_toml)
-        .and_then(|config| config.api_key)
-        .is_some_and(|api_key| api_key == token_placeholder)
 }
 
 /// Remove MCP projections from a provider-owned Grok Build settings snapshot.
@@ -374,6 +393,37 @@ context_window = 500000
         let error = validate_config_toml(&config).expect_err("credentials should be required");
         assert!(error.to_string().contains("api_key"));
         assert!(error.to_string().contains("env_key"));
+    }
+
+    #[test]
+    fn accepts_fields_grok_lets_you_omit() {
+        // name / api_backend / context_window 在 Grok 里都可以省略
+        let minimal = "[models]\ndefault = \"relay\"\n\n[model.relay]\nmodel = \"m\"\nbase_url = \"https://example.com/v1\"\nenv_key = [\"RELAY_KEY\", \"LC_RELAY_KEY\"]\n";
+        validate_config_toml(minimal).expect("Grok defaults apply");
+        let model = extract_model_config(minimal).expect("model config");
+        assert_eq!(model.name, "relay");
+        assert_eq!(model.api_backend, "chat_completions");
+        assert_eq!(model.context_window, None);
+        assert_eq!(model.env_keys, ["RELAY_KEY", "LC_RELAY_KEY"]);
+
+        let zero_window = valid_config().replace("500000", "0");
+        assert!(validate_config_toml(&zero_window).is_err());
+        let empty_keys = minimal.replace("[\"RELAY_KEY\", \"LC_RELAY_KEY\"]", "[]");
+        assert!(validate_config_toml(&empty_keys).is_err());
+    }
+
+    #[test]
+    #[serial]
+    fn resolves_the_first_set_variable_from_an_env_key_list() {
+        let config = valid_env_key_config().replace(
+            "env_key = \"GROK_TEST_API_KEY\"",
+            "env_key = [\"GROK_TEST_UNSET_KEY\", \"GROK_TEST_LIST_KEY\"]",
+        );
+        std::env::remove_var("GROK_TEST_UNSET_KEY");
+        std::env::set_var("GROK_TEST_LIST_KEY", "list-secret");
+        let credentials = extract_credentials(&config).expect("credentials");
+        std::env::remove_var("GROK_TEST_LIST_KEY");
+        assert_eq!(credentials.1, "list-secret");
     }
 
     #[test]

@@ -13,21 +13,17 @@ import {
   FormMessage,
 } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import JsonEditor from "@/components/JsonEditor";
 import { useDarkMode } from "@/hooks/useDarkMode";
 import { providerSchema, type ProviderFormData } from "@/lib/schemas/provider";
-import {
-  buildLocalProxyRequestOverrides,
-  formatRequestOverrideObject,
-} from "@/lib/requestOverrides";
-import type {
-  ClaudeApiKeyField,
-  CodexApiFormat,
-  CodexChatReasoning,
-  PromptCacheRoutingMode,
-  ProviderCategory,
-  ProviderMeta,
-} from "@/types";
+import type { ProviderCategory, ProviderMeta } from "@/types";
 import type { ProviderFormProps, ProviderFormValues } from "./ProviderForm";
 import { BasicFormFields } from "./BasicFormFields";
 import { CodexFormFields } from "./CodexFormFields";
@@ -39,14 +35,13 @@ import {
   type GrokBuildProviderPreset,
 } from "@/config/grokBuildProviderPresets";
 import {
-  codexApiFormatFromWireApi,
   extractCodexBaseUrl,
   extractCodexModelName,
-  extractCodexWireApi,
 } from "@/utils/providerConfigUtils";
 import {
   buildGrokBuildConfig,
-  GROK_BUILD_DEFAULT_API_BACKEND,
+  GROK_BUILD_API_BACKENDS,
+  GROK_BUILD_IMPLICIT_API_BACKEND,
   parseGrokBuildConfig,
   updateGrokBuildConfig,
   validateGrokBuildConfig,
@@ -69,6 +64,14 @@ const grokPresetEntries: Array<{
     preset,
   })),
 ];
+
+/** 输入框里的上下文窗口：空或不是正整数时为 undefined（空表示不写，由 Grok Build 决定）。 */
+function parseContextWindow(value: string): number | undefined {
+  const text = value.trim();
+  if (!/^\d+$/.test(text)) return undefined;
+  const parsed = Number(text);
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : undefined;
+}
 
 export function GrokBuildProviderForm({
   providerId,
@@ -98,18 +101,17 @@ export function GrokBuildProviderForm({
   const [category, setCategory] = useState<ProviderCategory | undefined>(
     initialData?.category ?? "custom",
   );
-  const [isPartner, setIsPartner] = useState(
-    initialData?.meta?.isPartner ?? false,
-  );
-  const [partnerPromotionKey, setPartnerPromotionKey] = useState<string>();
   const [profile, setProfile] = useState(initialConfig.model);
   const [upstreamModel, setUpstreamModel] = useState(
     initialConfig.upstreamModel ?? initialConfig.model,
   );
   const [baseUrl, setBaseUrl] = useState(initialConfig.baseUrl);
   const [apiKey, setApiKey] = useState(initialConfig.apiKey);
+  const [apiBackend, setApiBackend] = useState(initialConfig.apiBackend);
   const [contextWindow, setContextWindow] = useState(
-    String(initialConfig.contextWindow),
+    initialConfig.contextWindow === undefined
+      ? ""
+      : String(initialConfig.contextWindow),
   );
   const [rawConfig, setRawConfig] = useState(
     initialConfigText ?? buildGrokBuildConfig(initialConfig),
@@ -130,44 +132,6 @@ export function GrokBuildProviderForm({
     // 只在打开时投影一次：之后的投影跟着预设切换走。
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-  const [apiFormat, setApiFormat] = useState<CodexApiFormat>(
-    (initialData?.meta?.apiFormat as CodexApiFormat | undefined) ??
-      "openai_responses",
-  );
-  const [anthropicAuthField, setAnthropicAuthField] =
-    useState<ClaudeApiKeyField>(
-      initialData?.meta?.apiKeyField ?? "ANTHROPIC_AUTH_TOKEN",
-    );
-  const [impersonateClaudeCode, setImpersonateClaudeCode] = useState(
-    initialData?.meta?.impersonateClaudeCode === true,
-  );
-  const [maxOutputTokens, setMaxOutputTokens] = useState(
-    initialData?.meta?.maxOutputTokens
-      ? String(initialData.meta.maxOutputTokens)
-      : "",
-  );
-  const [codexChatReasoning, setCodexChatReasoning] =
-    useState<CodexChatReasoning>(initialData?.meta?.codexChatReasoning ?? {});
-  const [promptCacheRouting, setPromptCacheRouting] =
-    useState<PromptCacheRoutingMode>(
-      initialData?.meta?.promptCacheRouting ?? "auto",
-    );
-  const [isFullUrl, setIsFullUrl] = useState(
-    initialData?.meta?.isFullUrl ?? false,
-  );
-  const [customUserAgent, setCustomUserAgent] = useState(
-    initialData?.meta?.customUserAgent ?? "",
-  );
-  const [headersOverride, setHeadersOverride] = useState(
-    formatRequestOverrideObject(
-      initialData?.meta?.localProxyRequestOverrides?.headers,
-    ),
-  );
-  const [bodyOverride, setBodyOverride] = useState(
-    formatRequestOverrideObject(
-      initialData?.meta?.localProxyRequestOverrides?.body,
-    ),
-  );
   const [endpointAutoSelect, setEndpointAutoSelect] = useState(
     initialData?.meta?.endpointAutoSelect ?? true,
   );
@@ -240,9 +204,9 @@ export function GrokBuildProviderForm({
       baseUrl,
       name: form.getValues("name") || initialConfig.name,
       apiKey,
-      contextWindow: Number.parseInt(contextWindow, 10),
+      apiBackend,
+      contextWindow: parseContextWindow(contextWindow),
       ...overrides,
-      apiBackend: GROK_BUILD_DEFAULT_API_BACKEND,
     };
     setRawConfig((current) => updateGrokBuildConfig(current, next));
   };
@@ -251,8 +215,6 @@ export function GrokBuildProviderForm({
     setSelectedPresetId(presetId);
     if (presetId === "custom") {
       setCategory("custom");
-      setIsPartner(false);
-      setPartnerPromotionKey(undefined);
       setPresetEndpoints([]);
       return;
     }
@@ -264,8 +226,6 @@ export function GrokBuildProviderForm({
       form.setValue("icon", grokBuildOfficialPreset.icon ?? "");
       form.setValue("iconColor", grokBuildOfficialPreset.iconColor ?? "");
       setCategory("official");
-      setIsPartner(false);
-      setPartnerPromotionKey(undefined);
       setPresetEndpoints([]);
       setRawConfig("");
       clearDraftProjection();
@@ -280,10 +240,6 @@ export function GrokBuildProviderForm({
     const presetName = preset.nameKey ? String(t(preset.nameKey)) : preset.name;
     const presetBaseUrl = extractCodexBaseUrl(preset.config) ?? "";
     const presetModel = extractCodexModelName(preset.config) ?? profile;
-    const presetApiFormat =
-      preset.apiFormat ??
-      codexApiFormatFromWireApi(extractCodexWireApi(preset.config)) ??
-      "openai_responses";
     const presetApiKey =
       "auth" in preset && typeof preset.auth?.OPENAI_API_KEY === "string"
         ? preset.auth.OPENAI_API_KEY
@@ -293,12 +249,10 @@ export function GrokBuildProviderForm({
     form.setValue("icon", preset.icon ?? "");
     form.setValue("iconColor", preset.iconColor ?? "");
     setCategory(preset.category ?? "custom");
-    setIsPartner(preset.isPartner ?? false);
-    setPartnerPromotionKey(preset.partnerPromotionKey);
     setBaseUrl(presetBaseUrl);
     setApiKey(presetApiKey);
     setUpstreamModel(presetModel);
-    setApiFormat(presetApiFormat);
+    setApiBackend(preset.apiBackend);
     setPresetEndpoints(preset.endpointCandidates ?? []);
     const presetConfig = buildGrokBuildConfig({
       model: profile,
@@ -306,8 +260,8 @@ export function GrokBuildProviderForm({
       baseUrl: presetBaseUrl,
       name: presetName,
       apiKey: presetApiKey,
-      apiBackend: GROK_BUILD_DEFAULT_API_BACKEND,
-      contextWindow: Number.parseInt(contextWindow, 10),
+      apiBackend: preset.apiBackend,
+      contextWindow: parseContextWindow(contextWindow),
     });
     setRawConfig(presetConfig);
     projectGrokDraft(presetConfig, preset.category);
@@ -321,7 +275,10 @@ export function GrokBuildProviderForm({
     setUpstreamModel(parsed.upstreamModel ?? parsed.model);
     setBaseUrl(parsed.baseUrl);
     setApiKey(parsed.apiKey);
-    setContextWindow(String(parsed.contextWindow));
+    setApiBackend(parsed.apiBackend);
+    setContextWindow(
+      parsed.contextWindow === undefined ? "" : String(parsed.contextWindow),
+    );
     if (parsed.name) form.setValue("name", parsed.name);
   };
 
@@ -339,13 +296,12 @@ export function GrokBuildProviderForm({
         settingsConfig: JSON.stringify({ config: rawConfig }),
         presetId: selectedPresetId ?? undefined,
         presetCategory: "official",
-        isPartner: false,
         meta: initialData?.meta,
       });
       return;
     }
 
-    const parsedContextWindow = Number.parseInt(contextWindow, 10);
+    const parsedContextWindow = parseContextWindow(contextWindow);
     const envKey = parseGrokBuildConfig(rawConfig).envKey?.trim();
     if (
       !name ||
@@ -360,7 +316,7 @@ export function GrokBuildProviderForm({
       );
       return;
     }
-    if (!Number.isInteger(parsedContextWindow) || parsedContextWindow <= 0) {
+    if (contextWindow.trim() && parsedContextWindow === undefined) {
       toast.error(
         t("grokBuild.contextWindowInvalid", {
           defaultValue: "上下文窗口必须是正整数",
@@ -375,7 +331,7 @@ export function GrokBuildProviderForm({
       baseUrl,
       name,
       apiKey,
-      apiBackend: GROK_BUILD_DEFAULT_API_BACKEND,
+      apiBackend,
       contextWindow: parsedContextWindow,
     });
     const configError = validateGrokBuildConfig(finalConfig);
@@ -389,41 +345,18 @@ export function GrokBuildProviderForm({
       return;
     }
 
-    const requestOverrides = buildLocalProxyRequestOverrides(
-      headersOverride,
-      bodyOverride,
-    );
-    if (requestOverrides.error) {
-      toast.error(requestOverrides.error);
-      return;
-    }
-
     const customEndpoints = Object.fromEntries(
       draftCustomEndpoints.map((url) => [
         url,
         { url, addedAt: Date.now(), lastUsed: undefined },
       ]),
     );
-    const parsedMaxOutputTokens = Number.parseInt(maxOutputTokens, 10);
     const initialMeta = { ...(initialData?.meta ?? {}) };
     delete initialMeta.custom_endpoints;
+    delete initialMeta.apiKeyField;
     const meta: ProviderMeta = {
       ...initialMeta,
-      apiFormat,
-      apiKeyField: anthropicAuthField,
-      isFullUrl,
       endpointAutoSelect,
-      isPartner,
-      partnerPromotionKey,
-      impersonateClaudeCode,
-      promptCacheRouting,
-      codexChatReasoning,
-      customUserAgent: customUserAgent.trim() || undefined,
-      localProxyRequestOverrides: requestOverrides.overrides,
-      maxOutputTokens:
-        Number.isInteger(parsedMaxOutputTokens) && parsedMaxOutputTokens > 0
-          ? parsedMaxOutputTokens
-          : undefined,
     };
     if (!providerId && Object.keys(customEndpoints).length > 0) {
       meta.custom_endpoints = customEndpoints;
@@ -436,7 +369,6 @@ export function GrokBuildProviderForm({
       settingsConfig: JSON.stringify({ config: finalConfig }),
       presetId: selectedPresetId ?? undefined,
       presetCategory: category ?? "custom",
-      isPartner,
       meta,
     };
 
@@ -477,16 +409,12 @@ export function GrokBuildProviderForm({
               category={category}
               shouldShowApiKeyLink={Boolean(apiKeyLinkUrl)}
               websiteUrl={apiKeyLinkUrl}
-              isPartner={isPartner}
-              partnerPromotionKey={partnerPromotionKey}
               shouldShowSpeedTest
               codexBaseUrl={baseUrl}
               onBaseUrlChange={(value) => {
                 setBaseUrl(value);
                 syncStructuredConfig({ baseUrl: value });
               }}
-              isFullUrl={isFullUrl}
-              onFullUrlChange={setIsFullUrl}
               isEndpointModalOpen={isEndpointModalOpen}
               onEndpointModalToggle={setIsEndpointModalOpen}
               onCustomEndpointsChange={setDraftCustomEndpoints}
@@ -497,28 +425,44 @@ export function GrokBuildProviderForm({
                 setUpstreamModel(value);
                 syncStructuredConfig({ upstreamModel: value });
               }}
-              apiFormat={apiFormat}
-              onApiFormatChange={(value) => {
-                setApiFormat(value);
-              }}
-              anthropicAuthField={anthropicAuthField}
-              onAnthropicAuthFieldChange={setAnthropicAuthField}
-              impersonateClaudeCode={impersonateClaudeCode}
-              onImpersonateClaudeCodeChange={setImpersonateClaudeCode}
-              maxOutputTokens={maxOutputTokens}
-              onMaxOutputTokensChange={setMaxOutputTokens}
-              codexChatReasoning={codexChatReasoning}
-              onCodexChatReasoningChange={setCodexChatReasoning}
-              promptCacheRouting={promptCacheRouting}
-              onPromptCacheRoutingChange={setPromptCacheRouting}
               speedTestEndpoints={speedTestEndpoints}
-              customUserAgent={customUserAgent}
-              onCustomUserAgentChange={setCustomUserAgent}
-              localProxyHeadersOverride={headersOverride}
-              onLocalProxyHeadersOverrideChange={setHeadersOverride}
-              localProxyBodyOverride={bodyOverride}
-              onLocalProxyBodyOverrideChange={setBodyOverride}
             />
+
+            <div className="space-y-2">
+              <FormLabel htmlFor="grokbuild-api-backend">
+                {t("grokBuild.apiBackend", { defaultValue: "API 协议" })}
+              </FormLabel>
+              <Select
+                value={apiBackend ?? GROK_BUILD_IMPLICIT_API_BACKEND}
+                onValueChange={(value) => {
+                  setApiBackend(value);
+                  syncStructuredConfig({ apiBackend: value });
+                }}
+              >
+                <SelectTrigger id="grokbuild-api-backend">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {GROK_BUILD_API_BACKENDS.map((option) => (
+                    <SelectItem key={option.value} value={option.value}>
+                      {option.label}
+                    </SelectItem>
+                  ))}
+                  {apiBackend &&
+                    !GROK_BUILD_API_BACKENDS.some(
+                      (option) => option.value === apiBackend,
+                    ) && (
+                      <SelectItem value={apiBackend}>{apiBackend}</SelectItem>
+                    )}
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-fg-2">
+                {t("grokBuild.apiBackendHint", {
+                  defaultValue:
+                    "Grok Build 按这个协议请求上游，要选上游支持的。config.toml 里没写时 Grok 用 Chat Completions。",
+                })}
+              </p>
+            </div>
 
             <FormItem>
               <FormLabel htmlFor="grokbuild-context-window">
@@ -531,11 +475,14 @@ export function GrokBuildProviderForm({
                 step={1}
                 inputMode="numeric"
                 value={contextWindow}
+                placeholder={t("grokBuild.contextWindowDefault", {
+                  defaultValue: "默认（由 Grok Build 决定）",
+                })}
                 onChange={(event) => {
                   const value = event.target.value;
                   setContextWindow(value);
                   syncStructuredConfig({
-                    contextWindow: Number.parseInt(value, 10),
+                    contextWindow: parseContextWindow(value),
                   });
                 }}
               />

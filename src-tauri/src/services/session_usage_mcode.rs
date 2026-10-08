@@ -1,12 +1,14 @@
 //! Import MCode's committed token-usage projection without modifying its database.
 use crate::database::{lock_conn, Database};
 use crate::error::AppError;
-use crate::proxy::usage::{calculator::CostCalculator, parser::TokenUsage};
 use crate::services::sql_helpers::INPUT_TOKEN_SEMANTICS_FRESH;
 use crate::services::{session_usage::SessionSyncResult, usage_stats::find_model_pricing};
 use crate::session_manager::providers::mcode;
+use crate::token_usage::{
+    calculator::{CostCalculator, ServiceTier},
+    parser::TokenUsage,
+};
 use rusqlite::params;
-use rust_decimal::Decimal;
 
 pub fn sync_mcode_usage(db: &Database) -> Result<SessionSyncResult, AppError> {
     if !mcode::database_path().exists() {
@@ -44,38 +46,54 @@ fn sync_from_database(
         let model = native_model
             .split_once('/')
             .map_or(native_model.as_str(), |(_, model)| model);
+        let created_at = row.get::<_, i64>(3)? / 1000;
         let usage = TokenUsage {
             input_tokens: row.get(4)?,
             output_tokens: row.get::<_, u32>(5)?.saturating_add(row.get(6)?),
             cache_read_tokens: row.get(7)?,
             cache_creation_tokens: row.get(8)?,
-            model: Some(model.into()),
-            message_id: None,
+            cache_creation_1h_tokens: 0,
         };
-        let native_cost: Option<f64> = row.get(9)?;
+        // mcode 记下的费用（含 0：免费模型）优先，标记 native_cost 让重算不覆盖
+        let native_cost = row
+            .get::<_, Option<f64>>(9)?
+            .filter(|cost| cost.is_finite() && *cost >= 0.0);
         let cost = match native_cost {
-            Some(cost) if cost.is_finite() && cost >= 0.0 => cost.to_string(),
-            _ => find_model_pricing(&tx, model)
+            Some(cost) => cost.to_string(),
+            None => find_model_pricing(&tx, model)
                 .map(|pricing| {
-                    CostCalculator::calculate_for_app("mcode", &usage, &pricing, Decimal::ONE)
+                    CostCalculator::calculate(&usage, &pricing, ServiceTier::Standard, created_at)
                         .total_cost
                         .to_string()
                 })
                 .unwrap_or_else(|| "0".into()),
         };
         let request_id = format!("mcode:{session_id}:{id}");
+        // 保留期以前的日期已经汇总，导入过的再导入会在下次汇总时重复计入
+        if !crate::services::usage_rebuild::import_gate(
+            &tx,
+            "mcode_session",
+            &request_id,
+            created_at,
+        ) {
+            result.skipped += 1;
+            cursor = id;
+            continue;
+        }
         let changed = tx.execute(
             "INSERT OR IGNORE INTO proxy_request_logs (
                 request_id, provider_id, app_type, model, request_model,
                 input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens,
                 input_cost_usd, output_cost_usd, cache_read_cost_usd, cache_creation_cost_usd,
                 total_cost_usd, latency_ms, status_code, session_id, provider_type,
-                is_streaming, cost_multiplier, created_at, data_source, input_token_semantics
+                is_streaming, cost_multiplier, created_at, data_source, input_token_semantics,
+                native_cost
              ) VALUES (?1, '_mcode_session', 'mcode', ?2, ?2, ?3, ?4, ?5, ?6,
-                       '0', '0', '0', '0', ?7, 0, 200, ?8, 'mcode_session', 1, '1', ?9, 'mcode_session', ?10)",
+                       '0', '0', '0', '0', ?7, 0, 200, ?8, 'mcode_session', 1, '1', ?9, 'mcode_session', ?10, ?11)",
             params![request_id, model, usage.input_tokens, usage.output_tokens,
                 usage.cache_read_tokens, usage.cache_creation_tokens, cost, session_id,
-                row.get::<_, i64>(3)? / 1000, INPUT_TOKEN_SEMANTICS_FRESH],
+                created_at, INPUT_TOKEN_SEMANTICS_FRESH,
+                i64::from(native_cost.is_some())],
         )?;
         result.imported += changed as u32;
         result.skipped += u32::from(changed == 0);
@@ -172,6 +190,46 @@ mod tests {
                 .imported,
             1
         );
+    }
+
+    /// 重建会清掉水位；已经汇总过的旧行靠导入账本挡住，不会再导入一次。
+    #[test]
+    fn mcode_rows_already_rolled_up_are_not_reimported_after_the_watermark_resets() {
+        crate::services::usage_rebuild::set_test_import_floor(true);
+        let source = rusqlite::Connection::open_in_memory().unwrap();
+        source.execute_batch("CREATE TABLE local_runtime_token_usage (
+            id INTEGER PRIMARY KEY,session_id TEXT,model TEXT,ts INTEGER,input_tokens INTEGER,
+            output_tokens INTEGER,reasoning_tokens INTEGER,cache_read_tokens INTEGER,
+            cache_write_tokens INTEGER,cost_usd REAL);
+            INSERT INTO local_runtime_token_usage VALUES (1,'s1','test/model',100000,10,20,0,0,0,0.1);").unwrap();
+        let db = Database::memory().unwrap();
+        assert_eq!(
+            sync_from_database(&db, &source, "mcode-test")
+                .unwrap()
+                .imported,
+            1
+        );
+        db.rollup_and_prune(30).unwrap();
+        db.conn
+            .lock()
+            .unwrap()
+            .execute("DELETE FROM session_log_sync", [])
+            .unwrap();
+
+        let again = sync_from_database(&db, &source, "mcode-test").unwrap();
+
+        crate::services::usage_rebuild::set_test_import_floor(false);
+        assert_eq!((again.imported, again.skipped), (0, 1));
+        let conn = db.conn.lock().unwrap();
+        let (details, requests): (i64, i64) = conn
+            .query_row(
+                "SELECT (SELECT COUNT(*) FROM proxy_request_logs),
+                        (SELECT SUM(request_count) FROM usage_daily_rollups)",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!((details, requests), (0, 1));
     }
 }
 

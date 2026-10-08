@@ -1,31 +1,11 @@
 // 供应商配置处理工具函数
 
 import type { TemplateValueConfig } from "../config/claudeProviderPresets";
-import type { CodexApiFormat } from "@/types";
 import { normalizeTomlText } from "@/utils/textNormalization";
 import { parse as parseToml } from "smol-toml";
 
 const isPlainObject = (value: unknown): value is Record<string, any> => {
   return Object.prototype.toString.call(value) === "[object Object]";
-};
-
-// 验证JSON配置格式
-export const validateJsonConfig = (
-  value: string,
-  fieldName: string = "配置",
-): string => {
-  if (!value.trim()) {
-    return "";
-  }
-  try {
-    const parsed = JSON.parse(value);
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-      return `${fieldName}必须是 JSON 对象`;
-    }
-    return "";
-  } catch {
-    return `${fieldName}JSON格式错误，请检查语法`;
-  }
 };
 
 // 读取配置中的 API Key（支持 Claude, Codex, Gemini）
@@ -597,97 +577,6 @@ const unescapeTomlBasicString = (value: string): string =>
     },
   );
 
-const CODEX_CHAT_WIRE_API_VALUES = new Set([
-  "chat",
-  "chat_completions",
-  "chat-completions",
-  "openai_chat",
-  "openai-chat",
-  "openai_chat_completions",
-]);
-
-// 判断给定的 wire_api 字符串是否表示 Codex 的 Chat Completions 协议
-export const isCodexChatWireApi = (
-  wireApi: string | undefined | null,
-): boolean =>
-  CODEX_CHAT_WIRE_API_VALUES.has((wireApi ?? "").trim().toLowerCase());
-
-export const isCodexAnthropicWireApi = (
-  wireApi: string | undefined | null,
-): boolean =>
-  [
-    "anthropic",
-    "anthropic_messages",
-    "anthropic-messages",
-    "messages",
-    "claude",
-  ].includes((wireApi ?? "").trim().toLowerCase());
-
-export const codexApiFormatFromWireApi = (
-  wireApi: string | undefined | null,
-): CodexApiFormat | undefined => {
-  if (isCodexChatWireApi(wireApi)) return "openai_chat";
-  if (isCodexAnthropicWireApi(wireApi)) return "anthropic";
-  switch ((wireApi ?? "").trim().toLowerCase()) {
-    case "responses":
-    case "openai_responses":
-    case "openai-responses":
-      return "openai_responses";
-    default:
-      return undefined;
-  }
-};
-
-// 从 Codex 的 TOML 配置文本中提取 wire_api（支持单/双引号）
-export const extractCodexWireApi = (
-  configText: string | undefined | null,
-): string | undefined => {
-  try {
-    const raw = typeof configText === "string" ? configText : "";
-    const text = normalizeTomlText(raw);
-    if (!text) return undefined;
-
-    const lines = text.split("\n");
-    const targetSectionName = getCodexProviderSectionName(text);
-
-    if (targetSectionName) {
-      const sectionRange = getTomlSectionRange(lines, targetSectionName);
-      if (sectionRange) {
-        const match = findTomlAssignmentInRange(
-          lines,
-          TOML_WIRE_API_PATTERN,
-          sectionRange.bodyStartIndex,
-          sectionRange.bodyEndIndex,
-          targetSectionName,
-        );
-        if (match?.value) {
-          return match.value;
-        }
-      }
-    }
-
-    const topLevelMatch = findTomlAssignmentInRange(
-      lines,
-      TOML_WIRE_API_PATTERN,
-      0,
-      getTopLevelEndIndex(lines),
-    );
-    if (topLevelMatch?.value) {
-      return topLevelMatch.value;
-    }
-
-    const fallbackAssignments = getRecoverableCodexProviderAssignments(
-      findTomlAssignments(lines, TOML_WIRE_API_PATTERN),
-      targetSectionName,
-    );
-    return fallbackAssignments.length === 1
-      ? fallbackAssignments[0].value
-      : undefined;
-  } catch {
-    return undefined;
-  }
-};
-
 // 在 Codex 的 TOML 配置文本中写入或更新 wire_api 字段
 export const setCodexWireApi = (
   configText: string,
@@ -1040,21 +929,6 @@ export const updateCodexExperimentalBearerToken = (
       : `experimental_bearer_token = "${escaped}"`;
   }
   return finalizeTomlText(lines);
-};
-
-// 从 Provider 对象中提取 Codex base_url（当 settingsConfig.config 为 TOML 字符串时）
-export const getCodexBaseUrl = (
-  provider: { settingsConfig?: Record<string, any> } | undefined | null,
-): string | undefined => {
-  try {
-    const text =
-      typeof provider?.settingsConfig?.config === "string"
-        ? (provider as any).settingsConfig.config
-        : "";
-    return extractCodexBaseUrl(text);
-  } catch {
-    return undefined;
-  }
 };
 
 // 在 Codex 的 TOML 配置文本中写入或更新 base_url 字段

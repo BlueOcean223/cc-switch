@@ -5,7 +5,7 @@ import { homeDir, join } from "@tauri-apps/api/path";
 import { settingsApi, type AppId } from "@/lib/api";
 import type { SettingsFormState } from "./useSettingsForm";
 
-export type DirectoryAppId = Exclude<AppId, "claude-desktop" | "mcode">;
+export type DirectoryAppId = Exclude<AppId, "mcode">;
 type AppDirectoryKey =
   | "claude"
   | "codex"
@@ -67,7 +67,7 @@ const sanitizeDir = (value?: string | null): string | undefined => {
 const computeDefaultAppConfigDir = async (): Promise<string | undefined> => {
   try {
     const home = await homeDir();
-    return await join(home, ".cc-switch");
+    return await join(home, ".ccs-lite");
   } catch (error) {
     console.error(
       "[useDirectorySettings] Failed to resolve default app config dir",

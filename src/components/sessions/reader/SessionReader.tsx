@@ -486,7 +486,8 @@ export function SessionReader({
         })
       : session.providerId === "hermes"
         ? t("sessionManager.noResumeHermes", {
-            defaultValue: "暂不支持从命令行恢复 Hermes 会话",
+            defaultValue:
+              "这个 Hermes 会话只有 JSONL 记录，不在 state.db 里，无法用 hermes --resume 恢复",
           })
         : t("sessionManager.noResumeCommand", {
             defaultValue: "此会话无法恢复",

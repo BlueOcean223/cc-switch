@@ -5,7 +5,6 @@ import type { ProviderPreset } from "@/config/claudeProviderPresets";
 import type { CodexProviderPreset } from "@/config/codexProviderPresets";
 import type { GeminiProviderPreset } from "@/config/geminiProviderPresets";
 import type { OpenCodeProviderPreset } from "@/config/opencodeProviderPresets";
-import type { ClaudeDesktopProviderPreset } from "@/config/claudeDesktopProviderPresets";
 
 type PresetEntry = {
   id: string;
@@ -13,8 +12,7 @@ type PresetEntry = {
     | ProviderPreset
     | CodexProviderPreset
     | GeminiProviderPreset
-    | OpenCodeProviderPreset
-    | ClaudeDesktopProviderPreset;
+    | OpenCodeProviderPreset;
 };
 
 interface UseApiKeyLinkProps {
@@ -70,11 +68,6 @@ export function useApiKeyLink({
     return formWebsiteUrl || "";
   }, [currentPresetEntry, formWebsiteUrl]);
 
-  // 提取合作伙伴信息
-  const isPartner = useMemo(() => {
-    return currentPresetEntry?.preset.isPartner ?? false;
-  }, [currentPresetEntry]);
-
   const partnerPromotionKey = useMemo(() => {
     return currentPresetEntry?.preset.partnerPromotionKey;
   }, [currentPresetEntry]);
@@ -82,7 +75,6 @@ export function useApiKeyLink({
   return {
     shouldShowApiKeyLink:
       appId === "claude" ||
-      appId === "claude-desktop" ||
       appId === "codex" ||
       appId === "gemini" ||
       appId === "opencode" ||
@@ -91,7 +83,6 @@ export function useApiKeyLink({
         ? shouldShowApiKeyLink
         : false,
     websiteUrl: getWebsiteUrl,
-    isPartner,
     partnerPromotionKey,
   };
 }

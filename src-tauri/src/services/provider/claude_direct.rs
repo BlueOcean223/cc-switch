@@ -1,7 +1,7 @@
 //! 写 Claude Code 的 `settings.json`：只替换关键字段和独有字段，其余字节不碰。
 //!
-//! 写 Claude live 的入口（切换、新增第一个供应商、编辑当前供应商、同步、统一供应商、
-//! 进入 / 退出代理）都走这里：先拿应用写锁，再经 `mode::operation` 记下 pending、发布。
+//! 写 Claude live 的入口（切换、新增第一个供应商、编辑当前供应商、同步、统一供应商）
+//! 都走这里：先拿应用写锁，再经 `mode::operation` 记下 pending、发布。
 //! 不回填、不合并通用配置片段、不注入上下文默认值：用户的设置本来就留在 live 里。
 
 use crate::app_config::AppType;
@@ -10,7 +10,7 @@ use crate::database::Database;
 use crate::error::AppError;
 use crate::live::engine::LiveFile;
 use crate::live::patch::json::JsonPatch;
-use crate::live::project::claude::{direct_patch, ClaudeProjection};
+use crate::live::project::claude::{clearing_patch, direct_patch, ClaudeProjection};
 use crate::mode::operation::{AppWrite, FileChange, OperationReport};
 use crate::mode::state::{op, PendingTarget};
 use crate::provider::Provider;
@@ -43,6 +43,21 @@ pub(crate) fn reapply(
     target: &Provider,
 ) -> Result<OperationReport, AppError> {
     write(db, prev, target, None)
+}
+
+/// 把当前供应商 `target` 重新写进 live，并删掉 `all` 里任一供应商带进来的独有字段：
+/// 修复上游本地路由留下的配置。不改指针。
+pub(crate) fn reapply_clearing(
+    db: &Database,
+    all: &[&Provider],
+    target: &Provider,
+) -> Result<OperationReport, AppError> {
+    let all: Vec<ClaudeProjection> = all
+        .iter()
+        .map(|provider| ClaudeProjection::of(&provider.settings_config))
+        .collect();
+    let patch = clearing_patch(&all, &ClaudeProjection::of(&target.settings_config));
+    run(db, op::APPLY, Some(&patch), PendingTarget::default())
 }
 
 fn write(

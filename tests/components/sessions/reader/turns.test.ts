@@ -123,11 +123,14 @@ describe("buildTurns · 6 份契约 fixture", () => {
     expect(t3.final?.messageIndex).toBe(30);
   });
 
-  it("Gemini：纯注入轮不出行；同一条消息里调用、结果与最终回复", () => {
+  it("Gemini：纯注入轮不出行；并行调用的结果挂在调用下，最终回复是下一条消息", () => {
     const turns = turnsOf("gemini");
-    expect(turns[0]).toMatchObject({ key: "t0", injected: [0], steps: [] });
+    expect(turns[0]).toMatchObject({ key: "t0", injected: [0, 1], steps: [] });
     expect(turns[0].question).toBeUndefined();
-    expect(turns[1].final?.messageIndex).toBe(2);
+    expect(turns[1].question?.images).toHaveLength(1);
+    const tools = turns[1].steps.filter((step) => step.kind === "tool");
+    expect(tools.map((step) => step.status)).toEqual(["success", "error"]);
+    expect(turns[1].final?.messageIndex).toBe(4);
     expect(turns[1].trailingEvents.map((e) => e.block.kind)).toEqual(["error"]);
     expect(turns[2].final).toBeUndefined();
     const rows = flattenRows(turns);
@@ -765,7 +768,11 @@ describe("flattenRows · 折叠规则 §6.5", () => {
     expect(rows[0]).toMatchObject({ messageIndex: 0, turn: 0 });
     // 纯注入轮打开开关后也出行
     const gemini = flattenRows(turnsOf("gemini"), { showInjected: true });
-    expect(rowKinds(gemini).slice(0, 2)).toEqual(["injected", "turn_divider"]);
+    expect(rowKinds(gemini).slice(0, 3)).toEqual([
+      "injected",
+      "injected",
+      "turn_divider",
+    ]);
   });
 
   it("只看对话：只留提问与最终回复，空轮不出分轮线", () => {

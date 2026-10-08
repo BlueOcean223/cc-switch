@@ -113,6 +113,19 @@ pub fn direct_patch(prev: Option<&ClaudeProjection>, target: &ClaudeProjection) 
     }
 }
 
+/// 把 `target` 重新写进 live，并删掉 `all` 里任一供应商带进来的独有字段（值相同才删）。
+/// 修复上游本地路由留下的配置时用：不知道上游路由的是哪一家，只能按所有供应商清理。
+pub fn clearing_patch(all: &[ClaudeProjection], target: &ClaudeProjection) -> JsonPatch {
+    let mut patch = direct_patch(None, target);
+    let env = KeyPath::new(&["env"]);
+    patch.remove_if.extend(
+        all.iter()
+            .flat_map(|projection| &projection.exclusive)
+            .map(|(key, value)| (env.child(key), vec![value.clone()])),
+    );
+    patch
+}
+
 /// 在内存里算出「切到 `target` 之后 `settings.json` 会是什么样」，不写盘。
 /// 编辑器显示和切换用的是同一个补丁。
 pub fn project_onto(
@@ -127,14 +140,8 @@ pub fn project_onto(
 }
 
 /// 把关键字段和独有字段存回供应商行：行里这两类键换成 `projection` 的，其余内容原样
-/// 保留（降级后旧版会整份使用这些行）。
-///
-/// 存量 Bedrock API Key 行（顶层 `apiKey`，`env` 里没有 `AWS_BEARER_TOKEN_BEDROCK`）的 Key
-/// 仍存回顶层：投影把它挪进了 `env`，编辑器显示的也是 `env` 里的，但旧版的代理只从顶层
-/// 读，存进 `env` 的话降级后代理模式就找不到 Key。
+/// 保留。
 pub fn store_into_row(row: &Value, projection: &ClaudeProjection) -> Value {
-    let legacy = legacy_bedrock_shape(row, projection);
-    let projection = legacy.as_ref().unwrap_or(projection);
     let mut row = if row.is_object() {
         row.clone()
     } else {
@@ -172,251 +179,6 @@ pub fn store_into_row(row: &Value, projection: &ClaudeProjection) -> Value {
             .expect("env is an object now");
     }
     row
-}
-
-/// 行是存量 Bedrock API Key 的写法、存回的内容还是 Bedrock 带 Key 时，把 Key 放回顶层
-/// `apiKey`（投影的反向转换）。
-fn legacy_bedrock_shape(row: &Value, projection: &ClaudeProjection) -> Option<ClaudeProjection> {
-    let legacy_row = row.get("apiKey").is_some()
-        && row
-            .get("env")
-            .and_then(|env| env.get(BEDROCK_BEARER_ENV))
-            .is_none();
-    let bedrock = projection
-        .env
-        .get("CLAUDE_CODE_USE_BEDROCK")
-        .is_some_and(is_truthy);
-    if !legacy_row || !bedrock || projection.top.contains_key("apiKey") {
-        return None;
-    }
-    let mut projection = projection.clone();
-    let key = projection.env.shift_remove(BEDROCK_BEARER_ENV)?;
-    projection.top.insert("apiKey".to_string(), key);
-    Some(projection)
-}
-
-/// 代理模式下写进客户端的凭据占位符。旧版只认这个字面值来识别接管态，不能改。
-pub const PROXY_TOKEN_PLACEHOLDER: &str = "PROXY_MANAGED";
-
-/// 代理契约里的稳定模型别名：客户端只看到这几个名字，真实模型由代理映射。
-const PROXY_HAIKU_ALIAS: &str = "claude-haiku-4-5";
-const PROXY_SONNET_ALIAS: &str = "claude-sonnet-5";
-const PROXY_OPUS_ALIAS: &str = "claude-opus-5";
-const PROXY_FABLE_ALIAS: &str = "claude-fable-5";
-// 写给 Claude Code 时沿用文档示例的大写形式；解析侧大小写不敏感。
-pub(crate) const ONE_M_MARKER_FOR_CLIENT: &str = "[1M]";
-
-/// 代理契约里怎么写凭据。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ProxyAuth {
-    /// 路由供应商的行里有 `ANTHROPIC_AUTH_TOKEN` / `ANTHROPIC_API_KEY` 就沿用同名键写占位
-    /// 符，都没有就写 `ANTHROPIC_AUTH_TOKEN`。
-    FollowRow,
-    /// 托管账号（Copilot、Codex、xAI）：只写一个键，两个都在会触发 Claude Code 的
-    /// 「Both ANTHROPIC_AUTH_TOKEN and ANTHROPIC_API_KEY set」警告（#4919）。
-    /// - Codex 系要 `ANTHROPIC_AUTH_TOKEN`，缺了会弹登录提示（#3784）；
-    /// - Copilot 默认也用 `ANTHROPIC_AUTH_TOKEN`：`ANTHROPIC_API_KEY` 占位会触发自定义 key
-    ///   确认框，默认选项是拒绝，之后就是未登录；只有表单显式选了 `ANTHROPIC_API_KEY`
-    ///   才用它，避开和 /login 的 key 冲突（#1049）。
-    Managed { auth_token: bool },
-}
-
-/// Stack 模式下 Claude Code 四档别名都指向的模型：默认那家列表里的第一个
-/// （`mode::stack::claude_route_default`）。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct StackRoleModel<'a> {
-    /// 发布给客户端的 Stack id，1M 模型带 `[1M]`。
-    pub id: &'a str,
-    /// 模型自己的显示名（不带供应商名）。
-    pub name: &'a str,
-}
-
-/// 代理契约：代理模式下 `settings.json` 的关键字段和独有字段。
-///
-/// - 关键字段：本地代理地址、占位凭据、按角色写的模型；其余关键字段（协议选择器、云凭据、
-///   `/model` 的选择等）一律清空，否则 Claude Code 会绕过代理；
-///   - 路由模式（`stack_default` 为 `None`）：稳定的 `claude-*` 别名，显示名跟着路由供应商，
-///     真实模型由代理映射；
-///   - Stack 模式：四档都写 `stack_default` 的 Stack id，请求直达默认那家的这个模型；
-/// - 独有字段：路由供应商的。它们在客户端发请求时生效，代理不能替它补上。
-pub fn proxy_projection(
-    route: &ClaudeProjection,
-    proxy_url: &str,
-    auth: ProxyAuth,
-    stack_default: Option<StackRoleModel<'_>>,
-) -> ClaudeProjection {
-    let mut env = Map::new();
-    env.insert(
-        "ANTHROPIC_BASE_URL".to_string(),
-        Value::String(proxy_url.to_string()),
-    );
-    let fields = match stack_default {
-        Some(model) => stack_model_fields(model),
-        None => proxy_model_fields(&route.env),
-    };
-    for (key, value) in fields {
-        env.insert(key.to_string(), Value::String(value));
-    }
-    let placeholder = Value::String(PROXY_TOKEN_PLACEHOLDER.to_string());
-    match auth {
-        ProxyAuth::FollowRow => {
-            let mut wrote_any = false;
-            for key in ["ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY"] {
-                if route.env.contains_key(key) {
-                    env.insert(key.to_string(), placeholder.clone());
-                    wrote_any = true;
-                }
-            }
-            if !wrote_any {
-                env.insert("ANTHROPIC_AUTH_TOKEN".to_string(), placeholder);
-            }
-        }
-        ProxyAuth::Managed { auth_token } => {
-            let key = if auth_token {
-                "ANTHROPIC_AUTH_TOKEN"
-            } else {
-                "ANTHROPIC_API_KEY"
-            };
-            env.insert(key.to_string(), placeholder);
-        }
-    }
-    ClaudeProjection {
-        top: Map::new(),
-        env,
-        exclusive: route.exclusive.clone(),
-    }
-}
-
-/// 按角色写的模型别名和显示名。
-///
-/// 回落顺序：haiku 用自己的、再用 `ANTHROPIC_SMALL_FAST_MODEL`、再用 `ANTHROPIC_MODEL`；
-/// sonnet、opus 用自己的、再用 `ANTHROPIC_MODEL`、再用 `ANTHROPIC_SMALL_FAST_MODEL`；
-/// fable 没配就不写（映射侧会 fable→opus 降级，和官方一致）。上游模型带 1M 标记时，
-/// 别名也带上，Claude Code 才按 1M 计算窗口。
-fn proxy_model_fields(env: &Map<String, Value>) -> Vec<(&'static str, String)> {
-    let default_model = env_string(env, "ANTHROPIC_MODEL");
-    let small_fast_model = env_string(env, "ANTHROPIC_SMALL_FAST_MODEL");
-    let haiku = env_string(env, "ANTHROPIC_DEFAULT_HAIKU_MODEL")
-        .or(small_fast_model)
-        .or(default_model);
-    let sonnet = env_string(env, "ANTHROPIC_DEFAULT_SONNET_MODEL")
-        .or(default_model)
-        .or(small_fast_model);
-    let opus = env_string(env, "ANTHROPIC_DEFAULT_OPUS_MODEL")
-        .or(default_model)
-        .or(small_fast_model);
-    let fable = env_string(env, "ANTHROPIC_DEFAULT_FABLE_MODEL");
-
-    let mut fields = Vec::with_capacity(9);
-    let roles = [
-        (
-            "ANTHROPIC_DEFAULT_HAIKU_MODEL",
-            "ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME",
-            PROXY_HAIKU_ALIAS,
-            false,
-            haiku,
-        ),
-        (
-            "ANTHROPIC_DEFAULT_SONNET_MODEL",
-            "ANTHROPIC_DEFAULT_SONNET_MODEL_NAME",
-            PROXY_SONNET_ALIAS,
-            true,
-            sonnet,
-        ),
-        (
-            "ANTHROPIC_DEFAULT_OPUS_MODEL",
-            "ANTHROPIC_DEFAULT_OPUS_MODEL_NAME",
-            PROXY_OPUS_ALIAS,
-            true,
-            opus,
-        ),
-        (
-            "ANTHROPIC_DEFAULT_FABLE_MODEL",
-            "ANTHROPIC_DEFAULT_FABLE_MODEL_NAME",
-            PROXY_FABLE_ALIAS,
-            true,
-            fable,
-        ),
-    ];
-    for (model_key, name_key, alias, supports_one_m, upstream) in roles {
-        let Some(upstream) = upstream else {
-            continue;
-        };
-        let mut client_model = alias.to_string();
-        if supports_one_m && has_one_m_marker(upstream) {
-            client_model.push_str(ONE_M_MARKER_FOR_CLIENT);
-        }
-        fields.push((model_key, client_model));
-        let display_name = env_string(env, name_key)
-            .map(str::to_string)
-            .unwrap_or_else(|| {
-                crate::proxy::model_mapper::strip_one_m_suffix_for_upstream(upstream)
-                    .trim()
-                    .to_string()
-            });
-        if !display_name.is_empty() {
-            fields.push((name_key, display_name));
-        }
-    }
-    if let Some(subagent) = env_string(env, "CLAUDE_CODE_SUBAGENT_MODEL") {
-        fields.push(("CLAUDE_CODE_SUBAGENT_MODEL", subagent.to_string()));
-    }
-    fields
-}
-
-/// Stack 模式的四档：都写同一个 Stack id，显示名也一样。haiku 档不带 1M 标记（和路由契约
-/// 一样，haiku 别名不写 1M；去掉标记的 id 解析到同一个模型）。不写
-/// `CLAUDE_CODE_SUBAGENT_MODEL`：子代理跟随主模型，也就是用户在 `/model` 里选的。
-fn stack_model_fields(model: StackRoleModel<'_>) -> Vec<(&'static str, String)> {
-    let haiku = model
-        .id
-        .strip_suffix(ONE_M_MARKER_FOR_CLIENT)
-        .unwrap_or(model.id);
-    let roles = [
-        (
-            "ANTHROPIC_DEFAULT_HAIKU_MODEL",
-            "ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME",
-            haiku,
-        ),
-        (
-            "ANTHROPIC_DEFAULT_SONNET_MODEL",
-            "ANTHROPIC_DEFAULT_SONNET_MODEL_NAME",
-            model.id,
-        ),
-        (
-            "ANTHROPIC_DEFAULT_OPUS_MODEL",
-            "ANTHROPIC_DEFAULT_OPUS_MODEL_NAME",
-            model.id,
-        ),
-        (
-            "ANTHROPIC_DEFAULT_FABLE_MODEL",
-            "ANTHROPIC_DEFAULT_FABLE_MODEL_NAME",
-            model.id,
-        ),
-    ];
-    let name = model.name.trim();
-    let mut fields = Vec::with_capacity(roles.len() * 2);
-    for (model_key, name_key, id) in roles {
-        fields.push((model_key, id.to_string()));
-        if !name.is_empty() {
-            fields.push((name_key, name.to_string()));
-        }
-    }
-    fields
-}
-
-pub(crate) fn env_string<'a>(env: &'a Map<String, Value>, key: &str) -> Option<&'a str> {
-    env.get(key)
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-}
-
-pub(crate) fn has_one_m_marker(model: &str) -> bool {
-    model
-        .trim_end()
-        .to_ascii_lowercase()
-        .ends_with(crate::claude_desktop_config::ONE_M_CONTEXT_MARKER)
 }
 
 fn is_truthy(value: &Value) -> bool {
@@ -514,6 +276,33 @@ mod tests {
         // 没选 Bedrock 时顶层 apiKey 原样投影。
         let plain = json!({ "apiKey": "k" });
         assert_eq!(ClaudeProjection::of(&plain).top["apiKey"], json!("k"));
+    }
+
+    /// 之前的版本把旧 Bedrock 行的 Key 写到了 live 顶层（Claude Code 不读）：切过去时顶层
+    /// `apiKey` 是关键字段，按关键字段规则清掉，Key 写进 `env`。
+    #[test]
+    fn a_top_level_api_key_left_in_live_moves_to_the_bearer_env() {
+        let live = json!({
+            "apiKey": "legacy-key",
+            "env": { "CLAUDE_CODE_USE_BEDROCK": "1", "AWS_REGION": "us-east-1" },
+            "hooks": {}
+        });
+        let row = json!({
+            "apiKey": "legacy-key",
+            "env": { "CLAUDE_CODE_USE_BEDROCK": "1", "AWS_REGION": "us-east-1" }
+        });
+        let out = project(&live, Some(&row), &row);
+        assert_eq!(
+            out,
+            json!({
+                "env": {
+                    "CLAUDE_CODE_USE_BEDROCK": "1",
+                    "AWS_REGION": "us-east-1",
+                    BEDROCK_BEARER_ENV: "legacy-key"
+                },
+                "hooks": {}
+            })
+        );
     }
 
     #[test]
@@ -669,91 +458,5 @@ mod tests {
             store_into_row(&json!({ "env": "oops" }), &edited)["env"],
             json!({ "ANTHROPIC_BASE_URL": "https://new.example", "ENABLE_TOOL_SEARCH": "true" })
         );
-    }
-
-    #[test]
-    fn a_legacy_bedrock_row_keeps_its_key_at_the_top_level() {
-        let row = json!({
-            "apiKey": "old-key",
-            "env": { "CLAUDE_CODE_USE_BEDROCK": "1", "AWS_REGION": "us-east-1" }
-        });
-        let projected = ClaudeProjection::of(&row);
-        assert_eq!(projected.env[BEDROCK_BEARER_ENV], "old-key");
-        assert_eq!(store_into_row(&row, &projected), row, "round trip");
-
-        // 编辑器里改了 Key：新值还存回顶层。
-        let mut edited = projected.clone();
-        edited
-            .env
-            .insert(BEDROCK_BEARER_ENV.to_string(), json!("new-key"));
-        let stored = store_into_row(&row, &edited);
-        assert_eq!(stored["apiKey"], "new-key");
-        assert!(stored["env"].get(BEDROCK_BEARER_ENV).is_none());
-
-        // 删了 Key、不再用 Bedrock、或者行本来就是 env 写法：按投影存。
-        let mut removed = projected.clone();
-        removed.env.shift_remove(BEDROCK_BEARER_ENV);
-        assert!(store_into_row(&row, &removed).get("apiKey").is_none());
-        let mut not_bedrock = projected.clone();
-        not_bedrock.env.shift_remove("CLAUDE_CODE_USE_BEDROCK");
-        let stored = store_into_row(&row, &not_bedrock);
-        assert!(stored.get("apiKey").is_none());
-        assert_eq!(stored["env"][BEDROCK_BEARER_ENV], "old-key");
-        let env_row = json!({ "env": {
-            "CLAUDE_CODE_USE_BEDROCK": "1",
-            BEDROCK_BEARER_ENV: "env-key"
-        }});
-        assert_eq!(
-            store_into_row(&env_row, &ClaudeProjection::of(&env_row)),
-            env_row
-        );
-    }
-
-    #[test]
-    fn stack_mode_points_every_alias_at_the_default_model() {
-        let row = json!({ "env": {
-            "ANTHROPIC_AUTH_TOKEN": "sk",
-            "ANTHROPIC_MODEL": "glm-5.2[1M]",
-            "ANTHROPIC_DEFAULT_HAIKU_MODEL": "glm-4.7-air",
-            "ANTHROPIC_DEFAULT_OPUS_MODEL_NAME": "ignored",
-            "CLAUDE_CODE_SUBAGENT_MODEL": "glm-4.7-air"
-        }});
-        let route = ClaudeProjection::of(&row);
-        let stacked = proxy_projection(
-            &route,
-            "http://127.0.0.1:15721",
-            ProxyAuth::FollowRow,
-            Some(StackRoleModel {
-                id: "ccs-claude-z--glm-5.2[1M]",
-                name: "GLM 5.2",
-            }),
-        );
-        let env = |key: &str| stacked.env.get(key).and_then(Value::as_str);
-        for role in ["SONNET", "OPUS", "FABLE"] {
-            assert_eq!(
-                env(&format!("ANTHROPIC_DEFAULT_{role}_MODEL")),
-                Some("ccs-claude-z--glm-5.2[1M]")
-            );
-        }
-        assert_eq!(
-            env("ANTHROPIC_DEFAULT_HAIKU_MODEL"),
-            Some("ccs-claude-z--glm-5.2")
-        );
-        for role in ["HAIKU", "SONNET", "OPUS", "FABLE"] {
-            assert_eq!(
-                env(&format!("ANTHROPIC_DEFAULT_{role}_MODEL_NAME")),
-                Some("GLM 5.2")
-            );
-        }
-        assert_eq!(env("CLAUDE_CODE_SUBAGENT_MODEL"), None);
-        assert_eq!(env("ANTHROPIC_AUTH_TOKEN"), Some(PROXY_TOKEN_PLACEHOLDER));
-
-        // 路由模式照旧写 `claude-*` 别名和行里的子代理模型。
-        let routed = proxy_projection(&route, "http://127.0.0.1:15721", ProxyAuth::FollowRow, None);
-        assert_eq!(
-            routed.env["ANTHROPIC_DEFAULT_SONNET_MODEL"],
-            "claude-sonnet-5[1M]"
-        );
-        assert_eq!(routed.env["CLAUDE_CODE_SUBAGENT_MODEL"], "glm-4.7-air");
     }
 }

@@ -224,6 +224,26 @@ describe("UnifiedMcpPanel", () => {
     expect(columns[1]).not.toHaveAttribute("data-highlighted");
   });
 
+  it("explains in the Grok column that Grok also reads Claude's MCP servers", async () => {
+    mocks.serversMap = { alpha: makeServer("alpha") };
+    mocks.visibleApps = ["claude", "grokbuild"];
+    renderPanel();
+    const [claudeColumn, grokColumn] = screen.getAllByRole("button", {
+      name: /appMatrix.columnAria/,
+    });
+
+    await userEvent.click(grokColumn);
+    expect(
+      screen.getByRole("button", { name: "mcpPage.grokHelpTitle" }),
+    ).toBeInTheDocument();
+
+    await userEvent.keyboard("{Escape}");
+    await userEvent.click(claudeColumn);
+    expect(
+      screen.queryByRole("button", { name: "mcpPage.grokHelpTitle" }),
+    ).toBeNull();
+  });
+
   it("bulk-enables only the rows left by the search and offers undo", async () => {
     mocks.serversMap = {
       "alpha-one": makeServer("alpha-one"),

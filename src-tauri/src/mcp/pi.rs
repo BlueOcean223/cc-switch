@@ -8,6 +8,7 @@
 //!
 //! 项目级 `.pi/mcp.json` 不在这里管。
 
+use super::fields::{self, TRANSPORT as TRANSPORT_FIELDS};
 use crate::app_config::{McpApps, McpServer};
 use crate::config::atomic_write_private;
 use crate::error::AppError;
@@ -20,16 +21,6 @@ use std::{
 };
 
 static WRITE_LOCK: Mutex<()> = Mutex::new(());
-const TRANSPORT_FIELDS: [&str; 7] = ["command", "args", "env", "cwd", "url", "headers", "type"];
-/// Pi 自己的条目字段：重建条目时从数据库里保存的连接定义（导入时原样存下）带回来
-const PI_FIELDS: [&str; 6] = [
-    "timeout",
-    "description",
-    "exposure",
-    "toolExposure",
-    "oauth",
-    "auth",
-];
 
 /// 对 Pi 条目的改动
 #[derive(Clone, Copy)]
@@ -165,7 +156,7 @@ fn sync_file(path: &Path, id: &str, change: PiChange<'_>) -> Result<(), AppError
             let object = merged
                 .as_object_mut()
                 .ok_or_else(|| AppError::Config("Invalid Pi MCP entry".into()))?;
-            for field in TRANSPORT_FIELDS {
+            for &field in TRANSPORT_FIELDS {
                 object.remove(field);
             }
             object.extend(transport.as_object().unwrap().clone());
@@ -254,17 +245,18 @@ fn transport_spec(spec: &Value) -> Value {
     spec
 }
 
-/// 连接定义里保存的 Pi 字段（导入时原样存下）→ 重建条目的起点
+/// 连接定义里保存的 Pi 字段（导入时原样存下）→ 重建条目的起点。`enabled` 不带回来，
+/// 它由勾选状态决定
 fn pi_fields(spec: &Value) -> Value {
-    let mut fields = serde_json::Map::new();
+    let mut kept = serde_json::Map::new();
     if let Some(object) = spec.as_object() {
-        for field in PI_FIELDS {
+        for &field in fields::PI.iter().filter(|field| **field != "enabled") {
             if let Some(value) = object.get(field) {
-                fields.insert(field.into(), value.clone());
+                kept.insert(field.into(), value.clone());
             }
         }
     }
-    Value::Object(fields)
+    Value::Object(kept)
 }
 
 /// Pi 的条目 → CC Switch 的统一格式：`streamable-http` 记作 `http`，省略的 `type` 按字段补上

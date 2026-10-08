@@ -185,9 +185,6 @@ impl McpService {
             AppType::Claude => {
                 mcp::sync_single_server_to_claude(&Default::default(), &server.id, &server.server)?;
             }
-            AppType::ClaudeDesktop => {
-                log::debug!("Claude Desktop 3P profiles do not use CC Switch MCP sync, skipping");
-            }
             AppType::Codex => {
                 // Codex uses TOML format, must use the correct function
                 mcp::sync_single_server_to_codex(&Default::default(), &server.id, &server.server)?;
@@ -242,9 +239,6 @@ impl McpService {
     fn remove_server_from_app(_state: &AppState, id: &str, app: &AppType) -> Result<(), AppError> {
         match app {
             AppType::Claude => mcp::remove_server_from_claude(id)?,
-            AppType::ClaudeDesktop => {
-                log::debug!("Claude Desktop 3P profiles do not use CC Switch MCP sync, skipping");
-            }
             AppType::Codex => mcp::remove_server_from_codex(id)?,
             AppType::Gemini => mcp::remove_server_from_gemini(id)?,
             AppType::GrokBuild => mcp::remove_server_from_grokbuild(id)?,
@@ -299,10 +293,10 @@ impl McpService {
         Self::project_servers_to_app(state, &servers, app)
     }
 
-    /// 由 CC Switch 管理 MCP 的应用（Claude Desktop、OpenClaw 不支持）
+    /// 由 CC Switch 管理 MCP 的应用（OpenClaw 不支持）
     pub fn live_sync_apps() -> Vec<AppType> {
         AppType::all()
-            .filter(|app| !matches!(app, AppType::OpenClaw | AppType::ClaudeDesktop))
+            .filter(|app| !matches!(app, AppType::OpenClaw))
             .collect()
     }
 
@@ -354,7 +348,7 @@ impl McpService {
         servers: &IndexMap<String, McpServer>,
         app: &AppType,
     ) -> Result<(), AppError> {
-        if matches!(app, AppType::OpenClaw | AppType::ClaudeDesktop) {
+        if matches!(app, AppType::OpenClaw) {
             return Ok(());
         }
 
@@ -427,20 +421,6 @@ impl McpService {
     ) -> Result<bool, AppError> {
         Self::toggle_app(state, id, app, enabled)?;
         Ok(true)
-    }
-
-    /// [已废弃] 同步启用的 MCP 到指定应用（兼容旧 API）
-    #[deprecated(since = "3.7.0", note = "Use sync_all_enabled instead")]
-    pub fn sync_enabled(state: &AppState, app: AppType) -> Result<(), AppError> {
-        let servers = Self::get_all_servers(state)?;
-
-        for server in servers.values() {
-            if server.apps.is_enabled_for(&app) {
-                Self::sync_server_to_app(state, server, &app)?;
-            }
-        }
-
-        Ok(())
     }
 
     /// 从 Claude 导入 MCP（v3.7.0 已更新为统一结构）

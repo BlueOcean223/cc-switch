@@ -17,10 +17,7 @@ type LoginRequest = {
   generation: number;
 };
 
-export function useManagedAuth(
-  authProvider: ManagedAuthProvider,
-  githubDomain?: string,
-) {
+export function useManagedAuth(authProvider: ManagedAuthProvider) {
   const queryClient = useQueryClient();
   const { t } = useTranslation();
   const queryKey = ["managed-auth-status", authProvider];
@@ -47,12 +44,8 @@ export function useManagedAuth(
     refetch: refetchStatus,
   } = useQuery<ManagedAuthStatus>({
     queryKey,
-    queryFn: () => authApi.authGetStatus(authProvider),
+    queryFn: () => authApi.authGetStatus(),
     staleTime: 30000,
-    // A rejected xAI refresh token is persisted as `requires_reauth` by the
-    // proxy hot path. Periodically refresh local status so an already-open Auth
-    // Center stops showing the account as logged in without requiring a reload.
-    refetchInterval: authProvider === "xai_oauth" ? 15_000 : false,
   });
 
   const stopPolling = useCallback(() => {
@@ -68,12 +61,9 @@ export function useManagedAuth(
 
   const cancelBackendFlow = useCallback(
     async (deviceCode: string | null): Promise<boolean> => {
-      if (authProvider !== "codex_oauth" || !deviceCode) return true;
+      if (!deviceCode) return true;
       try {
-        const cancelled = await authApi.authCancelLogin(
-          authProvider,
-          deviceCode,
-        );
+        const cancelled = await authApi.authCancelLogin(deviceCode);
         if (!cancelled) {
           await queryClient.invalidateQueries({
             queryKey: ["managed-auth-status", authProvider],
@@ -113,7 +103,7 @@ export function useManagedAuth(
 
   const startLoginMutation = useMutation({
     mutationFn: ({ targetAccountId }: LoginRequest) =>
-      authApi.authStartLogin(authProvider, githubDomain, targetAccountId),
+      authApi.authStartLogin(targetAccountId),
     onSuccess: async (response, request) => {
       if (request.generation !== flowGenerationRef.current) {
         void cancelBackendFlow(response.device_code);
@@ -138,7 +128,7 @@ export function useManagedAuth(
       }
       if (request.generation !== flowGenerationRef.current) return;
 
-      // Add a small buffer on top of GitHub's suggested interval to avoid
+      // Add a small buffer on top of the server's suggested interval to avoid
       // hitting slow_down responses too aggressively during device polling.
       const interval = Math.max((response.interval || 5) + 3, 8) * 1000;
       const expiresAt = Date.now() + response.expires_in * 1000;
@@ -157,9 +147,7 @@ export function useManagedAuth(
 
         try {
           const newAccount = await authApi.authPollForAccount(
-            authProvider,
             response.device_code,
-            githubDomain,
           );
           if (request.generation !== flowGenerationRef.current) return;
           if (newAccount) {
@@ -187,8 +175,7 @@ export function useManagedAuth(
             flowGenerationRef.current += 1;
             setPollingState("error");
             setError(
-              authProvider === "codex_oauth" &&
-                errorMessage === CODEX_OAUTH_DUPLICATE_ACCOUNT_ERROR
+              errorMessage === CODEX_OAUTH_DUPLICATE_ACCOUNT_ERROR
                 ? t("codexOauth.duplicateAccount", {
                     defaultValue: "该 ChatGPT 账号已添加，请直接使用现有账号。",
                   })
@@ -218,7 +205,7 @@ export function useManagedAuth(
   });
 
   const logoutMutation = useMutation({
-    mutationFn: () => authApi.authLogout(authProvider),
+    mutationFn: () => authApi.authLogout(),
     onSuccess: async () => {
       setPollingState("idle");
       setDeviceCode(null);
@@ -226,7 +213,6 @@ export function useManagedAuth(
       queryClient.setQueryData(queryKey, {
         provider: authProvider,
         authenticated: false,
-        default_account_id: null,
         accounts: [],
       });
       await queryClient.invalidateQueries({ queryKey });
@@ -239,8 +225,7 @@ export function useManagedAuth(
   });
 
   const removeAccountMutation = useMutation({
-    mutationFn: (accountId: string) =>
-      authApi.authRemoveAccount(authProvider, accountId),
+    mutationFn: (accountId: string) => authApi.authRemoveAccount(accountId),
     onSuccess: async () => {
       setPollingState("idle");
       setDeviceCode(null);
@@ -255,19 +240,6 @@ export function useManagedAuth(
     },
     onError: (e) => {
       console.error("[ManagedAuth] Failed to remove account:", e);
-      setError(e instanceof Error ? e.message : String(e));
-    },
-  });
-
-  const setDefaultAccountMutation = useMutation({
-    mutationFn: (accountId: string) =>
-      authApi.authSetDefaultAccount(authProvider, accountId),
-    onSuccess: async () => {
-      await refetchStatus();
-      await queryClient.invalidateQueries({ queryKey });
-    },
-    onError: (e) => {
-      console.error("[ManagedAuth] Failed to set default account:", e);
       setError(e instanceof Error ? e.message : String(e));
     },
   });
@@ -328,13 +300,6 @@ export function useManagedAuth(
     [removeAccountMutation],
   );
 
-  const setDefaultAccount = useCallback(
-    (accountId: string) => {
-      setDefaultAccountMutation.mutate(accountId);
-    },
-    [setDefaultAccountMutation],
-  );
-
   const accounts = authStatus?.accounts ?? [];
 
   return {
@@ -347,15 +312,12 @@ export function useManagedAuth(
     accounts,
     hasAnyAccount: accounts.length > 0,
     isAuthenticated: authStatus?.authenticated ?? false,
-    defaultAccountId: authStatus?.default_account_id ?? null,
-    migrationError: authStatus?.migration_error ?? null,
     pollingState,
     deviceCode,
     error,
     isPolling: pollingState === "polling",
     isAddingAccount: startLoginMutation.isPending || pollingState === "polling",
     isRemovingAccount: removeAccountMutation.isPending,
-    isSettingDefaultAccount: setDefaultAccountMutation.isPending,
     startAuth,
     addAccount: startAuth,
     reauthAccount,
@@ -363,7 +325,6 @@ export function useManagedAuth(
     cancelAuth,
     logout,
     removeAccount,
-    setDefaultAccount,
     refetchStatus,
   };
 }

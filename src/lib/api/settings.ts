@@ -229,10 +229,6 @@ export const settingsApi = {
     return await invoke("set_auto_launch", { enabled });
   },
 
-  async getAutoLaunchStatus(): Promise<boolean> {
-    return await invoke("get_auto_launch_status");
-  },
-
   async getToolVersions(
     tools?: string[],
     wslShellByTool?: Record<
@@ -283,22 +279,6 @@ export const settingsApi = {
     return await invoke("list_tool_installations", { tools });
   },
 
-  async getRectifierConfig(): Promise<RectifierConfig> {
-    return await invoke("get_rectifier_config");
-  },
-
-  async setRectifierConfig(config: RectifierConfig): Promise<boolean> {
-    return await invoke("set_rectifier_config", { config });
-  },
-
-  async getOptimizerConfig(): Promise<OptimizerConfig> {
-    return await invoke("get_optimizer_config");
-  },
-
-  async setOptimizerConfig(config: OptimizerConfig): Promise<boolean> {
-    return await invoke("set_optimizer_config", { config });
-  },
-
   async getLogConfig(): Promise<LogConfig> {
     return await invoke("get_log_config");
   },
@@ -328,20 +308,6 @@ export interface ToolInstallationReport {
   anchored: boolean;
   /** 默认那处是认不出安装渠道的原生可执行文件：不执行升级，command 为空。 */
   unmanaged: boolean;
-}
-
-export interface RectifierConfig {
-  enabled: boolean;
-  requestThinkingSignature: boolean;
-  requestThinkingBudget: boolean;
-  requestMediaFallback: boolean;
-  requestMediaHeuristic: boolean;
-}
-
-export interface OptimizerConfig {
-  enabled: boolean;
-  thinkingOptimizer: boolean;
-  cacheInjection: boolean;
 }
 
 export interface LogConfig {

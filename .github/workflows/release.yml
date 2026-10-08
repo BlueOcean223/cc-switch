@@ -129,8 +129,6 @@ jobs:
             patchelf \
             libssl-dev \
             rpm \
-            flatpak \
-            flatpak-builder \
             elfutils \
             xdg-utils
           # GTK/GLib stack for gdk-3.0, glib-2.0, gio-2.0
@@ -481,7 +479,23 @@ jobs:
           private-key: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           password: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
 
+      # Without APPLE_CERTIFICATE the macOS build is ad-hoc signed and not
+      # notarized; the steps that need the certificate are skipped.
+      - name: Detect Apple signing secrets
+        shell: bash
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+        run: |
+          if [ -n "$APPLE_CERTIFICATE" ]; then
+            echo "MACOS_SIGN=true" >> "$GITHUB_ENV"
+            echo "Apple signing certificate found; the macOS build will be signed and notarized."
+          else
+            echo "MACOS_SIGN=false" >> "$GITHUB_ENV"
+            echo "::warning::APPLE_CERTIFICATE is not set; the macOS build is ad-hoc signed and not notarized."
+          fi
+
       - name: Import Apple signing certificate
+        if: env.MACOS_SIGN == 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -554,6 +568,11 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           set -euo pipefail
+          if [ "$MACOS_SIGN" != "true" ]; then
+            # "-" makes Tauri ad-hoc sign the app; without APPLE_ID it skips notarization.
+            export APPLE_SIGNING_IDENTITY="-"
+            unset APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID
+          fi
           max_attempts=3
           for attempt in $(seq 1 "$max_attempts"); do
             echo "=== macOS bundle/notarization attempt ${attempt}/${max_attempts} ==="
@@ -612,8 +631,10 @@ jobs:
           fi
 
           # Staple notarization ticket to .app (Tauri already notarized it)
-          xcrun stapler staple "$APP_PATH"
-          echo "✅ .app stapled"
+          if [ "$MACOS_SIGN" = "true" ]; then
+            xcrun stapler staple "$APP_PATH"
+            echo "✅ .app stapled"
+          fi
 
           # 1) Collect .tar.gz (updater artifact)
           NEW_TAR_GZ="CC-Switch-${VERSION}-macOS.tar.gz"
@@ -631,9 +652,13 @@ jobs:
           echo "macOS zip ready: $NEW_ZIP"
 
           # 3) Create styled DMG with create-dmg (Tauri's built-in DMG styling doesn't work on CI)
-          if [ -z "${APPLE_SIGNING_IDENTITY:-}" ]; then
-            echo "❌ APPLE_SIGNING_IDENTITY is missing before DMG creation" >&2
-            exit 1
+          CODESIGN_ARGS=()
+          if [ "$MACOS_SIGN" = "true" ]; then
+            if [ -z "${APPLE_SIGNING_IDENTITY:-}" ]; then
+              echo "❌ APPLE_SIGNING_IDENTITY is missing before DMG creation" >&2
+              exit 1
+            fi
+            CODESIGN_ARGS=(--codesign "$APPLE_SIGNING_IDENTITY")
           fi
 
           HOMEBREW_NO_AUTO_UPDATE=1 brew install create-dmg
@@ -641,18 +666,18 @@ jobs:
           DMG_STAGE_DIR="$RUNNER_TEMP/dmg-stage"
           rm -rf "$DMG_STAGE_DIR"
           mkdir -p "$DMG_STAGE_DIR"
-          ditto "$APP_PATH" "$DMG_STAGE_DIR/CC Switch.app"
+          ditto "$APP_PATH" "$DMG_STAGE_DIR/ccs-lite.app"
 
           create-dmg \
-            --volname "CC Switch" \
+            --volname "ccs-lite" \
             --background "src-tauri/icons/dmg-background.png" \
             --window-size 660 400 \
             --window-pos 200 120 \
             --icon-size 80 \
-            --icon "CC Switch.app" 180 220 \
-            --hide-extension "CC Switch.app" \
+            --icon "ccs-lite.app" 180 220 \
+            --hide-extension "ccs-lite.app" \
             --app-drop-link 480 220 \
-            --codesign "$APPLE_SIGNING_IDENTITY" \
+            ${CODESIGN_ARGS[@]+"${CODESIGN_ARGS[@]}"} \
             --no-internet-enable \
             "release-assets/$NEW_DMG" \
             "$DMG_STAGE_DIR"
@@ -661,6 +686,7 @@ jobs:
           echo "✅ Styled DMG created: $NEW_DMG"
 
       - name: Notarize macOS DMG
+        if: env.MACOS_SIGN == 'true'
         shell: bash
         timeout-minutes: 30
         env:
@@ -702,6 +728,7 @@ jobs:
           done
 
       - name: Verify macOS code signing and notarization
+        if: env.MACOS_SIGN == 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -897,9 +924,7 @@ jobs:
           body: |
             ## CC Switch ${{ github.ref_name }}
 
-            🌐 **Only Official Website / 唯一官方网站 / 唯一の公式サイト**: [ccswitch.io](https://ccswitch.io)
-
-            Claude Code 供应商切换工具
+            基于 [farion1231/cc-switch](https://github.com/farion1231/cc-switch) 的精简版：只管理各工具的配置文件，不在本机运行代理。
 
             ### 下载
 
@@ -912,7 +937,7 @@ jobs:
             > `.tar.gz` 为 Tauri updater 自动更新专用，无需手动下载。
 
             ---
-            macOS 版本已通过 Apple 代码签名和公证，可直接安装使用。
+            ${{ secrets.APPLE_CERTIFICATE != '' && 'macOS 版本已通过 Apple 代码签名和公证，可直接安装使用。' || 'macOS 版本未经 Apple 公证。首次打开如果提示无法打开，请在终端运行 `xattr -dr com.apple.quarantine "/Applications/ccs-lite.app"`，或在「系统设置 → 隐私与安全性」里点「仍要打开」。' }}
           files: release-assets/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

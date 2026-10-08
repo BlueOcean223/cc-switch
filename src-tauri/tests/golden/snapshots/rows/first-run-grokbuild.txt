@@ -9,7 +9,6 @@ icon: NULL
 icon_color: NULL
 meta: {}
 is_current: true
-in_failover_queue: false
 
 id: grokbuild-official
 name: Grok Official
@@ -22,7 +21,6 @@ icon: grok
 icon_color: currentColor
 meta: {}
 is_current: false
-in_failover_queue: false
 
 
 common config snippet: NULL

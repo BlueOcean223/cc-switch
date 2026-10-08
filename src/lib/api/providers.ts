@@ -25,21 +25,6 @@ export interface OpenTerminalOptions {
   cwd?: string;
 }
 
-export interface ClaudeDesktopStatus {
-  supported: boolean;
-  configured: boolean;
-  appliedId?: string | null;
-  profilePath?: string | null;
-  configLibraryPath?: string | null;
-  mode?: "direct" | "proxy" | null;
-  expectedBaseUrl?: string | null;
-  actualBaseUrl?: string | null;
-  proxyRunning: boolean;
-  staleRawModels: boolean;
-  missingRouteMappings: boolean;
-  gatewayTokenConfigured: boolean;
-}
-
 /** 编辑器保存时，live 里的键在编辑期间被别的程序改过怎么办。 */
 export type EditorConflictPolicy = "refuse" | "keepMine" | "keepTheirs";
 
@@ -57,16 +42,17 @@ export interface ProviderEditorInactiveField {
   value: unknown;
 }
 
+/** 客户端配置停在上游 CC Switch 的本地路由状态（Key 是 `PROXY_MANAGED` 等）。 */
+export interface LiveRoutingState {
+  baseUrl?: string | null;
+  /** 上游代理还在监听：上游正在接管，在 ccs-lite 里重新写入会覆盖它 */
+  upstreamActive: boolean;
+}
+
 /** 编辑器底部 JSON 的显示内容：切到这个供应商之后配置文件会是什么样。 */
 export interface ProviderEditorView {
   settings: Record<string, unknown>;
   inactive: ProviderEditorInactiveField[];
-}
-
-export interface ClaudeDesktopDefaultRoute {
-  routeId: string;
-  envKey: string;
-  supports1m: boolean;
 }
 
 export const providersApi = {
@@ -137,16 +123,18 @@ export const providersApi = {
     return await invoke("switch_provider", { id, app: appId });
   },
 
+  /** live 停在上游路由状态时返回状态，否则返回 null */
+  async getLiveRoutingState(appId: AppId): Promise<LiveRoutingState | null> {
+    return await invoke("get_live_routing_state", { app: appId });
+  },
+
+  /** 把当前供应商重新写进 live；没有当前供应商时返回 false */
+  async reapplyCurrent(appId: AppId): Promise<boolean> {
+    return await invoke("reapply_current_provider", { app: appId });
+  },
+
   async importDefault(appId: AppId): Promise<boolean> {
     return await invoke("import_default_config", { app: appId });
-  },
-
-  async importClaudeDesktopFromClaude(): Promise<number> {
-    return await invoke("import_claude_desktop_providers_from_claude");
-  },
-
-  async ensureClaudeDesktopOfficialProvider(): Promise<boolean> {
-    return await invoke("ensure_claude_desktop_official_provider");
   },
 
   async ensureCodexOfficialProvider(): Promise<boolean> {
@@ -155,14 +143,6 @@ export const providersApi = {
 
   async ensureGrokBuildOfficialProvider(): Promise<boolean> {
     return await invoke("ensure_grokbuild_official_provider");
-  },
-
-  async getClaudeDesktopStatus(): Promise<ClaudeDesktopStatus> {
-    return await invoke("get_claude_desktop_status");
-  },
-
-  async getClaudeDesktopDefaultRoutes(): Promise<ClaudeDesktopDefaultRoute[]> {
-    return await invoke("get_claude_desktop_default_routes");
   },
 
   async updateTrayMenu(): Promise<boolean> {

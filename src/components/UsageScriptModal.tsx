@@ -5,7 +5,6 @@ import { useTranslation } from "react-i18next";
 import { useQueryClient } from "@tanstack/react-query";
 import { Provider, UsageScript, UsageData, createUsageScript } from "@/types";
 import { usageApi, settingsApi, type AppId } from "@/lib/api";
-import { copilotGetUsage, copilotGetUsageForAccount } from "@/lib/api/copilot";
 import { useSettingsQuery } from "@/lib/query";
 import { resolveManagedAccountId } from "@/lib/authBinding";
 import { resolveCodexOfficialIdentity } from "@/utils/providerCapabilities";
@@ -16,6 +15,7 @@ import {
   extractCodexExperimentalBearerToken,
 } from "@/utils/providerConfigUtils";
 import { parseGrokBuildConfig } from "@/utils/grokBuildConfig";
+import { piProviderBaseUrl } from "@/config/piProviderPresets";
 import JsonEditor from "./JsonEditor";
 import * as prettier from "prettier/standalone";
 import * as parserBabel from "prettier/parser-babel";
@@ -30,7 +30,9 @@ import { cn } from "@/lib/utils";
 import { TEMPLATE_TYPES, PROVIDER_TYPES } from "@/config/constants";
 import {
   CODING_PLAN_PROVIDERS,
+  MINIMAX_BASE_URL_PATTERN,
   detectCodingPlanProvider,
+  isMiniMaxPayAsYouGoKey,
 } from "@/config/codingPlanProviders";
 import { formatUsageDataSummary } from "@/utils/usageDisplay";
 
@@ -116,9 +118,6 @@ const generatePresetTemplates = (
   },
 })`,
 
-  // GitHub Copilot 模板不需要脚本，使用专用 API
-  [TEMPLATE_TYPES.GITHUB_COPILOT]: "",
-
   // Coding Plan 模板不需要脚本，使用专用 Rust 查询
   [TEMPLATE_TYPES.TOKEN_PLAN]: "",
 
@@ -134,7 +133,6 @@ const TEMPLATE_NAME_KEYS: Record<string, string> = {
   [TEMPLATE_TYPES.CUSTOM]: "usageScript.templateCustom",
   [TEMPLATE_TYPES.GENERAL]: "usageScript.templateGeneral",
   [TEMPLATE_TYPES.NEW_API]: "usageScript.templateNewAPI",
-  [TEMPLATE_TYPES.GITHUB_COPILOT]: "usageScript.templateCopilot",
   [TEMPLATE_TYPES.TOKEN_PLAN]: "usageScript.templateTokenPlan",
   [TEMPLATE_TYPES.BALANCE]: "usageScript.templateBalance",
   [TEMPLATE_TYPES.OFFICIAL_SUBSCRIPTION]:
@@ -152,6 +150,8 @@ const BALANCE_PROVIDERS = [
   },
   { id: "openrouter", label: "OpenRouter", pattern: /openrouter\.ai/i },
   { id: "novita", label: "Novita AI", pattern: /api\.novita\.ai/i },
+  // 只有按量计费的 Key 查余额，Token Plan 的 Key 走 Coding Plan 模板
+  { id: "minimax", label: "MiniMax", pattern: MINIMAX_BASE_URL_PATTERN },
 ] as const;
 
 /** 根据 Base URL 自动检测余额查询供应商 */
@@ -199,7 +199,6 @@ function isOfficialSubscriptionProvider(provider: Provider, appId: AppId) {
 }
 
 const NATIVE_USAGE_TEMPLATES = new Set<string>([
-  TEMPLATE_TYPES.GITHUB_COPILOT,
   TEMPLATE_TYPES.TOKEN_PLAN,
   TEMPLATE_TYPES.BALANCE,
   TEMPLATE_TYPES.OFFICIAL_SUBSCRIPTION,
@@ -237,8 +236,8 @@ const UsageScriptModal: React.FC<UsageScriptModalProps> = ({
         if (!config) return { apiKey: undefined, baseUrl: undefined };
 
         // 处理不同应用的配置格式
-        if (appId === "claude" || appId === "claude-desktop") {
-          // Claude / Claude Desktop: { env: { ANTHROPIC_AUTH_TOKEN | ANTHROPIC_API_KEY, ANTHROPIC_BASE_URL } }
+        if (appId === "claude") {
+          // Claude: { env: { ANTHROPIC_AUTH_TOKEN | ANTHROPIC_API_KEY, ANTHROPIC_BASE_URL } }
           // Key fallbacks mirror the backend resolver (Provider::resolve_usage_credentials).
           const env = (config as any).env || {};
           return {
@@ -286,14 +285,11 @@ const UsageScriptModal: React.FC<UsageScriptModalProps> = ({
             baseUrl: (config as any).base_url,
           };
         } else if (appId === "pi") {
-          // Pi: provider values are camelCase; a model may override baseUrl.
-          const root = config as any;
-          const firstModel = Array.isArray(root.models)
-            ? root.models[0]
-            : undefined;
+          // Pi: provider values are camelCase; key-only entries for Pi's
+          // built-in providers have no baseUrl.
           return {
-            apiKey: root.apiKey,
-            baseUrl: firstModel?.baseUrl || root.baseUrl,
+            apiKey: (config as any).apiKey,
+            baseUrl: piProviderBaseUrl(provider.id, config),
           };
         } else if (appId === "openclaw") {
           // OpenClaw: settingsConfig 顶层扁平（camelCase，对应 openclaw.json）
@@ -322,6 +318,9 @@ const UsageScriptModal: React.FC<UsageScriptModalProps> = ({
   };
 
   const providerCredentials = getProviderCredentials();
+  const isMiniMaxPayAsYouGo =
+    detectCodingPlanProvider(providerCredentials.baseUrl) === "minimax" &&
+    isMiniMaxPayAsYouGoKey(providerCredentials.apiKey);
   const isBoundCodexOfficial =
     resolveCodexOfficialIdentity(appId, provider) === "managed_account";
   const isOfficialSubscription = isOfficialSubscriptionProvider(
@@ -356,7 +355,7 @@ const UsageScriptModal: React.FC<UsageScriptModalProps> = ({
     }
 
     const autoDetected = detectCodingPlanProvider(providerCredentials.baseUrl);
-    if (autoDetected) {
+    if (autoDetected && !isMiniMaxPayAsYouGo) {
       return createUsageScript({ codingPlanProvider: autoDetected });
     }
 
@@ -433,10 +432,6 @@ const UsageScriptModal: React.FC<UsageScriptModalProps> = ({
   const [selectedTemplate, setSelectedTemplate] = useState<string | null>(
     () => {
       const existingScript = provider.meta?.usage_script;
-      // Copilot 供应商默认使用 Copilot 模板
-      if (provider.meta?.providerType === PROVIDER_TYPES.GITHUB_COPILOT) {
-        return TEMPLATE_TYPES.GITHUB_COPILOT;
-      }
       // 优先使用保存的 templateType
       if (
         existingScript?.templateType &&
@@ -459,7 +454,10 @@ const UsageScriptModal: React.FC<UsageScriptModalProps> = ({
         return TEMPLATE_TYPES.GENERAL;
       }
       // 新配置：如果 URL 匹配 Coding Plan 供应商，自动选择 Coding Plan 模板
-      if (detectCodingPlanProvider(providerCredentials.baseUrl)) {
+      if (
+        detectCodingPlanProvider(providerCredentials.baseUrl) &&
+        !isMiniMaxPayAsYouGo
+      ) {
         return TEMPLATE_TYPES.TOKEN_PLAN;
       }
       // 新配置：如果 URL 匹配官方余额查询供应商，自动选择 Balance 模板
@@ -496,7 +494,15 @@ const UsageScriptModal: React.FC<UsageScriptModalProps> = ({
     setScript({ ...script, enabled: true });
   };
 
+  // 上游 CC Switch 才有的模板（如 GitHub Copilot）：ccs-lite 没有对应的查询，要求改选
+  const isUnsupportedTemplate =
+    selectedTemplate !== null && !(selectedTemplate in PRESET_TEMPLATES);
+
   const handleSave = () => {
+    if (script.enabled && isUnsupportedTemplate) {
+      toast.error(t("usageScript.templateUnsupported"));
+      return;
+    }
     // 专用模板不需要脚本验证
     if (!NATIVE_USAGE_TEMPLATES.has(selectedTemplate || "")) {
       if (script.enabled && !script.code.trim()) {
@@ -515,7 +521,6 @@ const UsageScriptModal: React.FC<UsageScriptModalProps> = ({
         | "custom"
         | "general"
         | "newapi"
-        | "github_copilot"
         | "token_plan"
         | "balance"
         | "official_subscription"
@@ -595,14 +600,12 @@ const UsageScriptModal: React.FC<UsageScriptModalProps> = ({
 
       // Coding Plan 模板使用专用 API
       if (selectedTemplate === TEMPLATE_TYPES.TOKEN_PLAN) {
-        // ZenMux 手填 baseUrl/apiKey；火山是 native 供应商，baseUrl 走推理配置，
-        // 另用账号 AK/SK 签名查询控制面用量。
+        // ZenMux 用手填的 Management API Key（接口地址固定，后端按 provider 路由）；
+        // 火山是 native 供应商，baseUrl 走推理配置，另用账号 AK/SK 签名查询控制面用量。
         const isZenMux = script.codingPlanProvider === "zenmux";
         const isVolcengine = script.codingPlanProvider === "volcengine";
         const isZhipuTeam = script.codingPlanProvider === "zhipu_team";
-        const baseUrl = isZenMux
-          ? (script.baseUrl ?? "")
-          : (providerCredentials.baseUrl ?? "");
+        const baseUrl = providerCredentials.baseUrl ?? "";
         const apiKey = isZenMux
           ? (script.apiKey ?? "")
           : (providerCredentials.apiKey ?? "");
@@ -612,7 +615,7 @@ const UsageScriptModal: React.FC<UsageScriptModalProps> = ({
           apiKey,
           isVolcengine ? script.accessKeyId : undefined,
           isVolcengine ? script.secretAccessKey : undefined,
-          isZhipuTeam ? script.codingPlanProvider : undefined,
+          isZhipuTeam || isZenMux ? script.codingPlanProvider : undefined,
           isZhipuTeam ? script.teamOrganizationId : undefined,
           isZhipuTeam ? script.teamProjectId : undefined,
         );
@@ -642,38 +645,6 @@ const UsageScriptModal: React.FC<UsageScriptModalProps> = ({
             { duration: 5000 },
           );
         }
-        return;
-      }
-
-      // Copilot 模板使用专用 API
-      if (selectedTemplate === TEMPLATE_TYPES.GITHUB_COPILOT) {
-        const accountId = resolveManagedAccountId(
-          provider.meta,
-          PROVIDER_TYPES.GITHUB_COPILOT,
-        );
-        const usage = accountId
-          ? await copilotGetUsageForAccount(accountId)
-          : await copilotGetUsage();
-        const premium = usage.quota_snapshots.premium_interactions;
-        const used = premium.entitlement - premium.remaining;
-        const summary = `[${usage.copilot_plan}] ${t("usage.remaining")} ${premium.remaining}/${premium.entitlement} (${t("usageScript.resetDate")}: ${usage.quota_reset_date})`;
-        toast.success(`${t("usageScript.testSuccess")}${summary}`, {
-          duration: 3000,
-          closeButton: true,
-        });
-        // 更新缓存
-        queryClient.setQueryData(["usage", provider.id, appId], {
-          success: true,
-          data: [
-            {
-              planName: usage.copilot_plan,
-              remaining: premium.remaining,
-              total: premium.entitlement,
-              used: used,
-              unit: t("usageScript.premiumRequests"),
-            },
-          ],
-        });
         return;
       }
 
@@ -780,23 +751,13 @@ const UsageScriptModal: React.FC<UsageScriptModalProps> = ({
           code: preset,
           apiKey: undefined,
         });
-      } else if (presetName === TEMPLATE_TYPES.GITHUB_COPILOT) {
-        // Copilot 模板不需要脚本和凭证，使用专用 API
-        setScript({
-          ...script,
-          code: "",
-          apiKey: undefined,
-          baseUrl: undefined,
-          accessToken: undefined,
-          userId: undefined,
-        });
       } else if (presetName === TEMPLATE_TYPES.TOKEN_PLAN) {
         // Coding Plan 模板不需要脚本，使用 Rust 原生查询
         const autoDetected = detectCodingPlanProvider(
           providerCredentials.baseUrl,
         );
         const provider = script.codingPlanProvider || autoDetected || "kimi";
-        // ZenMux 保留手填 baseUrl/apiKey；火山保留账号 AK/SK；智谱团队保留组织/项目 ID；其余清除。
+        // ZenMux 保留手填的 Management Key；火山保留账号 AK/SK；智谱团队保留组织/项目 ID；其余清除。
         const isZenMux = provider === "zenmux";
         const isVolcengine = provider === "volcengine";
         const isZhipuTeam = provider === "zhipu_team";
@@ -804,7 +765,7 @@ const UsageScriptModal: React.FC<UsageScriptModalProps> = ({
           ...script,
           code: "",
           apiKey: isZenMux ? script.apiKey : undefined,
-          baseUrl: isZenMux ? script.baseUrl : undefined,
+          baseUrl: undefined,
           accessToken: undefined,
           userId: undefined,
           accessKeyId: isVolcengine ? script.accessKeyId : undefined,
@@ -916,23 +877,12 @@ const UsageScriptModal: React.FC<UsageScriptModalProps> = ({
             </Label>
             <div className="flex gap-2 flex-wrap">
               {Object.keys(PRESET_TEMPLATES)
-                .filter((name) => {
-                  const isCopilotProvider =
-                    provider.meta?.providerType === "github_copilot";
-                  // Copilot 供应商只显示 copilot 模板
-                  if (isCopilotProvider) {
-                    return name === TEMPLATE_TYPES.GITHUB_COPILOT;
-                  }
+                .filter((name) =>
                   // 官方 CLI/OAuth 供应商只显示官方订阅额度模板
-                  if (isOfficialSubscription) {
-                    return name === TEMPLATE_TYPES.OFFICIAL_SUBSCRIPTION;
-                  }
-                  // 非 Copilot 供应商不显示 copilot 模板
-                  return (
-                    name !== TEMPLATE_TYPES.GITHUB_COPILOT &&
-                    name !== TEMPLATE_TYPES.OFFICIAL_SUBSCRIPTION
-                  );
-                })
+                  isOfficialSubscription
+                    ? name === TEMPLATE_TYPES.OFFICIAL_SUBSCRIPTION
+                    : name !== TEMPLATE_TYPES.OFFICIAL_SUBSCRIPTION,
+                )
                 .map((name) => {
                   const isSelected = selectedTemplate === name;
                   return (
@@ -954,6 +904,12 @@ const UsageScriptModal: React.FC<UsageScriptModalProps> = ({
                   );
                 })}
             </div>
+
+            {isUnsupportedTemplate && (
+              <p className="text-sm text-warning-text">
+                {t("usageScript.templateUnsupported")}
+              </p>
+            )}
 
             {/* 自定义模式：变量提示和具体值 */}
             {selectedTemplate === TEMPLATE_TYPES.CUSTOM && (
@@ -1018,15 +974,6 @@ const UsageScriptModal: React.FC<UsageScriptModalProps> = ({
                     )}
                   </div>
                 </div>
-              </div>
-            )}
-
-            {/* Copilot 模式：自动认证提示 */}
-            {selectedTemplate === TEMPLATE_TYPES.GITHUB_COPILOT && (
-              <div className="space-y-2 border-t border-white/10 pt-3">
-                <p className="text-sm text-fg-2">
-                  {t("usageScript.copilotAutoAuth")}
-                </p>
               </div>
             )}
 
@@ -1105,7 +1052,9 @@ const UsageScriptModal: React.FC<UsageScriptModalProps> = ({
                     {t("usageScript.credentialsConfig")}
                   </h4>
                   <p className="text-xs text-fg-2">
-                    {t("usageScript.credentialsHint")}
+                    {selectedTemplate === TEMPLATE_TYPES.TOKEN_PLAN
+                      ? t("usageScript.zenmuxManagementKeyHint")
+                      : t("usageScript.credentialsHint")}
                   </p>
                 </div>
 
@@ -1259,62 +1208,45 @@ const UsageScriptModal: React.FC<UsageScriptModalProps> = ({
 
                   {selectedTemplate === TEMPLATE_TYPES.TOKEN_PLAN &&
                     script.codingPlanProvider === "zenmux" && (
-                      <>
-                        <div className="space-y-2">
-                          <Label htmlFor="usage-zenmux-base-url">
-                            {t("usageScript.baseUrl")}
-                          </Label>
+                      <div className="space-y-2">
+                        <Label htmlFor="usage-zenmux-api-key">
+                          Management API Key
+                        </Label>
+                        <div className="relative">
                           <Input
-                            id="usage-zenmux-base-url"
-                            type="text"
-                            value={script.baseUrl || ""}
+                            id="usage-zenmux-api-key"
+                            type={showApiKey ? "text" : "password"}
+                            value={script.apiKey || ""}
                             onChange={(e) =>
-                              setScript({ ...script, baseUrl: e.target.value })
+                              setScript({
+                                ...script,
+                                apiKey: e.target.value,
+                              })
                             }
-                            placeholder="https://api.zenmux.com/v1/..."
+                            placeholder="sk-..."
                             autoComplete="off"
                             className="border-white/10"
                           />
-                        </div>
-
-                        <div className="space-y-2">
-                          <Label htmlFor="usage-zenmux-api-key">API Key</Label>
-                          <div className="relative">
-                            <Input
-                              id="usage-zenmux-api-key"
-                              type={showApiKey ? "text" : "password"}
-                              value={script.apiKey || ""}
-                              onChange={(e) =>
-                                setScript({
-                                  ...script,
-                                  apiKey: e.target.value,
-                                })
+                          {script.apiKey && (
+                            <button
+                              type="button"
+                              onClick={() => setShowApiKey(!showApiKey)}
+                              className="absolute inset-y-0 right-0 flex items-center pr-3 text-fg-2 hover:text-fg-1 transition-colors"
+                              aria-label={
+                                showApiKey
+                                  ? t("apiKeyInput.hide")
+                                  : t("apiKeyInput.show")
                               }
-                              placeholder="sk-..."
-                              autoComplete="off"
-                              className="border-white/10"
-                            />
-                            {script.apiKey && (
-                              <button
-                                type="button"
-                                onClick={() => setShowApiKey(!showApiKey)}
-                                className="absolute inset-y-0 right-0 flex items-center pr-3 text-fg-2 hover:text-fg-1 transition-colors"
-                                aria-label={
-                                  showApiKey
-                                    ? t("apiKeyInput.hide")
-                                    : t("apiKeyInput.show")
-                                }
-                              >
-                                {showApiKey ? (
-                                  <EyeOff size={16} />
-                                ) : (
-                                  <Eye size={16} />
-                                )}
-                              </button>
-                            )}
-                          </div>
+                            >
+                              {showApiKey ? (
+                                <EyeOff size={16} />
+                              ) : (
+                                <Eye size={16} />
+                              )}
+                            </button>
+                          )}
                         </div>
-                      </>
+                      </div>
                     )}
                 </div>
               </div>

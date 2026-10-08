@@ -170,158 +170,69 @@ impl Database {
         }
     }
 
-    // --- 代理接管状态管理（已废弃，使用 proxy_config.enabled 替代）---
-
-    /// 获取指定应用的代理接管状态
-    ///
-    /// **已废弃**: 请使用 `proxy_config.enabled` 字段替代
-    /// 此方法仅用于数据库迁移时读取旧数据
-    #[deprecated(since = "3.9.0", note = "使用 get_proxy_config_for_app().enabled 替代")]
-    pub fn get_proxy_takeover_enabled(&self, app_type: &str) -> Result<bool, AppError> {
-        let key = format!("proxy_takeover_{app_type}");
-        match self.get_setting(&key)? {
-            Some(value) => Ok(value == "true"),
-            None => Ok(false),
-        }
-    }
-
-    /// 设置指定应用的代理接管状态
-    ///
-    /// **已废弃**: 请使用 `proxy_config.enabled` 字段替代
-    #[deprecated(
-        since = "3.9.0",
-        note = "使用 update_proxy_config_for_app() 修改 enabled 字段"
-    )]
-    pub fn set_proxy_takeover_enabled(
-        &self,
-        app_type: &str,
-        enabled: bool,
-    ) -> Result<(), AppError> {
-        let key = format!("proxy_takeover_{app_type}");
-        let value = if enabled { "true" } else { "false" };
-        self.set_setting(&key, value)
-    }
-
-    /// 检查是否有任一应用开启了代理接管
-    ///
-    /// **已废弃**: 请使用 `is_live_takeover_active()` 替代
-    #[deprecated(since = "3.9.0", note = "使用 is_live_takeover_active() 替代")]
-    pub fn has_any_proxy_takeover(&self) -> Result<bool, AppError> {
-        let conn = lock_conn!(self.conn);
-        let count: i64 = conn
-            .query_row(
-                "SELECT COUNT(*) FROM settings WHERE key LIKE 'proxy_takeover_%' AND value = 'true'",
-                [],
-                |row| row.get(0),
-            )
-            .map_err(|e| AppError::Database(e.to_string()))?;
-        Ok(count > 0)
-    }
-
-    /// 清除所有代理接管状态（将所有 proxy_takeover_* 设置为 false）
-    ///
-    /// **已废弃**: settings 表不再用于存储代理状态
-    #[deprecated(
-        since = "3.9.0",
-        note = "使用 update_proxy_config_for_app() 清除各应用的 enabled 字段"
-    )]
-    pub fn clear_all_proxy_takeover(&self) -> Result<(), AppError> {
-        let conn = lock_conn!(self.conn);
-        conn.execute(
-            "UPDATE settings SET value = 'false' WHERE key LIKE 'proxy_takeover_%'",
-            [],
-        )
-        .map_err(|e| AppError::Database(e.to_string()))?;
-        log::info!("已清除所有代理接管状态");
-        Ok(())
-    }
-
-    // --- 整流器配置 ---
-
-    /// 获取整流器配置
-    ///
-    /// 返回整流器配置，如果不存在则返回默认值（全部开启）
-    pub fn get_rectifier_config(&self) -> Result<crate::proxy::types::RectifierConfig, AppError> {
-        match self.get_setting("rectifier_config")? {
-            Some(json) => serde_json::from_str(&json)
-                .map_err(|e| AppError::Database(format!("解析整流器配置失败: {e}"))),
-            None => Ok(crate::proxy::types::RectifierConfig::default()),
-        }
-    }
-
-    /// 更新整流器配置
-    pub fn set_rectifier_config(
-        &self,
-        config: &crate::proxy::types::RectifierConfig,
-    ) -> Result<(), AppError> {
-        let json = serde_json::to_string(config)
-            .map_err(|e| AppError::Database(format!("序列化整流器配置失败: {e}")))?;
-        self.set_setting("rectifier_config", &json)
-    }
-
-    // --- 优化器配置 ---
-
-    /// 获取优化器配置
-    ///
-    /// 返回优化器配置，如果不存在则返回默认值（默认关闭）
-    pub fn get_optimizer_config(&self) -> Result<crate::proxy::types::OptimizerConfig, AppError> {
-        match self.get_setting("optimizer_config")? {
-            Some(json) => serde_json::from_str(&json)
-                .map_err(|e| AppError::Database(format!("解析优化器配置失败: {e}"))),
-            None => Ok(crate::proxy::types::OptimizerConfig::default()),
-        }
-    }
-
-    /// 更新优化器配置
-    pub fn set_optimizer_config(
-        &self,
-        config: &crate::proxy::types::OptimizerConfig,
-    ) -> Result<(), AppError> {
-        let json = serde_json::to_string(config)
-            .map_err(|e| AppError::Database(format!("序列化优化器配置失败: {e}")))?;
-        self.set_setting("optimizer_config", &json)
-    }
-
-    // --- Copilot 优化器配置 ---
-
-    /// 获取 Copilot 优化器配置
-    ///
-    /// 返回配置，如果不存在则返回默认值（默认开启）
-    pub fn get_copilot_optimizer_config(
-        &self,
-    ) -> Result<crate::proxy::types::CopilotOptimizerConfig, AppError> {
-        match self.get_setting("copilot_optimizer_config")? {
-            Some(json) => serde_json::from_str(&json)
-                .map_err(|e| AppError::Database(format!("解析 Copilot 优化器配置失败: {e}"))),
-            None => Ok(crate::proxy::types::CopilotOptimizerConfig::default()),
-        }
-    }
-
-    /// 更新 Copilot 优化器配置
-    pub fn set_copilot_optimizer_config(
-        &self,
-        config: &crate::proxy::types::CopilotOptimizerConfig,
-    ) -> Result<(), AppError> {
-        let json = serde_json::to_string(config)
-            .map_err(|e| AppError::Database(format!("序列化 Copilot 优化器配置失败: {e}")))?;
-        self.set_setting("copilot_optimizer_config", &json)
-    }
-
     // --- 日志配置 ---
 
     /// 获取日志配置
-    pub fn get_log_config(&self) -> Result<crate::proxy::types::LogConfig, AppError> {
+    pub fn get_log_config(&self) -> Result<LogConfig, AppError> {
         match self.get_setting("log_config")? {
             Some(json) => serde_json::from_str(&json)
                 .map_err(|e| AppError::Database(format!("解析日志配置失败: {e}"))),
-            None => Ok(crate::proxy::types::LogConfig::default()),
+            None => Ok(LogConfig::default()),
         }
     }
 
     /// 更新日志配置
-    pub fn set_log_config(&self, config: &crate::proxy::types::LogConfig) -> Result<(), AppError> {
+    pub fn set_log_config(&self, config: &LogConfig) -> Result<(), AppError> {
         let json = serde_json::to_string(config)
             .map_err(|e| AppError::Database(format!("序列化日志配置失败: {e}")))?;
         self.set_setting("log_config", &json)
+    }
+}
+
+/// 日志配置
+///
+/// 存储在 settings 表的 log_config 字段中（JSON 格式）
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LogConfig {
+    /// 总开关：是否启用日志
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// 日志级别: error, warn, info, debug, trace
+    #[serde(default = "default_log_level")]
+    pub level: String,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+fn default_log_level() -> String {
+    "info".to_string()
+}
+
+impl Default for LogConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            level: default_log_level(),
+        }
+    }
+}
+
+impl LogConfig {
+    /// 将配置转换为 log::LevelFilter
+    pub fn to_level_filter(&self) -> log::LevelFilter {
+        if !self.enabled {
+            return log::LevelFilter::Off;
+        }
+        match self.level.to_lowercase().as_str() {
+            "error" => log::LevelFilter::Error,
+            "warn" => log::LevelFilter::Warn,
+            "info" => log::LevelFilter::Info,
+            "debug" => log::LevelFilter::Debug,
+            "trace" => log::LevelFilter::Trace,
+            _ => log::LevelFilter::Info,
+        }
     }
 }

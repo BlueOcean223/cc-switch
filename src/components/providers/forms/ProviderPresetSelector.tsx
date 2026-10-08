@@ -10,7 +10,6 @@ import { ProviderIconBox } from "@/components/ProviderIconBox";
 import type { ProviderPreset } from "@/config/claudeProviderPresets";
 import type { CodexProviderPreset } from "@/config/codexProviderPresets";
 import type { GeminiProviderPreset } from "@/config/geminiProviderPresets";
-import type { ClaudeDesktopProviderPreset } from "@/config/claudeDesktopProviderPresets";
 import type { OpenCodeProviderPreset } from "@/config/opencodeProviderPresets";
 import type { OpenClawProviderPreset } from "@/config/openclawProviderPresets";
 import type { HermesProviderPreset } from "@/config/hermesProviderPresets";
@@ -43,12 +42,10 @@ import {
   presetDomain,
   presetGroup,
   presetMatches,
-  presetNeedsRouting,
   presetPlanLabel,
   presetRegionLabel,
   presetRowGroup,
   presetRowName,
-  presetRowNeedsRouting,
   presetVersionLabel,
   presetVersionLayout,
   presetVersionShortLabel,
@@ -66,7 +63,6 @@ export type AnyPreset =
   | ProviderPreset
   | CodexProviderPreset
   | GeminiProviderPreset
-  | ClaudeDesktopProviderPreset
   | OpenCodeProviderPreset
   | OpenClawProviderPreset
   | HermesProviderPreset
@@ -199,7 +195,6 @@ export function ProviderPresetSelector({
 
   return (
     <PresetBar
-      appId={step.appId}
       entry={entry}
       versions={entry ? presetVersions(presetEntries, entry) : []}
       onChange={() => step.setStep("pick")}
@@ -257,13 +252,11 @@ function PresetIconBox({ preset }: { preset?: AnyPreset }) {
 // ─── 第 2 步：预设条 ────────────────────────────────────────────────────────
 
 function PresetBar({
-  appId,
   entry,
   versions,
   onChange,
   onVersionChange,
 }: {
-  appId: AppId;
   entry?: PresetEntry;
   /** 同一家的所有版本（含选中的这个）；只有一个时不显示「版本」 */
   versions: PresetEntry[];
@@ -292,7 +285,6 @@ function PresetBar({
                 <span className="truncate text-strong text-fg-1" title={name}>
                   {name}
                 </span>
-                {presetNeedsRouting(appId, entry) && <NeedsRouteBadge />}
               </div>
               {domain && (
                 <div className="truncate text-caption text-fg-2">{domain}</div>
@@ -505,15 +497,6 @@ function DimensionLabel({ children }: { children: React.ReactNode }) {
   );
 }
 
-function NeedsRouteBadge() {
-  const { t } = useTranslation();
-  return (
-    <span className="inline-flex h-[18px] shrink-0 items-center whitespace-nowrap rounded-full border border-border-strong px-1.5 text-badge text-fg-2">
-      {t("providerCard.chip.needsRoute")}
-    </span>
-  );
-}
-
 // ─── 第 1 步：选预设 ────────────────────────────────────────────────────────
 
 interface PresetPickerProps {
@@ -619,7 +602,6 @@ function PresetPicker({
         icon={<PresetIconBox preset={first.preset} />}
         name={presetRowName(row, t)}
         detail={presetRowDetail(appId, row, hits, t)}
-        needsRoute={presetRowNeedsRouting(appId, row)}
         selected={row.versions.some((entry) => entry.id === selectedPresetId)}
         onClick={() => onPick(target.id)}
       />
@@ -860,14 +842,12 @@ function PresetRow({
   icon,
   name,
   detail,
-  needsRoute = false,
   selected = false,
   onClick,
 }: {
   icon: React.ReactNode;
   name: string;
   detail?: string;
-  needsRoute?: boolean;
   selected?: boolean;
   onClick: () => void;
 }) {
@@ -900,7 +880,6 @@ function PresetRow({
           </span>
         )}
       </span>
-      {needsRoute && <NeedsRouteBadge />}
     </button>
   );
 }

@@ -1,11 +1,12 @@
 mod app_config;
 mod app_store;
 mod auto_launch;
-mod claude_desktop_config;
 mod claude_mcp;
 mod claude_plugin;
 mod codex_config;
 mod codex_history_migration;
+mod codex_oauth_auth;
+mod codex_provider;
 mod codex_state_db;
 mod commands;
 mod config;
@@ -16,6 +17,7 @@ mod gemini_config;
 mod gemini_mcp;
 mod grok_config;
 pub mod hermes_config;
+mod http_client;
 mod init_status;
 mod jsonc_document;
 mod lightweight;
@@ -33,13 +35,13 @@ mod pi_config;
 mod prompt;
 mod prompt_files;
 mod provider;
-mod proxy;
 mod services;
 mod session_manager;
 mod settings;
 mod store;
-
+mod token_usage;
 mod tray;
+mod upstream_import;
 mod usage_events;
 mod usage_script;
 
@@ -48,34 +50,30 @@ pub use codex_config::{
     extract_codex_experimental_bearer_token, get_codex_auth_path, get_codex_config_path,
     read_codex_live_settings, write_codex_live_atomic,
 };
-pub use commands::open_provider_terminal;
 pub use commands::*;
 pub use config::{get_claude_mcp_path, get_claude_settings_path, read_json_file};
 pub use database::{Database, Profile};
-pub use deeplink::{import_provider_from_deeplink, parse_deeplink_url, DeepLinkImportRequest};
+pub use deeplink::{import_provider_from_deeplink, parse_deeplink_url};
 pub use error::AppError;
 pub use grok_config::get_grok_config_path;
 pub use mcp::{
-    import_from_claude, import_from_codex, import_from_gemini, import_from_grokbuild,
-    remove_server_from_claude, remove_server_from_codex, remove_server_from_gemini,
-    remove_server_from_grokbuild, sync_enabled_to_claude, sync_enabled_to_codex,
-    sync_enabled_to_gemini, sync_single_server_to_claude, sync_single_server_to_codex,
-    sync_single_server_to_gemini, sync_single_server_to_grokbuild,
+    import_from_claude, import_from_codex, import_from_gemini, sync_enabled_to_claude,
+    sync_enabled_to_codex, sync_single_server_to_codex,
 };
 pub use prompt::Prompt;
 pub use provider::{Provider, ProviderMeta};
 pub use services::{
     profile::{ProfilePayload, ProfileScope, ProfileService},
-    provider::{reapply_current_codex_official_live, EditorSave, EditorView},
+    provider::{reapply_current_codex_official_live, EditorSave},
     skill::{migrate_skills_to_ssot, ImportSkillSelection},
-    ConfigService, EndpointLatency, McpService, PromptService, ProviderService, ProxyService,
-    SkillService, SpeedtestService,
+    ConfigService, McpService, PromptService, ProviderService, SkillService,
 };
 pub use settings::{update_settings, AppSettings};
 pub use store::AppState;
 use tauri_plugin_deep_link::DeepLinkExt;
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 
+#[cfg(target_os = "windows")]
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::{fmt, sync::Arc};
 use tauri::tray::{TrayIconBuilder, TrayIconEvent};
@@ -211,30 +209,6 @@ pub(crate) fn redact_url_for_log_with_secrets(url_str: &str, known_secrets: &[St
     redact_known_secrets(&sanitized, known_secrets)
 }
 
-/// 只保留 `scheme://host:port`，丢掉 path/query/userinfo。用于我们手里没有任何
-/// 已知密钥可脱敏 path 的场景——凭据可能整个内嵌在 base_url 的 path 里，此时
-/// 记录 path 无法保证不泄漏，只能退回到 origin。
-pub(crate) fn redact_url_origin_for_log(url_str: &str) -> String {
-    let scheme_relative = url_str.starts_with("//");
-    let parsed = if scheme_relative {
-        url::Url::parse(&format!("https:{url_str}"))
-    } else {
-        url::Url::parse(url_str)
-    };
-
-    match parsed {
-        Ok(url) if url.has_host() => {
-            let authority = &url[url::Position::BeforeHost..url::Position::AfterPort];
-            if scheme_relative {
-                format!("//{authority}")
-            } else {
-                format!("{}://{authority}", url.scheme())
-            }
-        }
-        _ => "[invalid target]".to_string(),
-    }
-}
-
 /// 给日志用的错误文本：去掉 TOML 解析诊断里引用的源码行（`1 | key = "..."` 和它上下的
 /// `|`、`^` 标注行）。那一行是用户配置原文，出错的可能正是密钥那一行；行列号和原因留着。
 pub(crate) fn error_for_log(error: &str) -> String {
@@ -255,7 +229,7 @@ fn runtime_log_level_allows(level: log::Level, max_level: log::LevelFilter) -> b
     max_level.to_level().is_some_and(|maximum| level <= maximum)
 }
 
-/// 统一处理 ccswitch:// 深链接 URL
+/// 统一处理 ccslite:// 深链接 URL（也接受上游的 ccswitch://）
 ///
 /// - 解析 URL
 /// - 向前端发射 `deeplink-import` / `deeplink-error` 事件
@@ -266,7 +240,7 @@ fn handle_deeplink_url(
     focus_main_window: bool,
     source: &str,
 ) -> bool {
-    if !url_str.starts_with("ccswitch://") {
+    if !crate::deeplink::is_deeplink_url(url_str) {
         return false;
     }
 
@@ -349,7 +323,7 @@ async fn update_tray_menu(
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    // 设置 panic hook，在应用崩溃时记录日志到 <app_config_dir>/crash.log（默认 ~/.cc-switch/crash.log）
+    // 设置 panic hook，在应用崩溃时记录日志到 <app_config_dir>/crash.log（默认 ~/.ccs-lite/crash.log）
     panic_hook::setup_panic_hook();
 
     let mut builder = tauri::Builder::default();
@@ -514,6 +488,12 @@ pub fn run() {
             // 让 Store 损坏或路径无效等启动警告能够真正落盘。
             let _ = app_store::refresh_app_config_dir_override(app.handle());
 
+            // 首次启动：ccs-lite 数据目录里还没有数据库时，从上游 CC Switch 导入一次。
+            // 必须在打开数据库之前。
+            if let Some(record) = upstream_import::run_on_first_launch() {
+                crate::init_status::set_upstream_import(record);
+            }
+
             #[cfg(target_os = "windows")]
             set_windows_app_user_model_id(app.handle());
 
@@ -670,10 +650,7 @@ pub fn run() {
 
             let app_state = AppState::new(db);
 
-            // 设置 AppHandle 用于代理故障转移时的 UI 更新
-            app_state.proxy_service.set_app_handle(app.handle().clone());
-
-            // 补完上次崩溃时写到一半的客户端文件（写前意图在 ~/.cc-switch/live-state.json），
+            // 补完上次崩溃时写到一半的客户端文件（写前意图在设备目录 ~/.ccs-lite/live-state.json），
             // 要在任何写客户端文件的启动步骤之前。
             crate::mode::operation::recover_on_startup(&app_state.db);
 
@@ -1042,14 +1019,19 @@ pub fn run() {
             {
                 #[cfg(target_os = "linux")]
                 {
-                    // Use Tauri's path API to get correct path (includes app identifier)
-                    // tauri-plugin-deep-link writes to: ~/.local/share/com.ccswitch.desktop/applications/cc-switch-handler.desktop
-                    // Only register if .desktop file doesn't exist to avoid overwriting user customizations
-                    let should_register = app
-                        .path()
-                        .data_dir()
-                        .map(|d| !d.join("applications/cc-switch-handler.desktop").exists())
-                        .unwrap_or(true);
+                    // tauri-plugin-deep-link 写的是 `<data_dir>/applications/<可执行文件名>-handler.desktop`，
+                    // data_dir 是 ~/.local/share（不含 identifier）。可执行文件名由
+                    // tauri.linux.conf.json 的 mainBinaryName 定为 ccs-lite，不和上游的
+                    // cc-switch-handler.desktop 同名。
+                    // 文件已存在就不注册，避免覆盖用户自己的修改。
+                    let handler_name = std::env::current_exe()
+                        .ok()
+                        .and_then(|exe| exe.file_name().map(|n| n.to_string_lossy().into_owned()))
+                        .map(|name| format!("{name}-handler.desktop"));
+                    let should_register = match (app.path().data_dir(), handler_name) {
+                        (Ok(dir), Some(name)) => !dir.join("applications").join(name).exists(),
+                        _ => true,
+                    };
 
                     if should_register {
                         if let Err(e) = app.deep_link().register_all() {
@@ -1091,7 +1073,7 @@ pub fn run() {
                         log::debug!("  URL[{i}]: {}", url_for_log(url_str));
 
                         if handle_deeplink_url(&app_handle, url_str, true, "on_open_url") {
-                            break; // Process only first ccswitch:// URL
+                            break; // Process only the first deep link URL
                         }
                     }
                 }
@@ -1166,46 +1148,12 @@ pub fn run() {
             let skill_service = SkillService::new();
             app.manage(commands::skill::SkillServiceState(Arc::new(skill_service)));
 
-            // 初始化 CopilotAuthManager
-            {
-                use crate::proxy::providers::copilot_auth::CopilotAuthManager;
-                use commands::CopilotAuthState;
-                use tokio::sync::RwLock;
-
-                let app_config_dir = crate::config::get_app_config_dir();
-                let copilot_auth_manager = CopilotAuthManager::new(app_config_dir);
-                app.manage(CopilotAuthState(Arc::new(RwLock::new(copilot_auth_manager))));
-                log::info!("✓ CopilotAuthManager initialized");
-            }
-
-            // 初始化 CodexOAuthManager (ChatGPT Plus/Pro 反代)
-            {
-                use commands::CodexOAuthState;
-
-                let codex_oauth_manager =
-                    app.state::<AppState>().codex_oauth_manager.clone();
-                app.manage(CodexOAuthState(codex_oauth_manager));
-                log::info!("✓ CodexOAuthManager initialized");
-            }
-
-            // 初始化 xAI OAuthManager (Grok API 反代)
-            {
-                use crate::proxy::providers::xai_oauth_auth::XaiOAuthManager;
-                use commands::XaiOAuthState;
-                use tokio::sync::RwLock;
-
-                let app_config_dir = crate::config::get_app_config_dir();
-                let xai_oauth_manager = XaiOAuthManager::new(app_config_dir);
-                app.manage(XaiOAuthState(Arc::new(RwLock::new(xai_oauth_manager))));
-                log::info!("✓ XaiOAuthManager initialized");
-            }
-
             // 初始化全局出站代理 HTTP 客户端
             {
                 let db = &app.state::<AppState>().db;
                 let proxy_url = db.get_global_proxy_url().ok().flatten();
 
-                if let Err(e) = crate::proxy::http_client::init(proxy_url.as_deref()) {
+                if let Err(e) = crate::http_client::init(proxy_url.as_deref()) {
                     log::error!(
                         "[GlobalProxy] [GP-005] Failed to initialize with saved config: {e}"
                     );
@@ -1223,7 +1171,7 @@ pub fn run() {
                     }
 
                     // 使用直连模式重新初始化
-                    if let Err(fallback_err) = crate::proxy::http_client::init(None) {
+                    if let Err(fallback_err) = crate::http_client::init(None) {
                         log::error!(
                             "[GlobalProxy] [GP-008] Failed to initialize direct connection: {fallback_err}"
                         );
@@ -1231,10 +1179,43 @@ pub fn run() {
                 }
             }
 
-            // 异常退出恢复 + 代理状态自动恢复
+            // 启动后的后台整理（通用配置片段、定期备份等）
             let app_handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 let state = app_handle.state::<AppState>();
+
+                // 上游 CC Switch 的本地路由留下的客户端配置：上游代理不在监听时重新写入
+                // 当前供应商（不然客户端连不上），其余情况只通知前端。排在会话同步之前。
+                {
+                    let handle = app_handle.clone();
+                    let task = tauri::async_runtime::spawn_blocking(move || {
+                        let state = handle.state::<AppState>();
+                        for app_type in [
+                            crate::app_config::AppType::Claude,
+                            crate::app_config::AppType::Codex,
+                            crate::app_config::AppType::Gemini,
+                            crate::app_config::AppType::GrokBuild,
+                        ] {
+                            let Some(repair) =
+                                crate::services::provider::ProviderService::repair_legacy_routing(
+                                    &state, &app_type,
+                                )
+                            else {
+                                continue;
+                            };
+                            let payload = serde_json::json!({
+                                "app": app_type.as_str(),
+                                "repair": repair,
+                            });
+                            if let Err(e) = handle.emit("legacy-routing-detected", payload) {
+                                log::warn!("发送路由残留事件失败: {e}");
+                            }
+                        }
+                    });
+                    if let Err(e) = task.await {
+                        log::warn!("检查上游路由残留的任务异常退出: {e}");
+                    }
+                }
 
                 // 必须排在 auto-extract 之前：先把历史泄漏进 Gemini 共享片段的凭据
                 // 清干净，否则紧接着的提取会基于被污染的 live 再写一遍。
@@ -1249,19 +1230,19 @@ pub fn run() {
 
                 initialize_common_config_snippets(&state);
 
-                // 定下各应用的直连 / 代理模式（处理旧版遗留的接管状态），再把代理模式的
-                // 应用接上。要排在通用配置片段的自动提取之后：它读的是直连的 live。
-                crate::mode::controller::startup(&state).await;
-                // 启动流程走完：托盘这时才开始报「路由服务没在运行」，并记下退回直连的应用。
-                crate::tray::mark_startup_settled(&app_handle);
-                // Codex 官方做路由、发布了 Stack 模型时，官方模型列表过期就在后台刷新。
-                crate::services::provider::codex_official_models::start_background_checks(
-                    state.inner().clone(),
-                );
-
-                // Periodic backup check (on startup)
-                if let Err(e) = state.db.periodic_backup_if_needed() {
-                    log::warn!("Periodic backup failed on startup: {e}");
+                // Periodic backup check (on startup)。拿会话同步锁的原因见下面的定时器
+                {
+                    let _guard = crate::services::session_usage::session_sync_mutex()
+                        .lock()
+                        .await;
+                    let db = state.db.clone();
+                    match tauri::async_runtime::spawn_blocking(move || db.periodic_backup_if_needed())
+                        .await
+                    {
+                        Ok(Ok(())) => {}
+                        Ok(Err(e)) => log::warn!("Periodic backup failed on startup: {e}"),
+                        Err(e) => log::warn!("Periodic backup task failed on startup: {e}"),
+                    }
                 }
 
                 // Periodic maintenance timer: run once per day while the app is running
@@ -1274,8 +1255,20 @@ pub fn run() {
                     interval.tick().await; // skip immediate first tick (already checked above)
                     loop {
                         interval.tick().await;
-                        if let Err(e) = db_for_timer.periodic_backup_if_needed() {
-                            log::warn!("Periodic maintenance timer failed: {e}");
+                        // 维护会汇总并删除 30 天前的明细。用量重建先删再重导旧明细、
+                        // 最后按重导的明细删汇总，中途被汇总掉的明细会让那些天算错，
+                        // 所以和会话同步、重建用同一把锁
+                        let _guard = crate::services::session_usage::session_sync_mutex()
+                            .lock()
+                            .await;
+                        let db = db_for_timer.clone();
+                        let outcome =
+                            tauri::async_runtime::spawn_blocking(move || db.periodic_backup_if_needed())
+                                .await;
+                        match outcome {
+                            Ok(Ok(())) => {}
+                            Ok(Err(e)) => log::warn!("Periodic maintenance timer failed: {e}"),
+                            Err(e) => log::warn!("Periodic maintenance task failed: {e}"),
                         }
                     }
                 });
@@ -1287,7 +1280,7 @@ pub fn run() {
 
                     async fn run_session_sync(db: std::sync::Arc<crate::database::Database>, backfill: bool) {
                         // 手动扫描模式下跳过定时扫描；backfill 轮（启动首轮）仍进入，
-                        // 费用回填只修补数据库既有行（含代理记账行），不读会话文件
+                        // 定价变了就按当前定价重算既有行的成本，不读会话文件
                         if !backfill && !crate::settings::get_settings().session_auto_sync_enabled {
                             return;
                         }
@@ -1295,15 +1288,47 @@ pub fn run() {
                             .lock()
                             .await;
                         let task = tauri::async_runtime::spawn_blocking(move || {
+                            let auto_sync = crate::settings::get_settings().session_auto_sync_enabled;
                             if backfill {
-                                if let Err(error) = db.backfill_missing_usage_costs() {
-                                    log::warn!("Usage cost startup backfill failed: {error}");
+                                // 导入或计价规则变了：启动首轮改为按会话日志整体重建
+                                let rebuilt = match crate::services::usage_rebuild::is_rebuild_pending(&db) {
+                                    Ok(true) if auto_sync => {
+                                        Some(crate::services::usage_rebuild::rebuild_session_usage(&db))
+                                    }
+                                    Ok(_) => None,
+                                    Err(error) => {
+                                        log::warn!("Reading usage rebuild flag failed: {error}");
+                                        None
+                                    }
+                                };
+                                // 重建只重导日志还在的行，其余本地计价的行在这里按新定价重算
+                                match db.reprice_usage_costs_if_pricing_changed() {
+                                    Ok(Some(repriced)) => log::info!("Pricing or pricing rules changed, repriced {repriced} usage row(s)"),
+                                    Ok(None) => {}
+                                    Err(error) => log::warn!("Usage cost startup reprice failed: {error}"),
+                                }
+                                if let Some(outcome) = rebuilt {
+                                    return outcome.unwrap_or_else(|error| {
+                                        log::warn!("Usage rebuild failed: {error}");
+                                        crate::services::session_usage::SessionSyncResult {
+                                            errors: vec![error.to_string()],
+                                            ..Default::default()
+                                        }
+                                    });
                                 }
                             }
-                            if !crate::settings::get_settings().session_auto_sync_enabled {
+                            if !auto_sync {
                                 return crate::services::session_usage::SessionSyncResult::default();
                             }
-                            crate::services::session_usage::sync_all_unlocked(&db)
+                            // 启动首轮重建失败过的话，定时轮次不再重试
+                            crate::services::usage_rebuild::sync_or_rebuild(&db, false)
+                                .unwrap_or_else(|error| {
+                                    log::warn!("Usage rebuild failed: {error}");
+                                    crate::services::session_usage::SessionSyncResult {
+                                        errors: vec![error.to_string()],
+                                        ..Default::default()
+                                    }
+                                })
                         });
                         match task.await {
                             Ok(result) if !result.errors.is_empty() => {
@@ -1350,6 +1375,12 @@ pub fn run() {
 
             // 静默启动：根据设置决定是否显示主窗口
             let settings = crate::settings::get_settings();
+
+            // 登录项和"开机自启"设置对齐（macOS 的检查走 AppleScript，放到后台线程）
+            {
+                let wanted = settings.launch_on_startup;
+                std::thread::spawn(move || crate::auto_launch::align_with_setting(wanted));
+            }
             if let Some(window) = app.get_webview_window("main") {
                 // 在窗口首次显示前同步装饰状态，避免前端加载后再切换导致标题栏闪烁
                 // Linux：由设置决定（解决 Wayland 下系统窗口按钮不可用的问题）
@@ -1401,10 +1432,8 @@ pub fn run() {
             commands::remove_provider_from_live_config,
             commands::switch_provider,
             commands::import_default_config,
-            commands::get_claude_desktop_status,
-            commands::get_claude_desktop_default_routes,
-            commands::import_claude_desktop_providers_from_claude,
-            commands::ensure_claude_desktop_official_provider,
+            commands::get_live_routing_state,
+            commands::reapply_current_provider,
             commands::ensure_codex_official_provider,
             commands::ensure_grokbuild_official_provider,
             commands::get_claude_config_status,
@@ -1416,6 +1445,8 @@ pub fn run() {
             commands::open_external,
             commands::get_init_error,
             commands::get_migration_result,
+            commands::get_upstream_import_result,
+            commands::get_exported_builtin_prices,
             commands::get_skills_migration_result,
             commands::get_app_config_path,
             commands::open_app_config_folder,
@@ -1429,12 +1460,6 @@ pub fn run() {
             commands::save_settings,
             commands::has_codex_unify_history_backup,
             commands::restore_codex_unified_history,
-            commands::get_rectifier_config,
-            commands::set_rectifier_config,
-            commands::get_optimizer_config,
-            commands::set_optimizer_config,
-            commands::get_copilot_optimizer_config,
-            commands::set_copilot_optimizer_config,
             commands::get_log_config,
             commands::set_log_config,
             commands::restart_app,
@@ -1461,9 +1486,6 @@ pub fn run() {
             // subscription quota
             commands::get_subscription_quota,
             commands::get_codex_oauth_quota,
-            commands::get_codex_oauth_models,
-            commands::get_xai_oauth_models,
-            commands::get_xai_oauth_quota,
             commands::get_coding_plan_quota,
             commands::get_balance,
             // New MCP via config.json (SSOT)
@@ -1552,7 +1574,6 @@ pub fn run() {
             // Environment variable management
             commands::check_env_conflicts,
             commands::delete_env_vars,
-            commands::restore_env_backup,
             // Skill management (v3.10.0+ unified)
             commands::get_installed_skills,
             commands::get_skill_backups,
@@ -1584,50 +1605,8 @@ pub fn run() {
             commands::install_skills_from_zip,
             // Auto launch
             commands::set_auto_launch,
-            commands::get_auto_launch_status,
-            // Proxy server management
-            commands::start_proxy_server,
-            commands::stop_proxy_server,
-            commands::stop_proxy_with_restore,
-            commands::get_proxy_takeover_status,
-            commands::set_proxy_takeover_for_app,
-            commands::get_app_mode,
-            commands::set_proxy_route,
-            commands::take_startup_attach_failures,
             tray::take_tray_navigation,
             tray::tray_app_page_seen,
-            commands::exit_proxy_apps_in_mode,
-            commands::get_direct_provider,
-            commands::get_proxy_status,
-            commands::get_proxy_config,
-            commands::update_proxy_config,
-            // Global & Per-App Config
-            commands::get_global_proxy_config,
-            commands::update_global_proxy_config,
-            commands::get_proxy_config_for_app,
-            commands::update_proxy_config_for_app,
-            commands::get_pricing_model_source,
-            commands::set_pricing_model_source,
-            commands::is_proxy_running,
-            commands::is_live_takeover_active,
-            commands::switch_proxy_provider,
-            commands::get_proxy_stack,
-            commands::set_proxy_stack_member,
-            commands::adopt_codex_stack_catalog,
-            commands::restart_codex_app_server_daemon,
-            // Proxy failover commands
-            commands::get_provider_health,
-            commands::reset_circuit_breaker,
-            commands::get_circuit_breaker_config,
-            commands::update_circuit_breaker_config,
-            commands::get_circuit_breaker_stats,
-            // Failover queue management
-            commands::get_failover_queue,
-            commands::get_available_providers_for_failover,
-            commands::add_to_failover_queue,
-            commands::remove_from_failover_queue,
-            commands::get_auto_failover_enabled,
-            commands::set_auto_failover_enabled,
             // Usage statistics
             commands::get_usage_summary,
             commands::get_session_usage_summary,
@@ -1644,10 +1623,9 @@ pub fn run() {
             commands::get_models_dev_sync_config,
             commands::save_models_dev_sync_config,
             commands::record_models_dev_sync_result,
-            commands::check_provider_limits,
             // Session usage sync
             commands::sync_session_usage,
-            commands::rebuild_codex_usage,
+            commands::rebuild_session_usage,
             commands::get_session_usage_last_sync,
             commands::get_usage_data_sources,
             // Stream health check
@@ -1708,7 +1686,6 @@ pub fn run() {
             commands::get_global_proxy_url,
             commands::set_global_proxy_url,
             commands::test_proxy_url,
-            commands::get_upstream_proxy_status,
             commands::scan_local_proxies,
             // Window theme control
             commands::set_window_theme,
@@ -1719,24 +1696,7 @@ pub fn run() {
             commands::auth_list_accounts,
             commands::auth_get_status,
             commands::auth_remove_account,
-            commands::auth_set_default_account,
             commands::auth_logout,
-            // Copilot OAuth commands (multi-account support)
-            commands::copilot_start_device_flow,
-            commands::copilot_poll_for_auth,
-            commands::copilot_poll_for_account,
-            commands::copilot_list_accounts,
-            commands::copilot_remove_account,
-            commands::copilot_set_default_account,
-            commands::copilot_get_auth_status,
-            commands::copilot_logout,
-            commands::copilot_is_authenticated,
-            commands::copilot_get_token,
-            commands::copilot_get_token_for_account,
-            commands::copilot_get_models,
-            commands::copilot_get_models_for_account,
-            commands::copilot_get_usage,
-            commands::copilot_get_usage_for_account,
             // OMO commands
             commands::read_omo_local_file,
             commands::get_current_omo_provider_id,
@@ -1788,12 +1748,10 @@ pub fn run() {
                 // 重启路径交还 Tauri 默认流程即可：
                 //   - 窗口状态：插件 Exit 钩子在主线程保存（同线程读取窗口几何，无死锁）
                 //   - 托盘图标：Tauri 内部 cleanup_before_exit 清理，正常走 Drop
-                //   - 代理/Live 配置：无需恢复，重启后新实例立即接管并恢复代理状态
                 //   - 100ms 落盘等待：重启前的 DB 写入均为命令驱动、此刻已完成，
                 //     与所有 Tauri 应用默认重启路径的行为一致，无需额外等待
                 ExitRequestAction::DeferToTauriRestart => {
                     log::info!("收到重启请求 (code={code:?})，交由 Tauri 默认重启流程 re-exec");
-                    RESTART_REQUESTED.store(true, Ordering::SeqCst);
                     return;
                 }
                 // 其它 Some(_)：用户主动调用 app.exit() 退出（如托盘菜单"退出"），
@@ -1807,7 +1765,6 @@ pub fn run() {
             let app_handle = app_handle.clone();
             tauri::async_runtime::spawn(async move {
                 save_window_state_before_exit(&app_handle);
-                cleanup_before_exit(&app_handle).await;
                 // 先于 std::process::exit 显式移除托盘图标。
                 // 进程直接退出时 Tauri 运行时不走正常 Drop 流程，
                 // 不会向 Windows Shell 发送 NIM_DELETE，导致已退出的进程
@@ -1821,16 +1778,6 @@ pub fn run() {
                 // 使用 std::process::exit 避免再次触发 ExitRequested
                 std::process::exit(0);
             });
-            return;
-        }
-
-        // macOS ⌘Q、Dock「退出」、注销关机走系统 terminate，不发 ExitRequested、只发
-        // RunEvent::Exit，回调一返回进程就结束，只能在这里同步补做退出清理。重启也会走到
-        // 这里，照上面 DeferToTauriRestart 的约定交还 Tauri 默认流程，不清理。
-        if matches!(event, RunEvent::Exit) {
-            if !RESTART_REQUESTED.load(Ordering::SeqCst) {
-                cleanup_before_system_exit(app_handle);
-            }
             return;
         }
 
@@ -1854,7 +1801,7 @@ pub fn run() {
                         }
                     }
                 }
-                // 处理通过自定义 URL 协议触发的打开事件（例如 ccswitch://...）
+                // 处理通过自定义 URL 协议触发的打开事件（例如 ccslite://...）
                 RunEvent::Opened { urls } => {
                     if let Some(url) = urls.first() {
                         let url_str = url.to_string();
@@ -1863,7 +1810,7 @@ pub fn run() {
                             url_for_log(&url_str)
                         );
 
-                        if url_str.starts_with("ccswitch://") {
+                        if crate::deeplink::is_deeplink_url(&url_str) {
                             if crate::lightweight::is_lightweight_mode() {
                                 if let Err(e) = crate::lightweight::exit_lightweight_mode(app_handle)
                                 {
@@ -1935,41 +1882,6 @@ pub fn run() {
 // 应用退出清理
 // ============================================================
 
-/// 应用退出前的清理工作
-///
-/// 把接上代理的客户端都指回直连（模式和代理路由保留，下次启动再接上），再停止代理。
-/// 客户端不能一直指着代理：开机自启默认关闭，CC Switch 一关客户端就连不上了。
-pub async fn cleanup_before_exit(app_handle: &tauri::AppHandle) {
-    if let Some(state) = app_handle.try_state::<store::AppState>() {
-        crate::mode::controller::detach_all(state.inner()).await;
-        log::info!("退出清理完成：客户端已指回直连，代理已停止");
-    }
-}
-
-/// 系统终止应用时最多等退出清理这么久：停代理服务自带 5 秒超时，指回直连只是写几个文件。
-const SYSTEM_EXIT_CLEANUP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(8);
-
-/// 系统直接终止应用时（macOS ⌘Q、Dock「退出」、注销关机）的退出清理。
-///
-/// 这条路没有 `ExitRequested` 可以 `prevent_exit()` 再异步清理，只能在主线程上等清理做完。
-/// 清理放到异步运行时的线程上跑、主线程限时等：万一里面有步骤要等主线程，超时后照常退出，
-/// 不会把进程卡住。
-fn cleanup_before_system_exit(app_handle: &tauri::AppHandle) {
-    log::info!("系统终止应用，开始退出清理...");
-    let handle = app_handle.clone();
-    let task = tauri::async_runtime::spawn(async move { cleanup_before_exit(&handle).await });
-    // timeout 要在运行时里构造（它取当前运行时的计时器），所以包一层 async。
-    let finished = tauri::async_runtime::block_on(async move {
-        tokio::time::timeout(SYSTEM_EXIT_CLEANUP_TIMEOUT, task).await
-    });
-    if finished.is_err() {
-        log::warn!(
-            "退出清理 {} 秒内没做完，直接退出",
-            SYSTEM_EXIT_CLEANUP_TIMEOUT.as_secs()
-        );
-    }
-}
-
 /// 主动从系统托盘移除托盘图标。
 ///
 /// `std::process::exit` 会绕过 Tauri 运行时，触发不了 `TrayIcon::drop()`，
@@ -1992,9 +1904,6 @@ pub(crate) fn remove_tray_icon_before_exit(app_handle: &tauri::AppHandle) {
 
 fn initialize_common_config_snippets(state: &store::AppState) {
     // Auto-extract common config snippets from clean live files when snippet is missing.
-    // This must run before proxy mode is re-attached on startup, otherwise we'd read
-    // proxy-placeholder configs instead of the user's actual live settings. A client
-    // still attached from an update restart (no detach on the way out) is skipped too.
     for app_type in crate::app_config::AppType::all() {
         if !state
             .db
@@ -2003,16 +1912,20 @@ fn initialize_common_config_snippets(state: &store::AppState) {
         {
             continue;
         }
-        if state.proxy_service.live_has_proxy_placeholder(&app_type) {
-            continue;
-        }
-
         let settings = match crate::services::provider::ProviderService::read_live_settings(
             app_type.clone(),
         ) {
             Ok(s) => s,
             Err(_) => continue,
         };
+        // 停在上游 CC Switch 路由状态的配置里是占位 Key 和本地代理地址，不从它提取。
+        if crate::live::legacy_routing::detect(&app_type, &settings).is_some() {
+            log::debug!(
+                "○ Live config for {} is on upstream routing; snippet extraction skipped",
+                app_type.as_str()
+            );
+            continue;
+        }
 
         match crate::services::provider::ProviderService::extract_common_config_snippet_from_settings(
             app_type.clone(),
@@ -2224,9 +2137,6 @@ enum ExitRequestAction {
     CleanupAndExit,
 }
 
-/// 收到过重启请求。重启时 Tauri 也会发 `RunEvent::Exit`，靠它跳过系统终止那条清理。
-static RESTART_REQUESTED: AtomicBool = AtomicBool::new(false);
-
 fn classify_exit_request(code: Option<i32>) -> ExitRequestAction {
     match code {
         None => ExitRequestAction::StayInTray,
@@ -2268,7 +2178,7 @@ pub fn destroy_single_instance_lock(app_handle: &tauri::AppHandle) {
 /// 直接走 `tauri::process::restart`（spawn 新进程 + `exit(0)`），不经过事件
 /// 循环退出，因此 Tauri 内部的 `cleanup_before_exit` 和各插件的
 /// `RunEvent::Exit` 钩子都不会执行。需要的清理由调用方与本函数显式补偿：
-/// 窗口状态、代理/Live 恢复（调用方）；托盘图标、single-instance 锁（本函数）。
+/// 窗口状态（调用方）；托盘图标、single-instance 锁（本函数）。
 ///
 /// 有意不调 `AppHandle::cleanup_before_exit()`：它会在调用线程上 Drop 托盘
 /// 图标，而 macOS 的 NSStatusItem 操作要求主线程；`set_visible(false)` 走
@@ -2283,8 +2193,46 @@ pub fn restart_process(app_handle: &tauri::AppHandle) -> ! {
 mod tests {
     use super::{
         classify_exit_request, error_for_log, redact_url_for_log, redact_url_for_log_with_secrets,
-        redact_url_origin_for_log, runtime_log_level_allows, ExitRequestAction,
+        runtime_log_level_allows, ExitRequestAction,
     };
+
+    /// live 停在上游路由状态时不从它提取通用配置片段，等 live 恢复后再提取。
+    #[test]
+    #[serial_test::serial]
+    fn snippets_are_not_extracted_from_a_routed_live() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let saved: Vec<_> = ["HOME", "USERPROFILE", "CC_SWITCH_TEST_HOME"]
+            .into_iter()
+            .map(|key| {
+                let old = std::env::var_os(key);
+                std::env::set_var(key, dir.path());
+                (key, old)
+            })
+            .collect();
+        crate::settings::reload_settings().unwrap();
+
+        let config = crate::codex_config::get_codex_config_path();
+        std::fs::create_dir_all(config.parent().unwrap()).unwrap();
+        std::fs::write(
+            &config,
+            "model_provider = \"cc-switch-official\"\napproval_policy = \"never\"\n\n[model_providers.cc-switch-official]\nname = \"OpenAI\"\nbase_url = \"http://127.0.0.1:15721/v1\"\nrequires_openai_auth = true\n",
+        )
+        .unwrap();
+        let state = crate::store::AppState::new(std::sync::Arc::new(
+            crate::database::Database::memory().unwrap(),
+        ));
+        super::initialize_common_config_snippets(&state);
+        let snippet = state.db.get_config_snippet("codex").unwrap();
+
+        for (key, old) in saved {
+            match old {
+                Some(value) => std::env::set_var(key, value),
+                None => std::env::remove_var(key),
+            }
+        }
+        let _ = crate::settings::reload_settings();
+        assert_eq!(snippet, None);
+    }
 
     #[test]
     fn log_error_drops_toml_source_lines_but_keeps_position() {
@@ -2347,23 +2295,6 @@ mod tests {
         assert_eq!(
             redact_url_for_log_with_secrets("https://api.example.com/v1", &short_secrets),
             "https://api.example.com/v1"
-        );
-    }
-
-    #[test]
-    fn log_url_origin_drops_path_for_credential_in_path() {
-        // 没有已知密钥可脱敏时，凭据可能整个内嵌在 path，只记 origin。
-        assert_eq!(
-            redact_url_origin_for_log("https://gw.example.com/k-9f3a7c2b1e/v1"),
-            "https://gw.example.com"
-        );
-        assert_eq!(
-            redact_url_origin_for_log("https://user:pass@gw.example.com:8443/secret/v1"),
-            "https://gw.example.com:8443"
-        );
-        assert_eq!(
-            redact_url_origin_for_log("//gw.example.com/secret/v1"),
-            "//gw.example.com"
         );
     }
 

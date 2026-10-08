@@ -4,7 +4,7 @@
 //! 主要面向第三方聚合站（硅基流动、OpenRouter 等），以及把 Anthropic
 //! 协议挂在兼容子路径上的官方供应商（DeepSeek、Kimi、智谱 GLM 等）。
 
-use reqwest::header::{HeaderMap, HeaderName, HeaderValue, AUTHORIZATION, USER_AGENT};
+use reqwest::header::{HeaderMap, HeaderName, HeaderValue, AUTHORIZATION};
 use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -83,16 +83,13 @@ const KNOWN_COMPAT_SUFFIXES: &[&str] = &[
 pub async fn fetch_models(
     base_url: &str,
     api_key: &str,
-    is_full_url: bool,
     models_url_override: Option<&str>,
-    user_agent: Option<HeaderValue>,
     api_format: Option<&str>,
     request_headers: Option<&BTreeMap<String, String>>,
 ) -> Result<Vec<FetchedModel>, String> {
-    let candidates = build_models_url_candidates(base_url, is_full_url, models_url_override)?;
-    let headers =
-        build_model_fetch_headers(api_key, api_format, user_agent.as_ref(), request_headers)?;
-    let client = crate::proxy::http_client::get();
+    let candidates = build_models_url_candidates(base_url, models_url_override)?;
+    let headers = build_model_fetch_headers(api_key, api_format, request_headers)?;
+    let client = crate::http_client::get();
     let mut last_err: Option<String> = None;
     let mut known_secrets = vec![api_key.to_string()];
     if let Some(request_headers) = request_headers {
@@ -170,7 +167,6 @@ fn redact_model_fetch_error_body(body: String, known_secrets: &[String]) -> Stri
 fn build_model_fetch_headers(
     api_key: &str,
     api_format: Option<&str>,
-    user_agent: Option<&HeaderValue>,
     request_headers: Option<&BTreeMap<String, String>>,
 ) -> Result<HeaderMap, String> {
     let custom_count = request_headers.map_or(0, BTreeMap::len);
@@ -205,10 +201,6 @@ fn build_model_fetch_headers(
         headers.insert(name, value);
     }
 
-    if let Some(user_agent) = user_agent {
-        headers.insert(USER_AGENT, user_agent.clone());
-    }
-
     if let Some(request_headers) = request_headers {
         for (raw_name, raw_value) in request_headers {
             let name = raw_name.trim();
@@ -241,7 +233,6 @@ fn build_model_fetch_headers(
 /// 结果已去重且保持首次出现顺序。
 pub fn build_models_url_candidates(
     base_url: &str,
-    is_full_url: bool,
     models_url_override: Option<&str>,
 ) -> Result<Vec<String>, String> {
     if let Some(raw) = models_url_override {
@@ -257,21 +248,6 @@ pub fn build_models_url_candidates(
     }
 
     let mut candidates: Vec<String> = Vec::new();
-
-    if is_full_url {
-        if let Some(idx) = trimmed.find("/v1/") {
-            candidates.push(format!("{}/v1/models", &trimmed[..idx]));
-        } else if let Some(idx) = trimmed.rfind('/') {
-            let root = &trimmed[..idx];
-            if root.contains("://") && root.len() > root.find("://").unwrap() + 3 {
-                candidates.push(format!("{root}/v1/models"));
-            }
-        }
-        if candidates.is_empty() {
-            return Err("Cannot derive models endpoint from full URL".to_string());
-        }
-        return Ok(candidates);
-    }
 
     // baseURL 已以版本段 /v{N} 结尾时（如 `/v1`、智谱 `/api/coding/paas/v4`），
     // OpenAI 惯例的模型端点是 `{base}/models`，不能再补 `/v1`
@@ -345,19 +321,17 @@ mod tests {
     #[test]
     fn model_fetch_headers_follow_pi_api_format() {
         let anthropic =
-            build_model_fetch_headers("anthropic-key", Some("anthropic-messages"), None, None)
-                .unwrap();
+            build_model_fetch_headers("anthropic-key", Some("anthropic-messages"), None).unwrap();
         assert_eq!(anthropic["x-api-key"], "anthropic-key");
         assert!(!anthropic.contains_key(AUTHORIZATION));
 
         let google =
-            build_model_fetch_headers("google-key", Some("google-generative-ai"), None, None)
-                .unwrap();
+            build_model_fetch_headers("google-key", Some("google-generative-ai"), None).unwrap();
         assert_eq!(google["x-goog-api-key"], "google-key");
         assert!(!google.contains_key(AUTHORIZATION));
 
         let openai =
-            build_model_fetch_headers("openai-key", Some("openai-responses"), None, None).unwrap();
+            build_model_fetch_headers("openai-key", Some("openai-responses"), None).unwrap();
         assert_eq!(openai[AUTHORIZATION], "Bearer openai-key");
     }
 
@@ -368,7 +342,7 @@ mod tests {
             ("X-Tenant".to_string(), "tenant-a".to_string()),
         ]);
         let headers =
-            build_model_fetch_headers("", Some("openai-completions"), None, Some(&custom)).unwrap();
+            build_model_fetch_headers("", Some("openai-completions"), Some(&custom)).unwrap();
         assert_eq!(headers[AUTHORIZATION], "Token literal");
         assert_eq!(headers["x-tenant"], "tenant-a");
 
@@ -377,7 +351,6 @@ mod tests {
         let headers = build_model_fetch_headers(
             "provider-key",
             Some("anthropic-messages"),
-            None,
             Some(&override_default),
         )
         .unwrap();
@@ -386,9 +359,9 @@ mod tests {
 
     #[test]
     fn model_fetch_headers_reject_invalid_or_missing_credentials() {
-        assert!(build_model_fetch_headers("", None, None, None).is_err());
+        assert!(build_model_fetch_headers("", None, None).is_err());
         let invalid = BTreeMap::from([("bad header".to_string(), "literal-value".to_string())]);
-        assert!(build_model_fetch_headers("", None, None, Some(&invalid)).is_err());
+        assert!(build_model_fetch_headers("", None, Some(&invalid)).is_err());
     }
 
     #[test]
@@ -406,19 +379,19 @@ mod tests {
 
     #[test]
     fn test_candidates_plain_root() {
-        let c = build_models_url_candidates("https://api.siliconflow.cn", false, None).unwrap();
+        let c = build_models_url_candidates("https://api.siliconflow.cn", None).unwrap();
         assert_eq!(c, vec!["https://api.siliconflow.cn/v1/models"]);
     }
 
     #[test]
     fn test_candidates_trailing_slash() {
-        let c = build_models_url_candidates("https://api.example.com/", false, None).unwrap();
+        let c = build_models_url_candidates("https://api.example.com/", None).unwrap();
         assert_eq!(c, vec!["https://api.example.com/v1/models"]);
     }
 
     #[test]
     fn test_candidates_with_v1() {
-        let c = build_models_url_candidates("https://api.example.com/v1", false, None).unwrap();
+        let c = build_models_url_candidates("https://api.example.com/v1", None).unwrap();
         assert_eq!(c, vec!["https://api.example.com/v1/models"]);
     }
 
@@ -426,9 +399,8 @@ mod tests {
     fn test_candidates_zhipu_coding_paas_v4() {
         // 智谱 Coding Plan 端点以 /v4 版本段结尾：模型端点是 {base}/models，
         // 正确路径必须排在 .../v4/v1/models（404）之前。
-        let c =
-            build_models_url_candidates("https://open.bigmodel.cn/api/coding/paas/v4", false, None)
-                .unwrap();
+        let c = build_models_url_candidates("https://open.bigmodel.cn/api/coding/paas/v4", None)
+            .unwrap();
         assert_eq!(
             c,
             vec![
@@ -440,8 +412,7 @@ mod tests {
 
     #[test]
     fn test_candidates_zai_coding_paas_v4() {
-        let c = build_models_url_candidates("https://api.z.ai/api/coding/paas/v4", false, None)
-            .unwrap();
+        let c = build_models_url_candidates("https://api.z.ai/api/coding/paas/v4", None).unwrap();
         assert_eq!(
             c,
             vec![
@@ -465,26 +436,14 @@ mod tests {
     }
 
     #[test]
-    fn test_candidates_full_url() {
-        let c = build_models_url_candidates(
-            "https://proxy.example.com/v1/chat/completions",
-            true,
-            None,
-        )
-        .unwrap();
-        assert_eq!(c, vec!["https://proxy.example.com/v1/models"]);
-    }
-
-    #[test]
     fn test_candidates_empty() {
-        assert!(build_models_url_candidates("", false, None).is_err());
+        assert!(build_models_url_candidates("", None).is_err());
     }
 
     #[test]
     fn test_candidates_override_returns_single() {
         let c = build_models_url_candidates(
             "https://api.deepseek.com/anthropic",
-            false,
             Some("https://api.deepseek.com/models"),
         )
         .unwrap();
@@ -493,15 +452,13 @@ mod tests {
 
     #[test]
     fn test_candidates_override_empty_falls_through() {
-        let c =
-            build_models_url_candidates("https://api.siliconflow.cn", false, Some("   ")).unwrap();
+        let c = build_models_url_candidates("https://api.siliconflow.cn", Some("   ")).unwrap();
         assert_eq!(c, vec!["https://api.siliconflow.cn/v1/models"]);
     }
 
     #[test]
     fn test_candidates_deepseek_strip_anthropic() {
-        let c =
-            build_models_url_candidates("https://api.deepseek.com/anthropic", false, None).unwrap();
+        let c = build_models_url_candidates("https://api.deepseek.com/anthropic", None).unwrap();
         assert_eq!(
             c,
             vec![
@@ -514,8 +471,8 @@ mod tests {
 
     #[test]
     fn test_candidates_zhipu_strip_api_anthropic() {
-        let c = build_models_url_candidates("https://open.bigmodel.cn/api/anthropic", false, None)
-            .unwrap();
+        let c =
+            build_models_url_candidates("https://open.bigmodel.cn/api/anthropic", None).unwrap();
         assert_eq!(
             c,
             vec![
@@ -528,12 +485,8 @@ mod tests {
 
     #[test]
     fn test_candidates_bailian_strip_apps_anthropic() {
-        let c = build_models_url_candidates(
-            "https://dashscope.aliyuncs.com/apps/anthropic",
-            false,
-            None,
-        )
-        .unwrap();
+        let c = build_models_url_candidates("https://dashscope.aliyuncs.com/apps/anthropic", None)
+            .unwrap();
         assert_eq!(
             c,
             vec![
@@ -546,8 +499,7 @@ mod tests {
 
     #[test]
     fn test_candidates_stepfun_strip_step_plan() {
-        let c =
-            build_models_url_candidates("https://api.stepfun.com/step_plan", false, None).unwrap();
+        let c = build_models_url_candidates("https://api.stepfun.com/step_plan", None).unwrap();
         assert_eq!(
             c,
             vec![
@@ -560,12 +512,8 @@ mod tests {
 
     #[test]
     fn test_candidates_doubao_strip_api_coding() {
-        let c = build_models_url_candidates(
-            "https://ark.cn-beijing.volces.com/api/coding",
-            false,
-            None,
-        )
-        .unwrap();
+        let c = build_models_url_candidates("https://ark.cn-beijing.volces.com/api/coding", None)
+            .unwrap();
         assert_eq!(
             c,
             vec![
@@ -578,7 +526,7 @@ mod tests {
 
     #[test]
     fn test_candidates_rightcode_strip_claude() {
-        let c = build_models_url_candidates("https://www.right.codes/claude", false, None).unwrap();
+        let c = build_models_url_candidates("https://www.right.codes/claude", None).unwrap();
         assert_eq!(
             c,
             vec![
@@ -593,7 +541,7 @@ mod tests {
     fn test_candidates_longer_suffix_wins() {
         // baseURL 以 /api/anthropic 结尾时，应剥离整个 /api/anthropic，
         // 而不是只剥离 /anthropic（那样会得到残缺的 https://.../api 根）。
-        let c = build_models_url_candidates("https://api.z.ai/api/anthropic", false, None).unwrap();
+        let c = build_models_url_candidates("https://api.z.ai/api/anthropic", None).unwrap();
         assert_eq!(
             c,
             vec![
@@ -606,14 +554,14 @@ mod tests {
 
     #[test]
     fn test_candidates_no_suffix_no_strip() {
-        let c = build_models_url_candidates("https://openrouter.ai/api", false, None).unwrap();
+        let c = build_models_url_candidates("https://openrouter.ai/api", None).unwrap();
         assert_eq!(c, vec!["https://openrouter.ai/api/v1/models"]);
     }
 
     #[test]
     fn test_candidates_deduplicate() {
         // 虚构 case：baseURL 就是 "scheme://host"，剥不出子路径，应只有一个候选。
-        let c = build_models_url_candidates("https://host.example.com", false, None).unwrap();
+        let c = build_models_url_candidates("https://host.example.com", None).unwrap();
         assert_eq!(c.len(), 1);
     }
 

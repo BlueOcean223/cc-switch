@@ -10,14 +10,12 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { WhatsNewEntry } from "@/lib/whatsNew";
 
 const mocks = vi.hoisted(() => ({
-  getAll: vi.fn(),
   save: vi.fn(),
   openExternal: vi.fn(),
   version: "4.0.4",
   settings: undefined as
     | {
         firstRunNoticeConfirmed?: boolean;
-        newLayoutNoticeConfirmed?: boolean;
         whatsNewSeenVersion?: string;
       }
     | undefined,
@@ -25,7 +23,6 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("@/lib/api", () => ({
-  providersApi: { getAll: mocks.getAll },
   settingsApi: { save: mocks.save, openExternal: mocks.openExternal },
 }));
 vi.mock("@/lib/query", () => ({
@@ -78,7 +75,6 @@ describe("WhatsNewNotice", () => {
     mocks.version = "4.0.4";
     mocks.settings = {
       firstRunNoticeConfirmed: true,
-      newLayoutNoticeConfirmed: true,
       whatsNewSeenVersion: "4.0.1",
     };
     mocks.entries = [
@@ -90,7 +86,6 @@ describe("WhatsNewNotice", () => {
     ];
     mocks.save.mockReset().mockResolvedValue(true);
     mocks.openExternal.mockReset().mockResolvedValue(undefined);
-    mocks.getAll.mockReset().mockResolvedValue({ p1: { id: "p1" } });
   });
 
   it("lists every version since the last one seen and records the current version", async () => {
@@ -112,10 +107,7 @@ describe("WhatsNewNotice", () => {
   });
 
   it("shows only the current version when nothing was recorded before", async () => {
-    mocks.settings = {
-      firstRunNoticeConfirmed: true,
-      newLayoutNoticeConfirmed: true,
-    };
+    mocks.settings = { firstRunNoticeConfirmed: true };
     renderNotice();
     expect(await screen.findByText("v4.0.4")).toBeInTheDocument();
     expect(screen.queryByText("v4.0.2")).not.toBeInTheDocument();
@@ -159,28 +151,6 @@ describe("WhatsNewNotice", () => {
     expect(mocks.save).not.toHaveBeenCalled();
   });
 
-  it("waits while the new layout dialog is showing", async () => {
-    mocks.settings = {
-      firstRunNoticeConfirmed: true,
-      whatsNewSeenVersion: "4.0.1",
-    };
-    renderNotice();
-    await waitFor(() => expect(mocks.getAll).toHaveBeenCalled());
-    await settle();
-    expect(title()).not.toBeInTheDocument();
-    expect(mocks.save).not.toHaveBeenCalled();
-  });
-
-  it("shows when the new layout dialog does not apply", async () => {
-    mocks.settings = {
-      firstRunNoticeConfirmed: true,
-      whatsNewSeenVersion: "4.0.1",
-    };
-    mocks.getAll.mockResolvedValue({});
-    renderNotice();
-    expect(await screen.findByText("whatsNew.updatedTo")).toBeInTheDocument();
-  });
-
   it("collapses older versions and opens the changelog list", async () => {
     mocks.settings!.whatsNewSeenVersion = "4.0.0";
     mocks.entries = [
@@ -201,12 +171,12 @@ describe("WhatsNewNotice", () => {
       screen.getAllByRole("button", { name: "whatsNew.versionDetails" })[0],
     );
     expect(mocks.openExternal).toHaveBeenCalledWith(
-      "https://ccswitch.io/zh/changelog/4.0.4",
+      "https://github.com/BlueOcean223/cc-switch/releases/tag/v4.0.4",
     );
 
     fireEvent.click(screen.getByRole("button", { name: "whatsNew.viewFull" }));
     expect(mocks.openExternal).toHaveBeenLastCalledWith(
-      "https://ccswitch.io/zh/changelog",
+      "https://github.com/BlueOcean223/cc-switch/releases",
     );
     await waitFor(() => expect(title()).not.toBeInTheDocument());
     expect(mocks.save).toHaveBeenCalledWith(

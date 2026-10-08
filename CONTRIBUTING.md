@@ -8,9 +8,9 @@ Thank you for your interest in contributing to CC Switch! Please read our [Code 
 
 There are many ways to contribute:
 
-- **Report bugs** — Found something broken? [Open a bug report](https://github.com/farion1231/cc-switch/issues/new?template=bug_report.yml).
-- **Suggest features** — Have an idea? [Submit a feature request](https://github.com/farion1231/cc-switch/issues/new?template=feature_request.yml).
-- **Improve docs** — Spot a typo or missing info? [Report a doc issue](https://github.com/farion1231/cc-switch/issues/new?template=doc_issue.yml).
+- **Report bugs** — Found something broken? [Open a bug report](https://github.com/BlueOcean223/cc-switch/issues/new?template=bug_report.yml).
+- **Suggest features** — Have an idea? [Submit a feature request](https://github.com/BlueOcean223/cc-switch/issues/new?template=feature_request.yml).
+- **Improve docs** — Spot a typo or missing info? [Report a doc issue](https://github.com/BlueOcean223/cc-switch/issues/new?template=doc_issue.yml).
 - **Contribute code** — Fix bugs or implement features via pull requests.
 - **Translate** — Help us improve translations for Simplified Chinese, Traditional Chinese, English, and Japanese.
 
@@ -79,6 +79,20 @@ pnpm tauri build -c '{"bundle":{"createUpdaterArtifacts":false}}'
 
 For a debug build, append `--debug` to the command above. This single-quote form works on macOS and Linux; on Windows, save `{"bundle":{"createUpdaterArtifacts":false}}` to a JSON file and pass it with `-c <file path>`.
 
+### Releasing
+
+1. Set the new version in `package.json`, `src-tauri/Cargo.toml` and `src-tauri/tauri.conf.json`, and refresh `src-tauri/Cargo.lock`. The in-app updater only offers a version higher than the installed one.
+2. Push a `v*` tag (for example `v5.0.1`). `.github/workflows/release.yml` builds every platform and publishes the GitHub Release as a prerelease.
+3. Check the build, then edit the release on GitHub and set it as the latest release. The in-app updater reads `latest.json` from the latest full release, so it does not see a prerelease.
+
+The workflow needs these repository secrets (Settings → Secrets and variables → Actions):
+
+| Secret | Required | Content |
+|---|---|---|
+| `TAURI_SIGNING_PRIVATE_KEY` | Yes | Content of the updater private key file. Its public key is `plugins.updater.pubkey` in `src-tauri/tauri.conf.json` |
+| `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | Yes, if the key has a password | The private key's password |
+| `APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`, `KEYCHAIN_PASSWORD`, `APPLE_ID`, `APPLE_PASSWORD`, `APPLE_TEAM_ID` | No | Apple Developer ID certificate and notarization account. Without `APPLE_CERTIFICATE`, the macOS build is ad-hoc signed and not notarized |
+
 ## Testing
 
 **Frontend**: vitest runs `*.test.ts(x)` under `tests/` and `src/`; Tauri calls are mocked with MSW (see `tests/msw/`); component tests use @testing-library/react.
@@ -103,29 +117,25 @@ Frontend (React + TypeScript)
                               │ Tauri IPC (invoke)
 Backend (Tauri 2 + Rust)
   Commands ─► Services ─┬─► DAO ─► SQLite (~/.cc-switch/cc-switch.db)
-                        ├─► Live config writers (atomic write)
-                        │     ~/.claude, ~/.codex, ~/.gemini, ...
-                        └─► Local routing (proxy/): forwarding, format
-                              conversion, failover, usage accounting
+                        └─► Live config writers (atomic write)
+                              ~/.claude, ~/.codex, ~/.gemini, ...
 ```
 
 ### Core Design
 
 - **SSOT** (single source of truth): providers, MCP, prompts, Skills, projects, usage, and other data are all stored in `~/.cc-switch/cc-switch.db` (SQLite)
 - **Device-level settings**: settings that belong to this machine only, such as directory overrides and backup policy, are stored in `~/.cc-switch/settings.json` and are not cloud-synced
-- **Two write modes**: for switch-mode tools (Claude Code, Claude Desktop, Codex, Gemini CLI, Grok Build), switching first backfills the current live config into the current provider (except for Claude Desktop), then writes the new provider; for coexist-mode tools (OpenCode, OpenClaw, Hermes, Pi, MiniMax Code), all providers coexist in a single live file and nothing is backfilled
+- **Two write modes**: for switch-mode tools (Claude Code, Codex, Gemini CLI, Grok Build), switching writes only the new provider's key fields (endpoint, key, model, and so on) into the live config and leaves the rest of the file as it is; for coexist-mode tools (OpenCode, OpenClaw, Hermes, Pi, MiniMax Code), all providers coexist in a single live file
 - **Atomic writes**: all live configs are written via "temp file + rename" to avoid corruption
 - **Concurrency safety**: the database connection is protected by a Mutex to avoid race conditions
 - **Layered architecture**: Commands (parameter validation and forwarding) → Services (business logic) → DAO → Database; the Commands layer stays thin
-- **Local routing**: a separate path from "writing live configs" that takes over requests from Claude Code, Codex, Gemini CLI, and Grok Build on the local machine (Claude Desktop also routes through it when "Model Mapping" is selected), handling forwarding, format conversion, failover, and billing
 
 ### Core Components
 
-- **ProviderService**: provider CRUD, switching, backfill, and sorting
+- **ProviderService**: provider CRUD, switching, and sorting
 - **McpService**: MCP server management, importing from each tool, and syncing to live files
 - **SkillService / PromptService**: installing and syncing Skills, and each tool's prompt files
 - **ProfileService**: saving and switching project snapshots
-- **ProxyService**: starting and stopping the local routing service, and toggling local routing per tool
 - **session_manager module**: scanning, browsing, and resuming each tool's session history
 - **SpeedtestService**: endpoint latency testing
 - **database/backup.rs**: database import/export and backup rotation
@@ -134,7 +144,7 @@ Backend (Tauri 2 + Rust)
 
 **Frontend**: React 18 · TypeScript · Vite 7 · TailwindCSS 3.4 · shadcn/ui (Radix) · TanStack Query v5 · react-hook-form + zod · react-i18next · @dnd-kit · CodeMirror 6 · Recharts
 
-**Backend**: Tauri 2 · Rust · tokio · serde · rusqlite (bundled SQLite) · axum / hyper / reqwest (local routing) · rquickjs (usage scripts) · Tauri plugins updater / process / dialog / store / log / deep-link / single-instance / window-state / opener
+**Backend**: Tauri 2 · Rust · tokio · serde · rusqlite (bundled SQLite) · reqwest (HTTP requests) · rquickjs (usage scripts) · Tauri plugins updater / process / dialog / store / log / deep-link / single-instance / window-state / opener
 
 **Testing**: vitest · MSW · @testing-library/react · cargo test (serial_test, tempfile)
 
@@ -143,7 +153,7 @@ Backend (Tauri 2 + Rust)
 ```
 ├── src/                      # Frontend (React + TypeScript)
 │   ├── components/           # One directory per feature: providers, mcp, prompts, skills, sessions,
-│   │                         #   proxy, usage, profiles, hermes, openclaw, workspace, settings, ui, etc.
+│   │                         #   usage, profiles, hermes, openclaw, workspace, settings, ui, etc.
 │   ├── config/               # Provider presets per tool (*ProviderPresets.ts), MCP presets
 │   ├── hooks/                # Custom hooks (business logic)
 │   ├── lib/api/              # Tauri invoke wrappers (lib/query/ holds the TanStack Query config)
@@ -156,7 +166,7 @@ Backend (Tauri 2 + Rust)
 │   │   ├── commands/         # Tauri command layer (one file per domain)
 │   │   ├── services/         # Business logic layer
 │   │   ├── database/         # Schema and migrations (schema.rs), backup (backup.rs), DAO (dao/)
-│   │   ├── proxy/            # Local routing: forwarding, format conversion, circuit breaking, billing
+│   │   ├── live/, mode/      # Live config writes, per-app switch lock, crash recovery (live-state.json)
 │   │   ├── mcp/              # MCP sync for each tool
 │   │   ├── session_manager/  # Session scanning and terminal resume
 │   │   ├── deeplink/         # ccswitch:// protocol
@@ -165,7 +175,7 @@ Backend (Tauri 2 + Rust)
 ├── tests/                    # Frontend tests (vitest)
 ├── docs/                     # User manual, guides, release notes
 ├── flatpak/                  # Flatpak manifest and build notes
-└── assets/                   # Screenshots and partner assets
+└── assets/                   # Screenshots and release-note images
 ```
 
 ## Code Style
@@ -248,8 +258,8 @@ The CC Switch UI supports four languages: Simplified Chinese, Traditional Chines
 
 ## Questions?
 
-- [Open a question](https://github.com/farion1231/cc-switch/issues/new?template=question.yml)
-- [GitHub Discussions](https://github.com/farion1231/cc-switch/discussions)
+- [Open a question](https://github.com/BlueOcean223/cc-switch/issues/new?template=question.yml)
+- [GitHub Discussions](https://github.com/BlueOcean223/cc-switch/discussions)
 
 ---
 
@@ -263,9 +273,9 @@ The CC Switch UI supports four languages: Simplified Chinese, Traditional Chines
 
 你可以通过多种方式参与贡献：
 
-- **报告 Bug** — 发现问题？[提交 Bug 报告](https://github.com/farion1231/cc-switch/issues/new?template=bug_report.yml)。
-- **建议功能** — 有想法？[提交功能请求](https://github.com/farion1231/cc-switch/issues/new?template=feature_request.yml)。
-- **改进文档** — 发现错误或缺失？[报告文档问题](https://github.com/farion1231/cc-switch/issues/new?template=doc_issue.yml)。
+- **报告 Bug** — 发现问题？[提交 Bug 报告](https://github.com/BlueOcean223/cc-switch/issues/new?template=bug_report.yml)。
+- **建议功能** — 有想法？[提交功能请求](https://github.com/BlueOcean223/cc-switch/issues/new?template=feature_request.yml)。
+- **改进文档** — 发现错误或缺失？[报告文档问题](https://github.com/BlueOcean223/cc-switch/issues/new?template=doc_issue.yml)。
 - **贡献代码** — 通过 Pull Request 修复 Bug 或实现新功能。
 - **翻译** — 帮助改进简体中文、繁体中文、英文和日文的翻译。
 
@@ -334,6 +344,20 @@ pnpm tauri build -c '{"bundle":{"createUpdaterArtifacts":false}}'
 
 需要调试版本时，在上面的命令后加 `--debug`。这种单引号写法适用于 macOS 和 Linux；在 Windows 上，可以把 `{"bundle":{"createUpdaterArtifacts":false}}` 存成一个 JSON 文件，再用 `-c <文件路径>` 传入。
 
+### 发布
+
+1. 把 `package.json`、`src-tauri/Cargo.toml` 和 `src-tauri/tauri.conf.json` 里的版本号改成新版本，并更新 `src-tauri/Cargo.lock`。应用内更新只会提示比已安装版本更高的版本。
+2. 推送 `v*` 标签（例如 `v5.0.1`）。`.github/workflows/release.yml` 会构建所有平台，并以预发布（prerelease）的形式发布 GitHub Release。
+3. 确认构建没有问题后，在 GitHub 上编辑这个 Release，把它设为最新版本（latest）。应用内更新读取的是最新正式版里的 `latest.json`，看不到预发布版本。
+
+工作流需要这些仓库 Secrets（Settings → Secrets and variables → Actions）：
+
+| Secret | 是否必需 | 内容 |
+|---|---|---|
+| `TAURI_SIGNING_PRIVATE_KEY` | 必需 | 更新签名私钥文件的内容。对应的公钥是 `src-tauri/tauri.conf.json` 里的 `plugins.updater.pubkey` |
+| `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | 私钥有密码时必需 | 私钥的密码 |
+| `APPLE_CERTIFICATE`、`APPLE_CERTIFICATE_PASSWORD`、`KEYCHAIN_PASSWORD`、`APPLE_ID`、`APPLE_PASSWORD`、`APPLE_TEAM_ID` | 可选 | Apple Developer ID 证书和公证账号。没有 `APPLE_CERTIFICATE` 时，macOS 包使用 ad-hoc 签名，不经过公证 |
+
 ## 测试
 
 **前端**：使用 vitest 运行 `tests/` 和 `src/` 下的 `*.test.ts(x)`；Tauri 调用由 MSW 模拟（见 `tests/msw/`）；组件测试使用 @testing-library/react。
@@ -358,29 +382,25 @@ Frontend (React + TypeScript)
                               │ Tauri IPC (invoke)
 Backend (Tauri 2 + Rust)
   Commands ─► Services ─┬─► DAO ─► SQLite (~/.cc-switch/cc-switch.db)
-                        ├─► Live config writers (atomic write)
-                        │     ~/.claude, ~/.codex, ~/.gemini, ...
-                        └─► Local routing (proxy/): forwarding, format
-                              conversion, failover, usage accounting
+                        └─► Live config writers (atomic write)
+                              ~/.claude, ~/.codex, ~/.gemini, ...
 ```
 
 ### 核心设计
 
 - **SSOT**（单一事实源）：供应商、MCP、提示词、Skills、项目和用量等数据都存储在 `~/.cc-switch/cc-switch.db`（SQLite）
 - **设备级设置**：目录覆盖、备份策略等只属于本机的设置存放在 `~/.cc-switch/settings.json`，不参与云同步
-- **两种写入模式**：切换式工具（Claude Code、Claude Desktop、Codex、Gemini CLI、Grok Build）切换时，先把当前 live 配置回填到当前供应商（Claude Desktop 除外），再写入新供应商；共存式工具（OpenCode、OpenClaw、Hermes、Pi、MiniMax Code）的所有供应商共存于同一个 live 文件，不做回填
+- **两种写入模式**：切换式工具（Claude Code、Codex、Gemini CLI、Grok Build）切换时，只把新供应商的关键字段（地址、Key、模型等）写进 live 配置，文件其余内容保持不变；共存式工具（OpenCode、OpenClaw、Hermes、Pi、MiniMax Code）的所有供应商共存于同一个 live 文件
 - **原子写入**：所有 live 配置都通过“临时文件 + 重命名”写入，避免配置损坏
 - **并发安全**：数据库连接由 Mutex 保护，避免竞态条件
 - **分层架构**：Commands（参数校验与转发）→ Services（业务逻辑）→ DAO → Database，Commands 层保持精简
-- **本地路由**：独立于“写 live 配置”的另一条路径，在本机接管 Claude Code、Codex、Gemini CLI、Grok Build 的请求（Claude Desktop 选“模型映射”时也经由这里转发），负责转发、格式转换、故障转移和计费
 
 ### 核心组件
 
-- **ProviderService**：供应商增删改查、切换、回填、排序
+- **ProviderService**：供应商增删改查、切换、排序
 - **McpService**：MCP 服务器管理、从各工具导入、同步到 live 文件
 - **SkillService / PromptService**：Skills 的安装与同步、各工具的提示词文件
 - **ProfileService**：项目快照的保存与切换
-- **ProxyService**：本地路由服务的启停，以及各工具本地路由的开关
 - **session_manager 模块**：各工具会话历史的扫描、浏览与恢复
 - **SpeedtestService**：端点延迟测速
 - **database/backup.rs**：数据库导入导出与备份轮换
@@ -389,7 +409,7 @@ Backend (Tauri 2 + Rust)
 
 **前端**：React 18 · TypeScript · Vite 7 · TailwindCSS 3.4 · shadcn/ui（Radix）· TanStack Query v5 · react-hook-form + zod · react-i18next · @dnd-kit · CodeMirror 6 · Recharts
 
-**后端**：Tauri 2 · Rust · tokio · serde · rusqlite（内置 SQLite）· axum / hyper / reqwest（本地路由）· rquickjs（用量脚本）· Tauri 插件 updater / process / dialog / store / log / deep-link / single-instance / window-state / opener
+**后端**：Tauri 2 · Rust · tokio · serde · rusqlite（内置 SQLite）· reqwest（HTTP 请求）· rquickjs（用量脚本）· Tauri 插件 updater / process / dialog / store / log / deep-link / single-instance / window-state / opener
 
 **测试**：vitest · MSW · @testing-library/react · cargo test（serial_test、tempfile）
 
@@ -398,7 +418,7 @@ Backend (Tauri 2 + Rust)
 ```
 ├── src/                      # 前端（React + TypeScript）
 │   ├── components/           # 按功能分目录：providers、mcp、prompts、skills、sessions、
-│   │                         #   proxy、usage、profiles、hermes、openclaw、workspace、settings、ui 等
+│   │                         #   usage、profiles、hermes、openclaw、workspace、settings、ui 等
 │   ├── config/               # 各工具的供应商预设（*ProviderPresets.ts）、MCP 预设
 │   ├── hooks/                # 自定义 hooks（业务逻辑）
 │   ├── lib/api/              # Tauri invoke 封装（lib/query/ 为 TanStack Query 配置）
@@ -411,7 +431,7 @@ Backend (Tauri 2 + Rust)
 │   │   ├── commands/         # Tauri 命令层（按领域一个文件）
 │   │   ├── services/         # 业务逻辑层
 │   │   ├── database/         # 建表与迁移（schema.rs）、备份（backup.rs）、DAO（dao/）
-│   │   ├── proxy/            # 本地路由：转发、格式转换、熔断、计费
+│   │   ├── live/、mode/      # live 配置写入、按应用的切换锁、崩溃恢复（live-state.json）
 │   │   ├── mcp/              # 各工具的 MCP 同步
 │   │   ├── session_manager/  # 会话扫描与终端恢复
 │   │   ├── deeplink/         # ccswitch:// 协议
@@ -503,5 +523,5 @@ CC Switch 的界面支持简体中文、繁体中文、英文和日文四种语�
 
 ## 有疑问？
 
-- [提问](https://github.com/farion1231/cc-switch/issues/new?template=question.yml)
-- [GitHub 讨论区](https://github.com/farion1231/cc-switch/discussions)
+- [提问](https://github.com/BlueOcean223/cc-switch/issues/new?template=question.yml)
+- [GitHub 讨论区](https://github.com/BlueOcean223/cc-switch/discussions)

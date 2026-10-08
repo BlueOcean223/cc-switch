@@ -195,6 +195,14 @@ export const piThinkingBindings: readonly PiThinkingBinding[] = [
     profileId: "offUnsupportedXhighAndMax",
     modelCompat: { forceAdaptiveThinking: true },
   },
+  // 2026-10-07 按 effort 文档和 Sonnet 5.5 提示指南核对：五档都支持，最低是
+  // between_tools，没有关闭思考的档位。
+  {
+    catalogKey: "anthropic/claude-sonnet-5.5",
+    api: "anthropic-messages",
+    profileId: "offUnsupportedXhighAndMax",
+    modelCompat: { forceAdaptiveThinking: true },
+  },
   {
     catalogKey: "anthropic/claude-fable-5.1",
     api: "anthropic-messages",

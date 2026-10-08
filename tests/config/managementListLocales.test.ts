@@ -5,15 +5,8 @@ import zhTW from "@/i18n/locales/zh-TW.json";
 import zh from "@/i18n/locales/zh.json";
 
 const requiredPaths = [
-  "common.enableAllForApp",
-  "common.disableAllForApp",
-  "common.bulkToggleFailed",
-  "skills.installedSearchPlaceholder",
   "skills.installedSearchAriaLabel",
-  "skills.noInstalledSearchResults",
-  "mcp.unifiedPanel.searchPlaceholder",
   "mcp.unifiedPanel.searchAriaLabel",
-  "mcp.unifiedPanel.noSearchResults",
   "prompts.searchPlaceholder",
   "prompts.searchAriaLabel",
   "prompts.noSearchResults",

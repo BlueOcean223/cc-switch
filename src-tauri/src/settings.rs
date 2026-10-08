@@ -27,13 +27,6 @@ fn default_true() -> bool {
 pub struct VisibleApps {
     #[serde(default = "default_true")]
     pub claude: bool,
-    #[serde(
-        rename = "claude-desktop",
-        alias = "claudeDesktop",
-        alias = "claude_desktop",
-        default = "default_true"
-    )]
-    pub claude_desktop: bool,
     #[serde(default = "default_true")]
     pub codex: bool,
     #[serde(default = "default_true")]
@@ -56,7 +49,6 @@ impl Default for VisibleApps {
     fn default() -> Self {
         Self {
             claude: true,
-            claude_desktop: true,
             codex: true,
             gemini: true,
             grokbuild: true,
@@ -74,7 +66,6 @@ impl VisibleApps {
     pub fn is_visible(&self, app: &AppType) -> bool {
         match app {
             AppType::Claude => self.claude,
-            AppType::ClaudeDesktop => self.claude_desktop,
             AppType::Codex => self.codex,
             AppType::Gemini => self.gemini,
             AppType::GrokBuild => self.grokbuild,
@@ -344,7 +335,7 @@ pub struct CodexOfficialHistoryUnifyMigration {
 
 /// 应用设置结构
 ///
-/// 存储设备级别设置，保存在本地 `~/.cc-switch/settings.json`，不随数据库同步。
+/// 存储设备级别设置，保存在本地 `~/.ccs-lite/settings.json`（设备目录），不随数据库同步。
 /// 这确保了云同步场景下多设备可以独立运作。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -368,16 +359,6 @@ pub struct AppSettings {
     /// 静默启动（程序启动时不显示主窗口，仅托盘运行）
     #[serde(default)]
     pub silent_startup: bool,
-    /// 是否在主页面启用本地代理功能（默认关闭）
-    #[serde(default)]
-    pub enable_local_proxy: bool,
-    /// 是否在主页面显示 Stack 模式开关（默认关闭）。和 `enable_local_proxy` 二选一，只影响
-    /// Claude Code、Codex：它们的开关换成 Stack 模式开关，其余应用仍显示路由开关。
-    #[serde(default)]
-    pub enable_stack_mode: bool,
-    /// User has confirmed the local proxy first-run notice
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub proxy_confirmed: Option<bool>,
     /// User has confirmed the usage query first-run notice
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub usage_confirmed: Option<bool>,
@@ -385,12 +366,9 @@ pub struct AppSettings {
     pub usage_dashboard_refresh_interval_ms: Option<u32>,
     /// 会话用量自动扫描开关（默认开启=自动模式）。关闭后停止后台定时扫描
     /// 各客户端会话日志，仅在用户点击"立即同步"时手动扫描；只管扫描时机，
-    /// 代理接管记账与启动费用回填（不读会话文件）不受此开关影响。
+    /// 启动时的费用回填（只修补数据库里已有的行，不读会话文件）不受此开关影响。
     #[serde(default = "default_session_auto_sync_enabled")]
     pub session_auto_sync_enabled: bool,
-    /// Whether to show the failover toggle independently on the main page
-    #[serde(default)]
-    pub enable_failover_toggle: bool,
     /// Whether to show the project profile switcher on the main page header
     #[serde(default = "default_show_profile_switcher")]
     pub show_profile_switcher: bool,
@@ -412,15 +390,9 @@ pub struct AppSettings {
     /// a failed migration retries at startup; cleared when the toggle turns off.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub unify_codex_migrate_existing: Option<bool>,
-    /// User has confirmed the failover toggle first-run notice
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub failover_confirmed: Option<bool>,
     /// User has confirmed the first-run welcome notice
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub first_run_notice_confirmed: Option<bool>,
-    /// User has confirmed the one-time "new layout" dialog shown to upgrading users
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub new_layout_notice_confirmed: Option<bool>,
     /// Highest app version whose "what's new" summary the user has seen on this device
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub whats_new_seen_version: Option<String>,
@@ -456,9 +428,6 @@ pub struct AppSettings {
     /// 当前 Claude 供应商 ID（本地存储，优先于数据库 is_current）
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub current_provider_claude: Option<String>,
-    /// 当前 Claude Desktop 供应商 ID（本地存储，优先于数据库 is_current）
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub current_provider_claude_desktop: Option<String>,
     /// 当前 Codex 供应商 ID（本地存储，优先于数据库 is_current）
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub current_provider_codex: Option<String>,
@@ -545,21 +514,15 @@ impl Default for AppSettings {
             skip_claude_onboarding: false,
             launch_on_startup: false,
             silent_startup: false,
-            enable_local_proxy: false,
-            enable_stack_mode: false,
-            proxy_confirmed: None,
             usage_confirmed: None,
             usage_dashboard_refresh_interval_ms: None,
             session_auto_sync_enabled: true,
-            enable_failover_toggle: false,
             show_profile_switcher: true,
             check_tool_updates_on_startup: false,
             preserve_codex_official_auth_on_switch: false,
             unify_codex_session_history: false,
             unify_codex_migrate_existing: None,
-            failover_confirmed: None,
             first_run_notice_confirmed: None,
-            new_layout_notice_confirmed: None,
             whats_new_seen_version: None,
             common_config_confirmed: None,
             language: None,
@@ -573,7 +536,6 @@ impl Default for AppSettings {
             hermes_config_dir: None,
             pi_config_dir: None,
             current_provider_claude: None,
-            current_provider_claude_desktop: None,
             current_provider_codex: None,
             current_provider_gemini: None,
             current_provider_grokbuild: None,
@@ -595,12 +557,8 @@ impl Default for AppSettings {
 
 impl AppSettings {
     fn settings_path() -> Option<PathBuf> {
-        // settings.json 保留用于旧版本迁移和无数据库场景
-        Some(
-            crate::config::get_home_dir()
-                .join(".cc-switch")
-                .join("settings.json"),
-        )
+        // 设备设置不随数据库同步，放在设备目录
+        Some(crate::config::get_device_dir().join("settings.json"))
     }
 
     fn normalize_paths(&mut self) {
@@ -1024,7 +982,6 @@ pub fn get_current_provider(app_type: &AppType) -> Option<String> {
     let settings = settings_store().read().ok()?;
     match app_type {
         AppType::Claude => settings.current_provider_claude.clone(),
-        AppType::ClaudeDesktop => settings.current_provider_claude_desktop.clone(),
         AppType::Codex => settings.current_provider_codex.clone(),
         AppType::Gemini => settings.current_provider_gemini.clone(),
         AppType::GrokBuild => settings.current_provider_grokbuild.clone(),
@@ -1043,7 +1000,6 @@ pub fn set_current_provider(app_type: &AppType, id: Option<&str>) -> Result<(), 
     let id_owned = id.map(|s| s.to_string());
     mutate_settings(|settings| match app_type {
         AppType::Claude => settings.current_provider_claude = id_owned.clone(),
-        AppType::ClaudeDesktop => settings.current_provider_claude_desktop = id_owned.clone(),
         AppType::Codex => settings.current_provider_codex = id_owned.clone(),
         AppType::Gemini => settings.current_provider_gemini = id_owned.clone(),
         AppType::GrokBuild => settings.current_provider_grokbuild = id_owned.clone(),
@@ -1089,6 +1045,27 @@ pub fn get_effective_current_provider(
 
     // Fallback 到数据库的 is_current
     db.get_current_provider(app_type.as_str())
+}
+
+/// 当前供应商那一行（id 按 [`get_effective_current_provider`] 取）。
+pub fn get_effective_current_provider_row(
+    db: &crate::database::Database,
+    app_type: &AppType,
+) -> Result<Option<crate::provider::Provider>, AppError> {
+    match get_effective_current_provider(db, app_type)? {
+        Some(id) => db.get_provider_by_id(&id, app_type.as_str()),
+        None => Ok(None),
+    }
+}
+
+/// 删除前检查：本地记录、DB 的 `is_current` 任何一处指着它，就算正在用。
+pub fn is_current_provider_referenced(
+    db: &crate::database::Database,
+    app_type: &AppType,
+    id: &str,
+) -> Result<bool, AppError> {
+    Ok(get_current_provider(app_type).as_deref() == Some(id)
+        || db.get_current_provider(app_type.as_str())?.as_deref() == Some(id))
 }
 
 // ===== Skill 同步方式管理函数 =====
@@ -1211,38 +1188,6 @@ pub fn update_s3_sync_status(status: WebDavSyncStatus) -> Result<(), AppError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app_config::AppType;
-
-    #[test]
-    fn visible_apps_old_settings_default_claude_desktop_visible() {
-        let visible: VisibleApps = serde_json::from_value(serde_json::json!({
-            "claude": true,
-            "codex": true,
-            "gemini": true,
-            "opencode": true,
-            "openclaw": true,
-            "hermes": true
-        }))
-        .expect("visible apps");
-
-        assert!(visible.is_visible(&AppType::ClaudeDesktop));
-    }
-
-    #[test]
-    fn visible_apps_accepts_claude_desktop_aliases() {
-        let visible: VisibleApps = serde_json::from_value(serde_json::json!({
-            "claude": true,
-            "claudeDesktop": false,
-            "codex": true,
-            "gemini": true,
-            "opencode": true,
-            "openclaw": true,
-            "hermes": true
-        }))
-        .expect("visible apps");
-
-        assert!(!visible.is_visible(&AppType::ClaudeDesktop));
-    }
 
     #[test]
     fn override_paths_expand_windows_style_tilde_separators() {

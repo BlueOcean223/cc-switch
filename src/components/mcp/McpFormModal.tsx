@@ -1194,7 +1194,7 @@ const McpFormModal: React.FC<McpFormModalProps> = ({
                       }))
                     }
                   />
-                  <AppGlyph app={app} size={16} badgeClassName="bg-surface" />
+                  <AppGlyph app={app} size={16} />
                   <span className="whitespace-nowrap">
                     {APP_DISPLAY_NAME[app]}
                   </span>
