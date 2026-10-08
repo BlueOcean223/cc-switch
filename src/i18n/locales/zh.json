@@ -1535,6 +1535,7 @@
     },
     "rebuildUsage": {
       "title": "用量维护",
+      "helpTitle": "用量维护做什么",
       "description": "从本地会话日志重新构建全部用量",
       "warning": "重建前会自动备份数据库。日志已删除的日期保留原来的按天汇总。",
       "confirmTitle": "确认重建用量",
@@ -1752,7 +1753,6 @@
       "cadenceOn": "启动时扫描一次，之后每 60 秒一次",
       "cadenceOff": "自动扫描已关闭，只在点「立即同步」时扫描",
       "unsupported": "Hermes、OpenClaw 暂不支持用量统计",
-      "codexHelpTitle": "Codex 用量维护做什么",
       "lastSynced": "上次同步：{{time}}"
     },
     "empty": {

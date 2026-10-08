@@ -191,6 +191,8 @@ pub struct ModelStats {
     pub speed_generation_ms: u64,
     pub est_speed_output_tokens: u64,
     pub est_speed_duration_ms: u64,
+    /// 定价表里查得到这个模型。查不到时成本是 0，界面标"未定价"；价格本身是 0 的模型不标。
+    pub has_pricing: bool,
 }
 
 /// 请求日志过滤器
@@ -252,6 +254,9 @@ pub struct RequestLogDetail {
     /// 写入时实际用于计价的模型名。None = v11 前的历史行，"" = 未计价的错误行。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pricing_model: Option<String>,
+    /// 按 [`row_pricing`] 的规则在定价表里查得到模型，查询后由 [`fill_has_pricing`] 填。
+    #[serde(default)]
+    pub has_pricing: bool,
 }
 
 /// 把 26 列的查询结果映射为 `RequestLogDetail`。
@@ -307,6 +312,7 @@ fn row_to_request_log_detail(row: &rusqlite::Row<'_>) -> rusqlite::Result<Reques
         data_source: row.get(23)?,
         pricing_model: row.get(24)?,
         input_token_semantics: INPUT_TOKEN_SEMANTICS_FRESH,
+        has_pricing: false,
     })
 }
 
@@ -1550,6 +1556,7 @@ impl Database {
                 speed_generation_ms: row.get::<_, i64>(6)?.max(0) as u64,
                 est_speed_output_tokens: row.get::<_, i64>(7)?.max(0) as u64,
                 est_speed_duration_ms: row.get::<_, i64>(8)?.max(0) as u64,
+                has_pricing: false,
             })
         };
 
@@ -1557,7 +1564,11 @@ impl Database {
 
         let mut stats = Vec::new();
         for row in rows {
-            stats.push(row?);
+            let mut stat = row?;
+            // 分组键就是有效计价模型
+            stat.has_pricing = !is_placeholder_pricing_model(&stat.model)
+                && find_model_pricing_row(&conn, &stat.model)?.is_some();
+            stats.push(stat);
         }
 
         Ok(stats)
@@ -1662,7 +1673,8 @@ impl Database {
         let params_refs: Vec<&dyn rusqlite::ToSql> = params.iter().map(|p| p.as_ref()).collect();
         let rows = stmt.query_map(params_refs.as_slice(), row_to_request_log_detail)?;
 
-        let logs = rows.collect::<Result<Vec<_>, _>>()?;
+        let mut logs = rows.collect::<Result<Vec<_>, _>>()?;
+        fill_has_pricing(&conn, &mut logs)?;
 
         Ok(PaginatedLogs {
             data: logs,
@@ -1695,7 +1707,12 @@ impl Database {
         let result = conn.query_row(&detail_sql, [request_id], row_to_request_log_detail);
 
         match result {
-            Ok(detail) => Ok(Some(detail)),
+            Ok(detail) => {
+                let mut logs = [detail];
+                fill_has_pricing(&conn, &mut logs)?;
+                let [detail] = logs;
+                Ok(Some(detail))
+            }
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
             Err(e) => Err(AppError::Database(e.to_string())),
         }
@@ -1940,36 +1957,59 @@ impl Database {
 
 /// 明细行的计价基准：写入时记下的 `pricing_model`，否则 `model`；`model` 是解析失败
 /// 留下的占位符（""、"unknown"）时才退回 `request_model`。
+fn pricing_base<'a>(
+    pricing_model: Option<&'a str>,
+    model: &'a str,
+    request_model: Option<&'a str>,
+) -> Option<&'a str> {
+    [pricing_model, Some(model), request_model]
+        .into_iter()
+        .flatten()
+        .find(|name| !is_placeholder_pricing_model(name))
+}
+
+fn cached_pricing(
+    conn: &Connection,
+    cache: &mut HashMap<String, Option<ModelPricing>>,
+    model: &str,
+) -> Result<Option<ModelPricing>, AppError> {
+    if let Some(found) = cache.get(model) {
+        return Ok(found.clone());
+    }
+    let found = find_model_pricing_row(conn, model)?;
+    cache.insert(model.to_string(), found.clone());
+    Ok(found)
+}
+
 fn row_pricing(
     conn: &Connection,
     cache: &mut HashMap<String, Option<ModelPricing>>,
     row: &RepriceRow,
 ) -> Result<Option<ModelPricing>, AppError> {
-    let mut lookup = |model: &str| -> Result<Option<ModelPricing>, AppError> {
-        if let Some(found) = cache.get(model) {
-            return Ok(found.clone());
-        }
-        let found = find_model_pricing_row(conn, model)?;
-        cache.insert(model.to_string(), found.clone());
-        Ok(found)
-    };
+    match pricing_base(
+        row.pricing_model.as_deref(),
+        &row.model,
+        row.request_model.as_deref(),
+    ) {
+        Some(model) => cached_pricing(conn, cache, model),
+        None => Ok(None),
+    }
+}
 
-    if let Some(pricing_model) = row
-        .pricing_model
-        .as_deref()
-        .filter(|pm| !is_placeholder_pricing_model(pm))
-    {
-        return lookup(pricing_model);
+/// 按 [`row_pricing`] 的规则给每行填 `has_pricing`。
+fn fill_has_pricing(conn: &Connection, logs: &mut [RequestLogDetail]) -> Result<(), AppError> {
+    let mut cache = HashMap::new();
+    for log in logs {
+        log.has_pricing = match pricing_base(
+            log.pricing_model.as_deref(),
+            &log.model,
+            log.request_model.as_deref(),
+        ) {
+            Some(model) => cached_pricing(conn, &mut cache, model)?.is_some(),
+            None => false,
+        };
     }
-    if !is_placeholder_pricing_model(&row.model) {
-        return lookup(&row.model);
-    }
-    match row.request_model.as_deref() {
-        Some(request_model) if !is_placeholder_pricing_model(request_model) => {
-            lookup(request_model)
-        }
-        _ => Ok(None),
-    }
+    Ok(())
 }
 
 /// 数值相同就算相等（"0" 与 "0.000000"、小数位数不同的旧值）。
@@ -2417,6 +2457,44 @@ mod tests {
                 data_source
             ],
         )?;
+        Ok(())
+    }
+
+    /// 只有定价表里查不到的模型才是"未定价"；价格为 0 的模型查得到。
+    #[test]
+    fn has_pricing_follows_the_pricing_table_not_the_cost() -> Result<(), AppError> {
+        let db = Database::memory()?;
+        add_pricing(&db, "free-model", "0", "0")?;
+        {
+            let conn = lock_conn!(db.conn);
+            for (id, model) in [("free", "free-model"), ("missing", "no-such-model-x")] {
+                insert_usage_log(
+                    &conn, id, "claude", "p", model, "proxy", 1_000, 10, 2, 0, 0, 200, "0",
+                )?;
+            }
+        }
+
+        let stats = db.get_model_stats(None, None, None, None, None)?;
+        let priced = |model: &str| {
+            stats
+                .iter()
+                .find(|s| s.model == model)
+                .map(|s| s.has_pricing)
+        };
+        assert_eq!(priced("free-model"), Some(true));
+        assert_eq!(priced("no-such-model-x"), Some(false));
+
+        let filters = LogFilters::default();
+        let logs = db.get_request_logs(&filters, 0, 10)?.data;
+        let priced = |id: &str| {
+            logs.iter()
+                .find(|l| l.request_id == id)
+                .map(|l| l.has_pricing)
+        };
+        assert_eq!(priced("free"), Some(true));
+        assert_eq!(priced("missing"), Some(false));
+        assert!(db.get_request_detail("free")?.unwrap().has_pricing);
+        assert!(!db.get_request_detail("missing")?.unwrap().has_pricing);
         Ok(())
     }
 

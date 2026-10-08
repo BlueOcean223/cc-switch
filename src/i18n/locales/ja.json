@@ -1535,6 +1535,7 @@
     },
     "rebuildUsage": {
       "title": "使用量メンテナンス",
+      "helpTitle": "使用量メンテナンスとは",
       "description": "ローカルのセッションログからすべての使用量を再構築します",
       "warning": "最初にデータベースを自動バックアップします。ログが削除済みの日付は既存の日別集計を残します。",
       "confirmTitle": "使用量を再構築しますか？",
@@ -1752,7 +1753,6 @@
       "cadenceOn": "起動時に 1 回、その後は 60 秒ごとにスキャン",
       "cadenceOff": "自動スキャンはオフです。「今すぐ同期」を押したときだけスキャンします",
       "unsupported": "Hermes と OpenClaw は使用量統計にまだ対応していません",
-      "codexHelpTitle": "Codex 使用量メンテナンスとは",
       "lastSynced": "前回の同期：{{time}}"
     },
     "empty": {

@@ -12,7 +12,7 @@ import {
 } from "./format";
 import { usageTable } from "./usageTable";
 import { SuccessSpeedCells, SuccessSpeedHeaders } from "./statsColumns";
-import type { UsageRangeSelection } from "@/types/usage";
+import { isUnpricedModelStat, type UsageRangeSelection } from "@/types/usage";
 
 interface ModelStatsTableProps {
   range: UsageRangeSelection;
@@ -77,10 +77,7 @@ export function ModelStatsTable({
               </tr>
             ) : (
               pagination.pageRows.map((stat) => {
-                // 有 token 但成本为 0：定价表里没有这个模型，不是真的免费
-                const unpriced =
-                  stat.totalTokens > 0 &&
-                  Number.parseFloat(stat.totalCost) === 0;
+                const unpriced = isUnpricedModelStat(stat);
                 return (
                   <tr key={stat.model} className={usageTable.row}>
                     <td className={cn(usageTable.td, usageTable.mono)}>

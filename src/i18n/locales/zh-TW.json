@@ -1535,6 +1535,7 @@
     },
     "rebuildUsage": {
       "title": "用量維護",
+      "helpTitle": "用量維護做什麼",
       "description": "從本機工作階段日誌重新建構全部用量",
       "warning": "重建前會自動備份資料庫。日誌已刪除的日期保留原有的每日彙總。",
       "confirmTitle": "確認重建用量",
@@ -1752,7 +1753,6 @@
       "cadenceOn": "啟動時掃描一次，之後每 60 秒一次",
       "cadenceOff": "自動掃描已關閉，只在點「立即同步」時掃描",
       "unsupported": "Hermes、OpenClaw 暫不支援用量統計",
-      "codexHelpTitle": "Codex 用量維護做什麼",
       "lastSynced": "上次同步：{{time}}"
     },
     "empty": {

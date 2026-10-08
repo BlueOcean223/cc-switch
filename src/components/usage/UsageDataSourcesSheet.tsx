@@ -130,7 +130,7 @@ export function UsageDataSourcesSheet({
           <SourceCard
             title={t("usage.rebuildUsage.title")}
             help={{
-              title: t("usage.sources.codexHelpTitle"),
+              title: t("usage.rebuildUsage.helpTitle"),
               body: t("usage.rebuildUsage.description"),
             }}
           >

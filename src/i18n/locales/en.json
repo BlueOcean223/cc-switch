@@ -1535,6 +1535,7 @@
     },
     "rebuildUsage": {
       "title": "Usage Maintenance",
+      "helpTitle": "What does usage maintenance do?",
       "description": "Rebuild all usage from local session logs",
       "warning": "The database is backed up first. Days whose logs have been deleted keep their existing daily totals.",
       "confirmTitle": "Rebuild usage?",
@@ -1752,7 +1753,6 @@
       "cadenceOn": "Scans once at startup, then every 60 seconds",
       "cadenceOff": "Auto scan is off; logs are scanned only when you click Sync Now",
       "unsupported": "Hermes and OpenClaw don't support usage stats yet",
-      "codexHelpTitle": "What does Codex usage maintenance do?",
       "lastSynced": "last synced: {{time}}"
     },
     "empty": {

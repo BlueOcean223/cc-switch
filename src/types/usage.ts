@@ -27,6 +27,8 @@ export interface RequestLog {
   errorMessage?: string;
   createdAt: number;
   dataSource?: string;
+  /** 定价表里查得到计价模型；false 时成本为 0 是因为没有定价 */
+  hasPricing?: boolean;
 }
 
 export interface SessionSyncResult {
@@ -144,6 +146,8 @@ export interface ModelStats {
   speedGenerationMs?: number;
   estSpeedOutputTokens?: number;
   estSpeedDurationMs?: number;
+  /** 定价表里查得到这个模型；价格为 0 的模型也是 true */
+  hasPricing?: boolean;
 }
 
 export interface LogFilters {
@@ -218,12 +222,10 @@ export const KNOWN_APP_TYPES: ReadonlyArray<AppType> = [
 
 /**
  * App types whose session logs never report cache writes: the cache-write
- * column shows N/A for them instead of 0.
+ * column shows N/A for them instead of 0. Grok Build reports
+ * `cacheCreationTokens`, so it is not listed.
  */
-const NO_CACHE_WRITE_APP_TYPES: ReadonlySet<string> = new Set([
-  "gemini",
-  "grokbuild",
-]);
+const NO_CACHE_WRITE_APP_TYPES: ReadonlySet<string> = new Set(["gemini"]);
 
 // Some sessions report cache writes and some do not: Pi and mcode mix
 // Anthropic and OpenAI APIs, and Codex only reports them for GPT-5.6 and later.
@@ -266,7 +268,7 @@ type UsageCostLog = Pick<
   | "totalCostUsd"
   | "statusCode"
 > &
-  Partial<Pick<RequestLog, "costMultiplier">>;
+  Partial<Pick<RequestLog, "costMultiplier" | "hasPricing">>;
 
 export function hasUsageTokens(log: UsageCostLog): boolean {
   return (
@@ -289,6 +291,18 @@ export function isUnpricedUsage(log: UsageCostLog): boolean {
     hasUsageTokens(log) &&
     Number.isFinite(totalCost) &&
     (!Number.isFinite(multiplier) || multiplier !== 0) &&
-    totalCost === 0
+    totalCost === 0 &&
+    log.hasPricing !== true
+  );
+}
+
+/** 有 token、成本为 0，且定价表里没有这个模型；价格为 0 的模型不算 */
+export function isUnpricedModelStat(
+  stat: Pick<ModelStats, "totalTokens" | "totalCost" | "hasPricing">,
+): boolean {
+  return (
+    stat.totalTokens > 0 &&
+    Number.parseFloat(stat.totalCost) === 0 &&
+    stat.hasPricing !== true
   );
 }
