@@ -80,9 +80,11 @@ pub async fn import_config_from_file(
 
 #[tauri::command]
 pub async fn sync_current_providers_live(state: State<'_, AppState>) -> Result<Value, String> {
-    let db = state.db.clone();
+    // 用同一份状态（克隆共享切换锁和 Codex OAuth 管理器）：新建一份会有自己的锁，
+    // 和正在进行的切换不互斥；第二个 OAuth 管理器刷新 token 后，主管理器手里的
+    // refresh token 可能失效。
+    let app_state = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let app_state = AppState::new(db);
         ProviderService::sync_current_to_live(&app_state)?;
         Ok::<_, AppError>(json!({
             "success": true,
