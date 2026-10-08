@@ -904,7 +904,8 @@
     "defaultModelHint": "Grok Build がデフォルトでリクエストするモデルです。プリセットの更新を待たずにいつでも変更できます。",
     "keyFieldsHint": "デフォルトモデル（models.default）とそれが指すモデルテーブルはプロバイダーに合わせて切り替わります。それ以外は Grok Build のグローバル設定で、保存するとすべてのプロバイダーに適用されます。",
     "inactiveFieldsHint": "このプロバイダーには切り替えで反映されない設定が {{count}} 件保存されています。クリックすると TOML がコピーされるので、必要に応じて上に貼り付けてください。プロバイダーに保存された元の値は削除されません。",
-    "inactiveFieldCopied": "コピーしました"
+    "inactiveFieldCopied": "コピーしました",
+    "contextWindowDefault": "デフォルト（Grok Build が決定）"
   },
   "sessionManager": {
     "searchPlaceholder": "タイトル・ディレクトリ・最初と最後のメッセージ・セッション ID で検索",

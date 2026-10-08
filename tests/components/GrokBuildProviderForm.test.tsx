@@ -135,7 +135,6 @@ describe("GrokBuildProviderForm", () => {
       base_url: "https://relay.example.com/v1",
       name: "Example Relay",
       api_key: "secret-key",
-      context_window: 500000,
     });
   });
 
@@ -153,8 +152,9 @@ describe("GrokBuildProviderForm", () => {
     expect(container.querySelector("#grokbuild-api-backend")).toHaveTextContent(
       "OpenAI Chat Completions",
     );
+    // 没写 context_window 时留空，由 Grok Build 按模型决定，保存时也不补写
     expect(container.querySelector("#grokbuild-context-window")).toHaveValue(
-      500000,
+      null,
     );
     // 直连没有格式转换：不再有上游格式和高级选项
     expect(screen.queryByText("上游格式")).toBeNull();

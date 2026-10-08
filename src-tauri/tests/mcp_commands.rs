@@ -1129,7 +1129,7 @@ command = "echo"
 }
 
 #[test]
-fn import_mcp_from_gemini_url_without_type_is_http() {
+fn import_mcp_from_gemini_url_without_type_is_sse() {
     let _guard = test_mutex().lock().unwrap_or_else(|e| e.into_inner());
     reset_test_fs();
     let home = ensure_test_home();
@@ -1139,7 +1139,7 @@ fn import_mcp_from_gemini_url_without_type_is_http() {
     fs::create_dir_all(&gemini_dir).expect("create gemini dir");
     let settings_path = gemini_dir.join("settings.json");
 
-    // Gemini CLI 对不带 type 的 url 先按 streamable HTTP 连接
+    // Gemini 旧文档把不带 type 的 url 定义为 SSE，导入时按 SSE 处理
     let gemini_settings = json!({
         "mcpServers": {
             "url-server": {
@@ -1162,8 +1162,8 @@ fn import_mcp_from_gemini_url_without_type_is_http() {
     assert!(entry.apps.gemini, "imported server should enable Gemini");
     assert_eq!(
         entry.server.get("type").and_then(|v| v.as_str()),
-        Some("http"),
-        "Gemini url-only server should be normalized to type=http in unified structure"
+        Some("sse"),
+        "Gemini url-only server should be imported as type=sse"
     );
 }
 

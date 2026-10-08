@@ -636,30 +636,12 @@ fn spec_transport_type(spec: &Value) -> &str {
     explicit.unwrap_or("stdio")
 }
 
-/// 其它客户端 MCP 格式里的字段，Codex 没有对应项：Gemini CLI 的 `timeout`（毫秒）、
-/// `trust`、`includeTools` 等，MiniMax Code 的 `timeout`、`description`，Claude Code 的
-/// `headersHelper`。从这些客户端导入的规范原样带着它们，写进 config.toml 只会让 Codex
-/// 启动时提示字段被忽略。名单只列这些已知来源；其余字段照常写出，Codex 新增的 MCP
-/// 字段（以及从 Codex 导入时带回来的）不受影响。
-const FOREIGN_FIELDS: &[&str] = &[
-    "timeout",
-    "trust",
-    "description",
-    "includeTools",
-    "excludeTools",
-    "authProviderType",
-    "targetAudience",
-    "targetServiceAccount",
-    "tcp",
-    "httpUrl",
-    "headersHelper",
-];
-
 /// Helper: 将 JSON MCP 服务器规范转换为 toml_edit::Table
 ///
 /// 策略：
 /// 1. 核心字段（command, args, url, headers, env, cwd）使用强类型处理
-/// 2. 其它客户端格式的字段（[`FOREIGN_FIELDS`]）不写
+/// 2. 其它客户端的已知字段（Gemini 的 `trust`、Pi 的 `exposure` 等，见 `fields`）不写，
+///    写进 config.toml 只会让 Codex 启动时提示字段被忽略
 /// 3. 其余字段使用通用转换器尝试转换
 ///
 /// 注意：**不向 Codex 写出 `type`**。`[mcp_servers.*]` 没有 `type` 字段，
@@ -766,7 +748,9 @@ pub(super) fn json_server_to_toml_table(spec: &Value) -> Result<toml_edit::Table
     if let Some(obj) = spec.as_object() {
         for (key, value) in obj {
             // 跳过已处理的字段、另一种传输方式专属的字段和其它客户端的字段
-            if skipped_fields.contains(&key.as_str()) || FOREIGN_FIELDS.contains(&key.as_str()) {
+            if skipped_fields.contains(&key.as_str())
+                || super::fields::is_foreign(super::fields::Client::Codex, key)
+            {
                 continue;
             }
 
@@ -914,14 +898,35 @@ mod tests {
             "includeTools": ["search"],
             "tool_timeout_sec": 30,
             "enabled_tools": ["search"],
-            "startup_readiness": "lazy"
+            "startup_readiness": "lazy",
+            "exposure": "all",
+            "toolExposure": {},
+            "oauth": {},
+            "auth": {},
+            "headersHelper": "./h.sh",
+            "somethingNew": "x"
         }))
         .unwrap();
-        for key in ["timeout", "trust", "description", "includeTools"] {
+        for key in [
+            "timeout",
+            "trust",
+            "description",
+            "includeTools",
+            "exposure",
+            "toolExposure",
+            "oauth",
+            "auth",
+            "headersHelper",
+        ] {
             assert!(table.get(key).is_none(), "{key} should be skipped: {table}");
         }
         // Codex 自己的字段（包括这里还没列出的新字段）照常写出。
-        for key in ["tool_timeout_sec", "enabled_tools", "startup_readiness"] {
+        for key in [
+            "tool_timeout_sec",
+            "enabled_tools",
+            "startup_readiness",
+            "somethingNew",
+        ] {
             assert!(table.get(key).is_some(), "{key} should be kept: {table}");
         }
     }

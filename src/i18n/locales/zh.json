@@ -904,7 +904,8 @@
     "defaultModelHint": "Grok Build 默认请求的模型，随时可改，无需等待预设更新。",
     "keyFieldsHint": "默认模型（models.default）和它指向的模型表随供应商切换；其余是 Grok Build 全局设置，保存后对所有供应商生效。",
     "inactiveFieldsHint": "这个供应商还保存着 {{count}} 个不随切换生效的设置。点击复制它的 TOML，按需粘贴到上方；供应商里保存的原值不会删除。",
-    "inactiveFieldCopied": "已复制"
+    "inactiveFieldCopied": "已复制",
+    "contextWindowDefault": "默认（由 Grok Build 决定）"
   },
   "sessionManager": {
     "searchPlaceholder": "搜索标题、目录、首末消息或会话 ID",

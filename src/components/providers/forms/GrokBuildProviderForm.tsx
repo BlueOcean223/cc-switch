@@ -65,6 +65,14 @@ const grokPresetEntries: Array<{
   })),
 ];
 
+/** 输入框里的上下文窗口：空或不是正整数时为 undefined（空表示不写，由 Grok Build 决定）。 */
+function parseContextWindow(value: string): number | undefined {
+  const text = value.trim();
+  if (!/^\d+$/.test(text)) return undefined;
+  const parsed = Number(text);
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : undefined;
+}
+
 export function GrokBuildProviderForm({
   providerId,
   submitLabel,
@@ -101,7 +109,9 @@ export function GrokBuildProviderForm({
   const [apiKey, setApiKey] = useState(initialConfig.apiKey);
   const [apiBackend, setApiBackend] = useState(initialConfig.apiBackend);
   const [contextWindow, setContextWindow] = useState(
-    String(initialConfig.contextWindow),
+    initialConfig.contextWindow === undefined
+      ? ""
+      : String(initialConfig.contextWindow),
   );
   const [rawConfig, setRawConfig] = useState(
     initialConfigText ?? buildGrokBuildConfig(initialConfig),
@@ -195,7 +205,7 @@ export function GrokBuildProviderForm({
       name: form.getValues("name") || initialConfig.name,
       apiKey,
       apiBackend,
-      contextWindow: Number.parseInt(contextWindow, 10),
+      contextWindow: parseContextWindow(contextWindow),
       ...overrides,
     };
     setRawConfig((current) => updateGrokBuildConfig(current, next));
@@ -251,7 +261,7 @@ export function GrokBuildProviderForm({
       name: presetName,
       apiKey: presetApiKey,
       apiBackend: preset.apiBackend,
-      contextWindow: Number.parseInt(contextWindow, 10),
+      contextWindow: parseContextWindow(contextWindow),
     });
     setRawConfig(presetConfig);
     projectGrokDraft(presetConfig, preset.category);
@@ -266,7 +276,9 @@ export function GrokBuildProviderForm({
     setBaseUrl(parsed.baseUrl);
     setApiKey(parsed.apiKey);
     setApiBackend(parsed.apiBackend);
-    setContextWindow(String(parsed.contextWindow));
+    setContextWindow(
+      parsed.contextWindow === undefined ? "" : String(parsed.contextWindow),
+    );
     if (parsed.name) form.setValue("name", parsed.name);
   };
 
@@ -289,7 +301,7 @@ export function GrokBuildProviderForm({
       return;
     }
 
-    const parsedContextWindow = Number.parseInt(contextWindow, 10);
+    const parsedContextWindow = parseContextWindow(contextWindow);
     const envKey = parseGrokBuildConfig(rawConfig).envKey?.trim();
     if (
       !name ||
@@ -304,7 +316,7 @@ export function GrokBuildProviderForm({
       );
       return;
     }
-    if (!Number.isInteger(parsedContextWindow) || parsedContextWindow <= 0) {
+    if (contextWindow.trim() && parsedContextWindow === undefined) {
       toast.error(
         t("grokBuild.contextWindowInvalid", {
           defaultValue: "上下文窗口必须是正整数",
@@ -463,11 +475,14 @@ export function GrokBuildProviderForm({
                 step={1}
                 inputMode="numeric"
                 value={contextWindow}
+                placeholder={t("grokBuild.contextWindowDefault", {
+                  defaultValue: "默认（由 Grok Build 决定）",
+                })}
                 onChange={(event) => {
                   const value = event.target.value;
                   setContextWindow(value);
                   syncStructuredConfig({
-                    contextWindow: Number.parseInt(value, 10),
+                    contextWindow: parseContextWindow(value),
                   });
                 }}
               />

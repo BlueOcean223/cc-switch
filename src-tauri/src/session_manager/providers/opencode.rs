@@ -533,11 +533,27 @@ pub fn delete_session(storage: &Path, path: &Path, session_id: &str) -> Result<b
             path.display()
         ));
     }
+    if !is_safe_id(session_id) {
+        return Err(format!("Invalid OpenCode session ID: {session_id:?}"));
+    }
     // 子会话随父会话一起删除（官方 `Session.remove` 递归删除）
     for child in child_session_ids_json(storage, session_id) {
+        if !is_safe_id(&child) {
+            log::warn!("跳过 id 不合法的 OpenCode 子会话: {child:?}");
+            continue;
+        }
         delete_session_files(storage, &storage.join("message").join(&child), &child)?;
     }
     delete_session_files(storage, path, session_id)
+}
+
+/// OpenCode 自己写的 id 只含字母、数字、`_`、`-`（`ses_…`、`msg_…`）。id 来自磁盘上的
+/// JSON，进入删除路径前要校验：空串、`..`、绝对路径会让 `Path::join` 指到预期目录之外。
+fn is_safe_id(id: &str) -> bool {
+    !id.is_empty()
+        && id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
 }
 
 /// 文件存储里 `parentID` 指向 `root` 的全部后代会话 id。
@@ -587,7 +603,11 @@ fn delete_session_files(storage: &Path, path: &Path, session_id: &str) -> Result
             Err(_) => continue,
         };
         if let Some(message_id) = value.get("id").and_then(Value::as_str) {
-            message_ids.push(message_id.to_string());
+            if is_safe_id(message_id) {
+                message_ids.push(message_id.to_string());
+            } else {
+                log::warn!("跳过 id 不合法的 OpenCode 消息: {message_id:?}");
+            }
         }
     }
 
@@ -611,6 +631,15 @@ fn delete_session_files(storage: &Path, path: &Path, session_id: &str) -> Result
         )
     })?;
 
+    // 整个目录删除前再确认它就是 `storage/message/<会话 id>`。
+    if path.parent() != Some(storage.join("message").as_path())
+        || path.file_name().and_then(|name| name.to_str()) != Some(session_id)
+    {
+        return Err(format!(
+            "Refusing to delete {}: not an OpenCode message directory",
+            path.display()
+        ));
+    }
     remove_dir_all_if_exists(path).map_err(|e| {
         format!(
             "Failed to delete OpenCode message directory {}: {e}",
@@ -1059,6 +1088,55 @@ mod tests {
             .join("project")
             .join(format!("{project_id}.json"))
             .exists());
+    }
+
+    #[test]
+    fn delete_session_ignores_unsafe_child_and_message_ids() {
+        let temp = tempdir().expect("tempdir");
+        let storage = temp.path();
+        let session_dir = storage.join("session").join("project-1");
+        std::fs::create_dir_all(&session_dir).unwrap();
+        let message_dir = storage.join("message").join("ses_parent");
+        std::fs::create_dir_all(&message_dir).unwrap();
+        std::fs::write(
+            session_dir.join("ses_parent.json"),
+            r#"{"id":"ses_parent","projectID":"project-1","time":{"created":1,"updated":2}}"#,
+        )
+        .unwrap();
+        // 被改坏的子会话 id，以及一条 id 是 ".." 的消息
+        for (index, bad) in ["", "..", "/tmp/x"].iter().enumerate() {
+            std::fs::write(
+                session_dir.join(format!("bad_{index}.json")),
+                serde_json::json!({ "id": bad, "parentID": "ses_parent" }).to_string(),
+            )
+            .unwrap();
+        }
+        std::fs::write(message_dir.join("msg_bad.json"), r#"{"id":".."}"#).unwrap();
+        // 其他会话的消息和 part 必须完好
+        let other_messages = storage.join("message").join("ses_other");
+        std::fs::create_dir_all(&other_messages).unwrap();
+        std::fs::write(other_messages.join("msg_o.json"), r#"{"id":"msg_o"}"#).unwrap();
+        let other_part = storage.join("part").join("msg_o");
+        std::fs::create_dir_all(&other_part).unwrap();
+
+        delete_session(storage, &message_dir, "ses_parent").expect("delete");
+
+        assert!(!message_dir.exists());
+        assert!(other_messages.join("msg_o.json").exists());
+        assert!(other_part.exists());
+        assert!(storage.join("session").exists());
+        assert!(storage.join("part").exists());
+    }
+
+    #[test]
+    fn delete_session_rejects_unsafe_session_ids() {
+        let temp = tempdir().expect("tempdir");
+        let storage = temp.path();
+        for bad in ["", ".."] {
+            let path = storage.join("message").join(bad);
+            assert!(delete_session(storage, &path, bad).is_err(), "{bad:?}");
+        }
+        assert!(temp.path().exists());
     }
 
     #[test]

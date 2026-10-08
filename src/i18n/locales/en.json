@@ -904,7 +904,8 @@
     "defaultModelHint": "The model Grok Build requests by default; change it anytime without waiting for a preset update.",
     "keyFieldsHint": "The default model (models.default) and the model table it points to follow the provider; everything else is Grok Build global settings and applies to every provider after saving.",
     "inactiveFieldsHint": "This provider still stores {{count}} settings that do not follow the provider. Click one to copy its TOML and paste it above if you need it; the value stored in the provider is kept.",
-    "inactiveFieldCopied": "Copied"
+    "inactiveFieldCopied": "Copied",
+    "contextWindowDefault": "Default (decided by Grok Build)"
   },
   "sessionManager": {
     "searchPlaceholder": "Search titles, folders, first/last messages or session IDs",

@@ -190,4 +190,50 @@ env_key = ["RELAY_KEY", "LC_RELAY_KEY"]
     expect(parsed.model["new-profile"].model).toBe("grok-upstream");
     expect(parsed.model).not.toHaveProperty("old-profile");
   });
+
+  it("leaves context_window out unless one is set", () => {
+    const config = `[models]
+default = " relay "
+
+[model.relay]
+model = "relay-model"
+base_url = "https://api.example.com/v1"
+api_key = "old"
+`;
+    const parsed = parseGrokBuildConfig(config);
+    expect(parsed.model).toBe("relay");
+    expect(parsed.contextWindow).toBeUndefined();
+
+    const updated = updateGrokBuildConfig(config, { ...parsed, apiKey: "new" });
+    const table = (parseToml(updated) as any).model.relay;
+    expect(table.api_key).toBe("new");
+    expect(table).not.toHaveProperty("context_window");
+
+    const explicit = updateGrokBuildConfig(updated, {
+      ...parseGrokBuildConfig(updated),
+      contextWindow: 200000,
+    });
+    expect(parseGrokBuildConfig(explicit).contextWindow).toBe(200000);
+    expect(
+      parseToml(
+        updateGrokBuildConfig(explicit, parseGrokBuildConfig(explicit)),
+      ),
+    ).toMatchObject({ model: { relay: { context_window: 200000 } } });
+  });
+
+  it("rejects a float context_window like the backend does", () => {
+    const config = `[models]
+default = "relay"
+
+[model.relay]
+model = "relay-model"
+base_url = "https://api.example.com/v1"
+api_key = "k"
+context_window = 500000.0
+`;
+    expect(validateGrokBuildConfig(config)).toBe(
+      "context_window must be a positive integer",
+    );
+    expect(parseGrokBuildConfig(config).contextWindow).toBeUndefined();
+  });
 });

@@ -12,7 +12,6 @@ export type GrokBuildApiBackend =
 /** 不写 `api_backend` 时 Grok 用的接口。 */
 export const GROK_BUILD_IMPLICIT_API_BACKEND: GrokBuildApiBackend =
   "chat_completions";
-export const GROK_BUILD_DEFAULT_CONTEXT_WINDOW = 500000;
 
 export interface GrokBuildConfigValues {
   /** Client-visible profile selected by [models].default. */
@@ -25,7 +24,8 @@ export interface GrokBuildConfigValues {
   envKey?: string;
   /** config.toml 里的原值；没写时为空，保存时也不补写。 */
   apiBackend?: string;
-  contextWindow: number;
+  /** config.toml 里的 `context_window`；没写时为空，由 Grok Build 按模型决定，保存时也不补写。 */
+  contextWindow?: number;
 }
 
 const asRecord = (value: unknown): Record<string, unknown> | undefined =>
@@ -35,6 +35,16 @@ const asRecord = (value: unknown): Record<string, unknown> | undefined =>
 
 const asString = (value: unknown, fallback = "") =>
   typeof value === "string" ? value : fallback;
+
+/** 整数按 bigint 读，才能和后端一样拒绝 `500000.0` 这种浮点写法。 */
+const parseConfigToml = (configToml: string) =>
+  parseToml(configToml, { integersAsBigInt: true });
+
+/** 正整数（TOML 整数）才算有效的上下文窗口。 */
+const positiveInteger = (value: unknown): number | undefined =>
+  typeof value === "bigint" && value > 0 && value <= Number.MAX_SAFE_INTEGER
+    ? Number(value)
+    : undefined;
 
 /** `env_key` 可以是一个变量名，也可以是数组（Grok 取第一个有值的）。 */
 const envKeyNames = (value: unknown): string[] =>
@@ -53,18 +63,17 @@ export function parseGrokBuildConfig(
     baseUrl: "",
     name: fallbackName,
     apiKey: "",
-    contextWindow: GROK_BUILD_DEFAULT_CONTEXT_WINDOW,
   };
 
   if (!configToml?.trim()) return fallback;
 
   try {
-    const root = asRecord(parseToml(configToml));
+    const root = asRecord(parseConfigToml(configToml));
     const models = asRecord(root?.models);
-    const defaultModel = asString(models?.default, GROK_BUILD_DEFAULT_MODEL);
+    const defaultModel =
+      asString(models?.default).trim() || GROK_BUILD_DEFAULT_MODEL;
     const modelTables = asRecord(root?.model);
     const selectedModel = asRecord(modelTables?.[defaultModel]);
-    const rawContextWindow = selectedModel?.context_window;
 
     return {
       model: defaultModel,
@@ -74,12 +83,7 @@ export function parseGrokBuildConfig(
       apiKey: asString(selectedModel?.api_key),
       envKey: envKeyNames(selectedModel?.env_key)[0] ?? "",
       apiBackend: asString(selectedModel?.api_backend).trim() || undefined,
-      contextWindow:
-        typeof rawContextWindow === "number" &&
-        Number.isInteger(rawContextWindow) &&
-        rawContextWindow > 0
-          ? rawContextWindow
-          : GROK_BUILD_DEFAULT_CONTEXT_WINDOW,
+      contextWindow: positiveInteger(selectedModel?.context_window),
     };
   } catch {
     return fallback;
@@ -105,7 +109,7 @@ export function updateGrokBuildConfig(
   }
 
   const existingModels = asRecord(config.models) ?? {};
-  const previousProfile = asString(existingModels.default, profile);
+  const previousProfile = asString(existingModels.default).trim() || profile;
   config.models = { ...existingModels, default: profile };
 
   const modelTables = asRecord(config.model) ?? {};
@@ -123,11 +127,18 @@ export function updateGrokBuildConfig(
     base_url: values.baseUrl.trim(),
     name: values.name.trim(),
     ...(apiBackend ? { api_backend: apiBackend } : {}),
-    context_window:
-      Number.isInteger(values.contextWindow) && values.contextWindow > 0
-        ? values.contextWindow
-        : GROK_BUILD_DEFAULT_CONTEXT_WINDOW,
   };
+  // 窗口留空就不写，让 Grok Build 按模型决定（它的默认值比旧版写死的 500000 小）
+  const contextWindow = values.contextWindow;
+  if (
+    contextWindow !== undefined &&
+    Number.isInteger(contextWindow) &&
+    contextWindow > 0
+  ) {
+    updatedSelected.context_window = contextWindow;
+  } else {
+    delete updatedSelected.context_window;
+  }
   if (apiKey) updatedSelected.api_key = apiKey;
   else delete updatedSelected.api_key;
   // 没传或传的就是现有第一个名字时保留原值，数组形式的 env_key 不会被缩成一个名字
@@ -149,7 +160,7 @@ export function updateGrokBuildConfig(
 export function validateGrokBuildConfig(configToml: string): string | null {
   if (!configToml.trim()) return "config.toml must not be empty";
   try {
-    const root = asRecord(parseToml(configToml));
+    const root = asRecord(parseConfigToml(configToml));
     const models = asRecord(root?.models);
     const profile = asString(models?.default).trim();
     const selected = asRecord(asRecord(root?.model)?.[profile]);
@@ -170,9 +181,7 @@ export function validateGrokBuildConfig(configToml: string): string | null {
     const contextWindow = selected.context_window;
     if (
       contextWindow !== undefined &&
-      (typeof contextWindow !== "number" ||
-        !Number.isInteger(contextWindow) ||
-        contextWindow <= 0)
+      positiveInteger(contextWindow) === undefined
     ) {
       return "context_window must be a positive integer";
     }

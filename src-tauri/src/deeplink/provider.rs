@@ -483,11 +483,11 @@ fn build_grokbuild_settings(request: &DeepLinkImportRequest) -> serde_json::Valu
     let endpoint_value = toml_edit::Value::from(endpoint.as_str()).to_string();
     let api_key_value = toml_edit::Value::from(api_key).to_string();
 
+    // 不写 context_window，让 Grok Build 按模型决定（和供应商表单一样）
     json!({
         "config": format!(
-            "[models]\ndefault = {model_value}\n\n[model.{model_value}]\nmodel = {model_value}\nbase_url = {endpoint_value}\nname = {name_value}\napi_key = {api_key_value}\napi_backend = \"{}\"\ncontext_window = {}\n",
+            "[models]\ndefault = {model_value}\n\n[model.{model_value}]\nmodel = {model_value}\nbase_url = {endpoint_value}\nname = {name_value}\napi_key = {api_key_value}\napi_backend = \"{}\"\n",
             crate::grok_config::DEFAULT_API_BACKEND,
-            crate::grok_config::DEFAULT_CONTEXT_WINDOW,
         )
     })
 }

@@ -29,33 +29,14 @@ fn write_json_value(path: &Path, value: &Value) -> Result<(), AppError> {
     atomic_write(path, json.as_bytes())
 }
 
-/// Gemini 条目里描述连接方式的字段。写入时先从旧条目里清掉这些字段再放入新规范，
-/// 免得从 stdio 改成 http 后残留 `command`；`timeout`、`trust`、`includeTools`
-/// 这类 Gemini 自己的设置原样保留。
-const TRANSPORT_FIELDS: [&str; 9] = [
-    "command", "args", "env", "cwd", "url", "httpUrl", "headers", "tcp", "type",
-];
-
-/// 统一规范里只供 CC Switch 或其它客户端使用、Gemini 不认识的字段。
-const SKIPPED_FIELDS: [&str; 12] = [
-    "type",
-    "enabled",
-    "source",
-    "id",
-    "name",
-    "tags",
-    "homepage",
-    "docs",
-    "startup_timeout_sec",
-    "startup_timeout_ms",
-    "tool_timeout_sec",
-    "tool_timeout_ms",
-];
+use crate::mcp::fields::{self, Client};
 
 /// Gemini 条目 → 统一规范。
 ///
 /// Gemini CLI 的传输判定：`httpUrl`（已弃用）是 streamable HTTP；`url` 按 `type`
 /// 选 `http` / `sse`，没写 `type` 时先试 HTTP、失败再回退 SSE；只有 `command` 是 stdio。
+/// 没写 `type` 的 `url` 导入成 sse：Gemini 旧文档里 `url` 就是 SSE 地址，这类条目复制到
+/// Claude 等客户端时，只支持 SSE 的服务器按 http 连不上。
 fn unified_spec(native: &Value) -> Value {
     let mut spec = native.clone();
     let Some(obj) = spec.as_object_mut() else {
@@ -69,7 +50,7 @@ fn unified_spec(native: &Value) -> Value {
         if obj.contains_key("command") {
             obj.insert("type".into(), Value::String("stdio".into()));
         } else if obj.contains_key("url") {
-            obj.insert("type".into(), Value::String("http".into()));
+            obj.insert("type".into(), Value::String("sse".into()));
         }
     }
     spec
@@ -96,21 +77,26 @@ pub fn read_mcp_servers_map() -> Result<std::collections::HashMap<String, Value>
 
 /// 统一规范 → Gemini 条目，合并到同名的现有条目上。
 ///
-/// - http 写成 `url` + `type: "http"`（Gemini 对 `httpUrl` 的弃用提示要求的写法）；
-///   现有条目用不带 `type` 的同一个 `url`（HTTP 失败回退 SSE）时保持原写法。
-/// - sse 写成 `url` + `type: "sse"`；stdio 不写 `type`。
+/// - http 写成 `url` + `type: "http"`（Gemini 对 `httpUrl` 的弃用提示要求的写法），
+///   sse 写成 `url` + `type: "sse"`；现有条目用不带 `type` 的同一个 `url`（HTTP 失败
+///   回退 SSE）时两者都保持原写法。stdio 不写 `type`。
 /// - Claude/Codex 的 `startup_timeout_*` / `tool_timeout_*` 换算成 Gemini 的
 ///   `timeout`（毫秒，取较大者）；规范自带 `timeout` 时以它为准；都没有就不写，
-///   沿用现有条目的值或 Gemini 默认的 10 分钟。
+///   用 Gemini 默认的 10 分钟。
 fn native_entry(id: &str, spec: &Value, existing: Option<&Value>) -> Result<Value, AppError> {
     let spec = spec
         .as_object()
         .ok_or_else(|| AppError::McpValidation(format!("MCP 服务器 '{id}' 不是对象")))?;
     let existing = existing.and_then(Value::as_object);
+    // 以现有条目为底（保留用户在 Gemini 里加的、谁都不认识的字段），先去掉连接字段和
+    // Gemini 自己的已知字段，再按规范写：在 ccs-lite 里删掉的 `trust`、`timeout` 等不会
+    // 留在 Gemini 里（`trust: true` 会让 Gemini 跳过工具调用确认）。
     let mut out = existing.cloned().unwrap_or_default();
-    for field in TRANSPORT_FIELDS {
-        out.remove(field);
-    }
+    out.retain(|key, _| {
+        !fields::TRANSPORT.contains(&key.as_str())
+            && !fields::GEMINI_TRANSPORT.contains(&key.as_str())
+            && !fields::GEMINI.contains(&key.as_str())
+    });
 
     for (key, value) in spec {
         if key == "type" {
@@ -119,16 +105,14 @@ fn native_entry(id: &str, spec: &Value, existing: Option<&Value>) -> Result<Valu
                     && e.get("httpUrl").is_none()
                     && e.get("url") == spec.get("url")
             });
+            // 现有条目用不带 `type` 的同一个 `url`（Gemini 先试 HTTP 再回退 SSE）时保持原写法
             match value.as_str() {
-                Some("http") if !auto_detect => {
-                    out.insert("type".into(), value.clone());
-                }
-                Some("sse") => {
+                Some("http" | "sse") if !auto_detect => {
                     out.insert("type".into(), value.clone());
                 }
                 _ => {}
             }
-        } else if !SKIPPED_FIELDS.contains(&key.as_str()) {
+        } else if !fields::is_foreign(Client::Gemini, key) {
             out.insert(key.clone(), value.clone());
         }
     }
@@ -200,7 +184,7 @@ mod tests {
             ),
             (
                 json!({"url": "https://a/mcp"}),
-                json!({"url": "https://a/mcp", "type": "http"}),
+                json!({"url": "https://a/mcp", "type": "sse"}),
             ),
             (
                 json!({"url": "https://a/sse", "type": "sse"}),
@@ -243,17 +227,57 @@ mod tests {
     }
 
     #[test]
-    fn native_entry_keeps_gemini_settings_and_replaces_transport() {
-        let existing = json!({"command": "old", "args": ["x"], "timeout": 5000, "trust": true});
+    fn native_entry_follows_the_spec_and_keeps_unknown_fields() {
+        // 规范里没有的 Gemini 设置（在 ccs-lite 里删掉的 trust、timeout）不留在 Gemini 里；
+        // 谁都不认识的字段保留。
+        let existing = json!({
+            "command": "old", "args": ["x"], "timeout": 5000, "trust": true, "myNote": "keep"
+        });
         let spec = json!({"type": "http", "url": "https://a/mcp"});
         assert_eq!(
             native_entry("a", &spec, Some(&existing)).unwrap(),
-            json!({"timeout": 5000, "trust": true, "type": "http", "url": "https://a/mcp"})
+            json!({"myNote": "keep", "type": "http", "url": "https://a/mcp"})
+        );
+        let with_trust = json!({"type": "http", "url": "https://a/mcp", "trust": false});
+        assert_eq!(
+            native_entry("a", &with_trust, Some(&existing)).unwrap()["trust"],
+            json!(false)
         );
 
-        // 现有条目靠自动探测（HTTP 失败回退 SSE）时不补 `type`。
-        let auto = json!({"url": "https://a/mcp", "timeout": 5000});
+        // 现有条目靠自动探测（HTTP 失败回退 SSE）时不补 `type`，导入成的 sse 也一样。
+        let auto = json!({"url": "https://a/mcp"});
         assert_eq!(native_entry("a", &spec, Some(&auto)).unwrap(), auto);
+        let imported = unified_spec(&auto);
+        assert_eq!(native_entry("a", &imported, Some(&auto)).unwrap(), auto);
+    }
+
+    #[test]
+    fn native_entry_drops_fields_of_other_clients() {
+        let spec = json!({
+            "type": "http",
+            "url": "https://a/mcp",
+            "bearer_token_env_var": "TOKEN",
+            "env_http_headers": {"X": "Y"},
+            "enabled_tools": ["a"],
+            "startup_readiness": "wait",
+            "headersHelper": "./h.sh",
+            "exposure": "all",
+            "toolExposure": {},
+            "auth": {},
+            "description": "kept: Gemini reads it",
+            "includeTools": ["a"],
+            "somethingNew": 1,
+        });
+        assert_eq!(
+            native_entry("a", &spec, None).unwrap(),
+            json!({
+                "type": "http",
+                "url": "https://a/mcp",
+                "description": "kept: Gemini reads it",
+                "includeTools": ["a"],
+                "somethingNew": 1,
+            })
+        );
     }
 
     #[test]
@@ -269,9 +293,10 @@ mod tests {
             native_entry("a", &spec(extra), existing.as_ref()).unwrap()["timeout"].clone()
         };
         assert_eq!(timeout(json!({}), None), Value::Null);
+        // 规范里没有超时设置时也不沿用现有条目的值
         assert_eq!(
             timeout(json!({}), Some(json!({"timeout": 5000}))),
-            json!(5000)
+            Value::Null
         );
         assert_eq!(timeout(json!({"tool_timeout_sec": 30}), None), json!(30000));
         assert_eq!(

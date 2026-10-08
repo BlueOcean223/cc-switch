@@ -12,6 +12,9 @@ use crate::live::patch::json::{ClearScope, JsonPatch};
 use crate::live::patch::{KeyPath, LiveWriteError};
 use crate::live::residue;
 
+/// 旧 Bedrock API Key 预设把 Key 写在顶层 `apiKey`，Claude Code 读的是这个变量。
+const BEDROCK_BEARER_ENV: &str = "AWS_BEARER_TOKEN_BEDROCK";
+
 /// 一个供应商在 `settings.json` 里拥有的键。
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct ClaudeProjection {
@@ -25,6 +28,9 @@ pub struct ClaudeProjection {
 
 impl ClaudeProjection {
     /// 从供应商行（或编辑器里的完整配置）取出关键字段和独有字段。
+    ///
+    /// 存量的 Bedrock API Key 行在这里转换：选了 Bedrock、顶层有 `apiKey` 时，投影成
+    /// `env.AWS_BEARER_TOKEN_BEDROCK`（`env` 里已有就以它为准），行本身不改写。
     pub fn of(settings: &Value) -> Self {
         let mut projection = Self::default();
         if let Some(root) = settings.as_object() {
@@ -41,6 +47,19 @@ impl ClaudeProjection {
                 } else if floor::claude_exclusive_env(key) {
                     projection.exclusive.insert(key.clone(), value.clone());
                 }
+            }
+        }
+
+        if projection
+            .env
+            .get("CLAUDE_CODE_USE_BEDROCK")
+            .is_some_and(is_truthy)
+        {
+            if let Some(key) = projection.top.shift_remove("apiKey") {
+                projection
+                    .env
+                    .entry(BEDROCK_BEARER_ENV.to_string())
+                    .or_insert(key);
             }
         }
         projection
@@ -162,6 +181,18 @@ pub fn store_into_row(row: &Value, projection: &ClaudeProjection) -> Value {
     row
 }
 
+fn is_truthy(value: &Value) -> bool {
+    match value {
+        Value::Bool(flag) => *flag,
+        Value::Number(number) => number.as_f64().is_some_and(|n| n != 0.0),
+        Value::String(text) => matches!(
+            text.trim().to_ascii_lowercase().as_str(),
+            "1" | "true" | "yes" | "on"
+        ),
+        _ => false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -220,6 +251,57 @@ mod tests {
         assert_eq!(
             Value::Object(projection.exclusive),
             json!({ "ENABLE_TOOL_SEARCH": "true" })
+        );
+    }
+
+    #[test]
+    fn legacy_bedrock_api_key_becomes_the_bearer_env() {
+        let legacy = json!({
+            "apiKey": "legacy-key",
+            "env": { "CLAUDE_CODE_USE_BEDROCK": "1", "AWS_REGION": "us-west-2" }
+        });
+        let projection = ClaudeProjection::of(&legacy);
+        assert!(projection.top.is_empty());
+        assert_eq!(projection.env[BEDROCK_BEARER_ENV], json!("legacy-key"));
+
+        let both = json!({
+            "apiKey": "stale",
+            "env": { "CLAUDE_CODE_USE_BEDROCK": "1", BEDROCK_BEARER_ENV: "fresh" }
+        });
+        assert_eq!(
+            ClaudeProjection::of(&both).env[BEDROCK_BEARER_ENV],
+            json!("fresh")
+        );
+
+        // 没选 Bedrock 时顶层 apiKey 原样投影。
+        let plain = json!({ "apiKey": "k" });
+        assert_eq!(ClaudeProjection::of(&plain).top["apiKey"], json!("k"));
+    }
+
+    /// 之前的版本把旧 Bedrock 行的 Key 写到了 live 顶层（Claude Code 不读）：切过去时顶层
+    /// `apiKey` 是关键字段，按关键字段规则清掉，Key 写进 `env`。
+    #[test]
+    fn a_top_level_api_key_left_in_live_moves_to_the_bearer_env() {
+        let live = json!({
+            "apiKey": "legacy-key",
+            "env": { "CLAUDE_CODE_USE_BEDROCK": "1", "AWS_REGION": "us-east-1" },
+            "hooks": {}
+        });
+        let row = json!({
+            "apiKey": "legacy-key",
+            "env": { "CLAUDE_CODE_USE_BEDROCK": "1", "AWS_REGION": "us-east-1" }
+        });
+        let out = project(&live, Some(&row), &row);
+        assert_eq!(
+            out,
+            json!({
+                "env": {
+                    "CLAUDE_CODE_USE_BEDROCK": "1",
+                    "AWS_REGION": "us-east-1",
+                    BEDROCK_BEARER_ENV: "legacy-key"
+                },
+                "hooks": {}
+            })
         );
     }
 

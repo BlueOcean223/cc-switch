@@ -123,7 +123,9 @@ fn test_parse_grokbuild_provider() {
     assert_eq!(model["name"].as_str(), Some("Grok Relay"));
     assert_eq!(model["api_key"].as_str(), Some("secret"));
     assert_eq!(model["api_backend"].as_str(), Some("responses"));
-    assert_eq!(model["context_window"].as_integer(), Some(500_000));
+    // 不写上下文窗口，由 Grok Build 按模型决定（写死 500000 会让它到 50 万才压缩）
+    assert!(model.get("context_window").is_none(), "{config}");
+    crate::grok_config::validate_config_toml(config).expect("valid Grok Build config");
 }
 
 #[test]

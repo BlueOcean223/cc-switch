@@ -5,6 +5,7 @@
 //! ## 模块结构
 //!
 //! - `validation` - 服务器配置验证
+//! - `fields` - 各客户端认识的条目字段（写给某个客户端时丢掉别家的字段）
 //! - `claude` - Claude MCP 同步和导入
 //! - `codex` - Codex MCP 同步和导入（含 TOML 转换）
 //! - `gemini` - Gemini MCP 同步和导入
@@ -13,6 +14,7 @@
 
 mod claude;
 mod codex;
+pub(crate) mod fields;
 mod gemini;
 mod grokbuild;
 mod hermes;
