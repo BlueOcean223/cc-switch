@@ -8,7 +8,7 @@ use std::sync::Arc;
 #[derive(Clone)]
 pub struct AppState {
     pub db: Arc<Database>,
-    /// 按应用的切换锁（见 `mode::lock_settled`）。
+    /// 按应用的切换锁（见 `mode::lock_settled_blocking`）。
     pub switch_locks: SwitchLocks,
     pub usage_cache: Arc<UsageCache>,
     // 内部已使用细粒度锁（accounts/access_tokens/refresh_locks），所有方法均为

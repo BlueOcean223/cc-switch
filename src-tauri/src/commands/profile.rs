@@ -66,7 +66,7 @@ pub fn emit_profile_apply_events(
     scope: ProfileScope,
 ) {
     for app_type in scope.apps().iter() {
-        let provider_id = crate::mode::current::provider_id(&state.db, app_type)
+        let provider_id = crate::settings::get_effective_current_provider(&state.db, app_type)
             .ok()
             .flatten()
             .unwrap_or_default();

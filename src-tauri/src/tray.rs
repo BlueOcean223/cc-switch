@@ -895,8 +895,8 @@ fn collect_app_snapshot(
         .into_iter()
         .map(|(_, provider)| provider_entry(app, provider))
         .collect();
-    let current_id =
-        crate::mode::current::provider_id(&app_state.db, app)?.filter(|id| rows.contains_key(id));
+    let current_id = crate::settings::get_effective_current_provider(&app_state.db, app)?
+        .filter(|id| rows.contains_key(id));
 
     let quota = current_id.as_deref().and_then(|id| {
         let provider = rows.get(id)?;
@@ -1932,7 +1932,7 @@ fn handle_provider_click(
         return Ok(ClickOutcome::Unchanged);
     };
     let state = app_state.inner();
-    let current = crate::mode::current::provider_id(&state.db, app_type)?;
+    let current = crate::settings::get_effective_current_provider(&state.db, app_type)?;
     if current.as_deref() == Some(provider_id) {
         if crate::live::legacy_routing::live_routing_state(app_type).is_none() {
             return Ok(ClickOutcome::Unchanged);
@@ -2092,14 +2092,15 @@ pub(crate) async fn refresh_all_usage_in_tray(app: &tauri::AppHandle) {
         let log_name = app_display_name(app_type);
 
         // 解析在用的那家；未设置 / 出错都静默跳过，与 create_tray_menu 的行为保持一致。
-        let current_id = match crate::mode::current::provider_id(&app_state.db, app_type) {
-            Ok(Some(id)) => id,
-            Ok(None) => continue,
-            Err(e) => {
-                log::warn!("[Tray] 读取{log_name}当前供应商失败: {e}");
-                continue;
-            }
-        };
+        let current_id =
+            match crate::settings::get_effective_current_provider(&app_state.db, app_type) {
+                Ok(Some(id)) => id,
+                Ok(None) => continue,
+                Err(e) => {
+                    log::warn!("[Tray] 读取{log_name}当前供应商失败: {e}");
+                    continue;
+                }
+            };
         // 只需当前 provider —— by-id 查询避免把整个 app 的 provider 列表加载
         // 进内存（每次悬停的热路径）。
         let current = match app_state.db.get_provider_by_id(&current_id, app_type_str) {
@@ -2119,15 +2120,9 @@ pub(crate) async fn refresh_all_usage_in_tray(app: &tauri::AppHandle) {
             usage_futures.push(async move {
                 let result = match source {
                     TrayUsageSource::ManagedCodex(account_id) => {
-                        let codex_state = app.state::<crate::commands::CodexOAuthState>();
-                        crate::commands::get_codex_oauth_quota(
-                            app_clone,
-                            state,
-                            Some(account_id),
-                            codex_state,
-                        )
-                        .await
-                        .map(|_| ())
+                        crate::commands::get_codex_oauth_quota(app_clone, state, Some(account_id))
+                            .await
+                            .map(|_| ())
                     }
                     TrayUsageSource::Subscription => {
                         crate::commands::get_subscription_quota(app_clone, state, app_str)

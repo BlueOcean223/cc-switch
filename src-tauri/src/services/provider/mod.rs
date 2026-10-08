@@ -140,7 +140,7 @@ impl EditorSaveKind {
         app_type: &AppType,
         id: &str,
     ) -> Result<bool, AppError> {
-        let current = crate::mode::current::provider_id(&state.db, app_type)?;
+        let current = crate::settings::get_effective_current_provider(&state.db, app_type)?;
         Ok(match self {
             Self::Add => current.is_none(),
             Self::Update => current.as_deref() == Some(id),
@@ -2658,7 +2658,7 @@ wire_api = "responses"
                     "rebind={rebind}"
                 );
                 assert_eq!(
-                    crate::mode::current::provider_id(&state.db, &AppType::Codex)
+                    crate::settings::get_effective_current_provider(&state.db, &AppType::Codex)
                         .unwrap()
                         .as_deref(),
                     Some(target.id.as_str())
@@ -3886,7 +3886,7 @@ wire_api = "responses"
                         before
                     );
                     assert_eq!(
-                        crate::mode::current::provider_id(&state.db, &AppType::Codex)
+                        crate::settings::get_effective_current_provider(&state.db, &AppType::Codex)
                             .unwrap()
                             .as_deref(),
                         Some("current")
@@ -4362,7 +4362,8 @@ impl ProviderService {
         if app_type.is_additive_mode() {
             return Ok(String::new());
         }
-        crate::mode::current::provider_id(&state.db, &app_type).map(|opt| opt.unwrap_or_default())
+        crate::settings::get_effective_current_provider(&state.db, &app_type)
+            .map(|opt| opt.unwrap_or_default())
     }
 
     fn save_mcode_provider(
@@ -4461,7 +4462,7 @@ impl ProviderService {
         }
 
         // For other apps: Check if sync is needed (if this is current provider, or no current provider)
-        let current = crate::mode::current::provider_id(&state.db, &app_type)?;
+        let current = crate::settings::get_effective_current_provider(&state.db, &app_type)?;
         if current.is_none() {
             // 第一个供应商同样只写关键字段，不覆盖用户已有的配置文件。
             match app_type {
@@ -4497,7 +4498,7 @@ impl ProviderService {
         let app_type = AppType::Codex;
         // 和切换互斥：等着的切换不能看到只存了一半的托管账号绑定。
         let _switch_guard = crate::mode::lock_settled_blocking(state, &app_type)?;
-        let current = crate::mode::current::provider_id(&state.db, &app_type)?;
+        let current = crate::settings::get_effective_current_provider(&state.db, &app_type)?;
         if current.is_some() {
             state.db.save_provider(app_type.as_str(), &provider)?;
             return Ok(true);
@@ -4823,7 +4824,8 @@ impl ProviderService {
         let existing = state
             .db
             .get_provider_by_id(&provider.id, app_type.as_str())?;
-        let first = crate::mode::current::provider_id(&state.db, &app_type)?.is_none();
+        let first =
+            crate::settings::get_effective_current_provider(&state.db, &app_type)?.is_none();
         state.db.save_provider(app_type.as_str(), &provider)?;
 
         let key_fields = first.then_some(claude_editor::KeyFieldWrite {
@@ -4965,7 +4967,7 @@ impl ProviderService {
             }
 
             Self::set_provider_live_config_managed(&mut provider, false);
-            let was_current = crate::mode::current::local_pointer(&app_type).as_deref()
+            let was_current = crate::settings::get_current_provider(&app_type).as_deref()
                 == Some(original_id.as_str());
             state.db.save_provider(app_type.as_str(), &provider)?;
             state.db.delete_provider(app_type.as_str(), &original_id)?;
@@ -5041,7 +5043,8 @@ impl ProviderService {
         }
 
         // For other apps: 是不是当前供应商。
-        let is_current = crate::mode::current::provider_id(&state.db, &app_type)?.as_deref()
+        let is_current = crate::settings::get_effective_current_provider(&state.db, &app_type)?
+            .as_deref()
             == Some(provider.id.as_str());
 
         if matches!(app_type, AppType::Codex) {
@@ -5175,7 +5178,7 @@ impl ProviderService {
         }
 
         // For other apps: 本地记录、DB 任何一处指着它都不能删
-        if crate::mode::current::is_referenced(&state.db, &app_type, id)? {
+        if crate::settings::is_current_provider_referenced(&state.db, &app_type, id)? {
             return Err(AppError::Message(
                 "无法删除当前正在使用的供应商".to_string(),
             ));
@@ -5325,7 +5328,7 @@ impl ProviderService {
         if app_type.is_additive_mode() {
             log::info!("[SWITCH] {} 写入 {id}（累加式应用）", app_type.as_str());
         } else {
-            let previous = crate::mode::current::provider_id(&state.db, &app_type)
+            let previous = crate::settings::get_effective_current_provider(&state.db, &app_type)
                 .ok()
                 .flatten();
             log::info!(
@@ -5457,7 +5460,8 @@ impl ProviderService {
         provider: &Provider,
         providers: &IndexMap<String, Provider>,
     ) -> Result<SwitchResult, AppError> {
-        let current_id = crate::mode::current::provider_id(&state.db, &AppType::Claude)?;
+        let current_id =
+            crate::settings::get_effective_current_provider(&state.db, &AppType::Claude)?;
         let prev = current_id
             .as_deref()
             .and_then(|current_id| providers.get(current_id));
@@ -5482,7 +5486,8 @@ impl ProviderService {
         provider: &Provider,
         providers: &IndexMap<String, Provider>,
     ) -> Result<SwitchResult, AppError> {
-        let current_id = crate::mode::current::provider_id(&state.db, &AppType::Codex)?;
+        let current_id =
+            crate::settings::get_effective_current_provider(&state.db, &AppType::Codex)?;
         let owner = current_id
             .as_deref()
             .and_then(|current_id| providers.get(current_id));
@@ -5517,7 +5522,8 @@ impl ProviderService {
         provider: &Provider,
         providers: &IndexMap<String, Provider>,
     ) -> Result<SwitchResult, AppError> {
-        let current_id = crate::mode::current::provider_id(&state.db, &AppType::GrokBuild)?;
+        let current_id =
+            crate::settings::get_effective_current_provider(&state.db, &AppType::GrokBuild)?;
         let live_owner = current_id
             .as_deref()
             .and_then(|current_id| providers.get(current_id));
@@ -6871,7 +6877,8 @@ impl ProviderService {
         failures: &mut Vec<String>,
     ) {
         // 正在用的那家才需要重投影。
-        let is_current = match crate::mode::current::provider_id(&state.db, &app_type) {
+        let is_current = match crate::settings::get_effective_current_provider(&state.db, &app_type)
+        {
             Ok(current) => current.as_deref() == Some(child_id),
             Err(err) => {
                 log::warn!(

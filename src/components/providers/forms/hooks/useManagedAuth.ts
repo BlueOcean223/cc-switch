@@ -44,7 +44,7 @@ export function useManagedAuth(authProvider: ManagedAuthProvider) {
     refetch: refetchStatus,
   } = useQuery<ManagedAuthStatus>({
     queryKey,
-    queryFn: () => authApi.authGetStatus(authProvider),
+    queryFn: () => authApi.authGetStatus(),
     staleTime: 30000,
   });
 
@@ -63,10 +63,7 @@ export function useManagedAuth(authProvider: ManagedAuthProvider) {
     async (deviceCode: string | null): Promise<boolean> => {
       if (!deviceCode) return true;
       try {
-        const cancelled = await authApi.authCancelLogin(
-          authProvider,
-          deviceCode,
-        );
+        const cancelled = await authApi.authCancelLogin(deviceCode);
         if (!cancelled) {
           await queryClient.invalidateQueries({
             queryKey: ["managed-auth-status", authProvider],
@@ -106,7 +103,7 @@ export function useManagedAuth(authProvider: ManagedAuthProvider) {
 
   const startLoginMutation = useMutation({
     mutationFn: ({ targetAccountId }: LoginRequest) =>
-      authApi.authStartLogin(authProvider, targetAccountId),
+      authApi.authStartLogin(targetAccountId),
     onSuccess: async (response, request) => {
       if (request.generation !== flowGenerationRef.current) {
         void cancelBackendFlow(response.device_code);
@@ -150,7 +147,6 @@ export function useManagedAuth(authProvider: ManagedAuthProvider) {
 
         try {
           const newAccount = await authApi.authPollForAccount(
-            authProvider,
             response.device_code,
           );
           if (request.generation !== flowGenerationRef.current) return;
@@ -209,7 +205,7 @@ export function useManagedAuth(authProvider: ManagedAuthProvider) {
   });
 
   const logoutMutation = useMutation({
-    mutationFn: () => authApi.authLogout(authProvider),
+    mutationFn: () => authApi.authLogout(),
     onSuccess: async () => {
       setPollingState("idle");
       setDeviceCode(null);
@@ -229,8 +225,7 @@ export function useManagedAuth(authProvider: ManagedAuthProvider) {
   });
 
   const removeAccountMutation = useMutation({
-    mutationFn: (accountId: string) =>
-      authApi.authRemoveAccount(authProvider, accountId),
+    mutationFn: (accountId: string) => authApi.authRemoveAccount(accountId),
     onSuccess: async () => {
       setPollingState("idle");
       setDeviceCode(null);

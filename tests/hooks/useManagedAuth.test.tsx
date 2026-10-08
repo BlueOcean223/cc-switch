@@ -88,10 +88,7 @@ describe("useManagedAuth", () => {
     act(() => result.current.reauthAccount("acct-1"));
 
     await waitFor(() =>
-      expect(apiMocks.authStartLogin).toHaveBeenCalledWith(
-        "codex_oauth",
-        "acct-1",
-      ),
+      expect(apiMocks.authStartLogin).toHaveBeenCalledWith("acct-1"),
     );
   });
 
@@ -109,11 +106,7 @@ describe("useManagedAuth", () => {
     await waitFor(() =>
       expect(apiMocks.authStartLogin).toHaveBeenCalledTimes(2),
     );
-    expect(apiMocks.authStartLogin).toHaveBeenNthCalledWith(
-      2,
-      "codex_oauth",
-      "acct-1",
-    );
+    expect(apiMocks.authStartLogin).toHaveBeenNthCalledWith(2, "acct-1");
   });
 
   it("localizes a duplicate Codex account error", async () => {
@@ -159,10 +152,7 @@ describe("useManagedAuth", () => {
     act(() => result.current.cancelAuth());
 
     await waitFor(() =>
-      expect(apiMocks.authCancelLogin).toHaveBeenCalledWith(
-        "codex_oauth",
-        "device-1",
-      ),
+      expect(apiMocks.authCancelLogin).toHaveBeenCalledWith("device-1"),
     );
     expect(result.current.pollingState).toBe("idle");
   });
@@ -256,10 +246,7 @@ describe("useManagedAuth", () => {
     act(() => result.current.removeAccount("acct-1"));
 
     await waitFor(() =>
-      expect(apiMocks.authRemoveAccount).toHaveBeenCalledWith(
-        "codex_oauth",
-        "acct-1",
-      ),
+      expect(apiMocks.authRemoveAccount).toHaveBeenCalledWith("acct-1"),
     );
     await waitFor(() =>
       expect(toastMocks.success).toHaveBeenCalledWith("账号已移除"),

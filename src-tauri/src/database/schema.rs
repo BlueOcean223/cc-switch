@@ -395,7 +395,7 @@ impl Database {
                         Self::set_user_version(conn, 15)?;
                     }
                     15 => {
-                        log::info!("迁移数据库从 v15 到 v16（重建 Codex 会话用量）");
+                        log::info!("迁移数据库从 v15 到 v16（无操作，由 v21 的用量重建取代）");
                         Self::migrate_v15_to_v16(conn)?;
                         Self::set_user_version(conn, 16)?;
                     }

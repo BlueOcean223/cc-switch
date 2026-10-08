@@ -244,7 +244,10 @@ struct LiveOwner {
 impl LiveOwner {
     fn read(state: &AppState) -> Result<Self, AppError> {
         Ok(Self {
-            current: crate::mode::current::provider(&state.db, &AppType::Codex)?,
+            current: crate::settings::get_effective_current_provider_row(
+                &state.db,
+                &AppType::Codex,
+            )?,
         })
     }
 

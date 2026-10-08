@@ -59,7 +59,9 @@ impl ProviderService {
             return Ok(false);
         }
         let _switch_guard = crate::mode::lock_settled_blocking(state, app_type)?;
-        let Some(provider) = crate::mode::current::provider(&state.db, app_type)? else {
+        let Some(provider) =
+            crate::settings::get_effective_current_provider_row(&state.db, app_type)?
+        else {
             return Ok(false);
         };
         super::ensure_usable_without_routing(app_type, &provider)?;

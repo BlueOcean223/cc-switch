@@ -93,7 +93,7 @@ fn settings() -> Value {
 }
 
 fn current_id(state: &AppState, app: &AppType) -> Option<String> {
-    current::provider_id(&state.db, app).unwrap()
+    crate::settings::get_effective_current_provider(&state.db, app).unwrap()
 }
 
 const USER_SETTINGS: &str = r#"{
@@ -1941,7 +1941,7 @@ async fn gemini_add_dialog_first_provider_writes_key_fields_and_sets_the_pointer
     );
     assert_eq!(gemini_settings()["ui"], json!({ "theme": "dark" }));
     assert_eq!(
-        crate::mode::current::provider_id(&state.db, &AppType::Gemini)
+        crate::settings::get_effective_current_provider(&state.db, &AppType::Gemini)
             .unwrap()
             .as_deref(),
         Some("c")

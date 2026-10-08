@@ -1047,6 +1047,27 @@ pub fn get_effective_current_provider(
     db.get_current_provider(app_type.as_str())
 }
 
+/// 当前供应商那一行（id 按 [`get_effective_current_provider`] 取）。
+pub fn get_effective_current_provider_row(
+    db: &crate::database::Database,
+    app_type: &AppType,
+) -> Result<Option<crate::provider::Provider>, AppError> {
+    match get_effective_current_provider(db, app_type)? {
+        Some(id) => db.get_provider_by_id(&id, app_type.as_str()),
+        None => Ok(None),
+    }
+}
+
+/// 删除前检查：本地记录、DB 的 `is_current` 任何一处指着它，就算正在用。
+pub fn is_current_provider_referenced(
+    db: &crate::database::Database,
+    app_type: &AppType,
+    id: &str,
+) -> Result<bool, AppError> {
+    Ok(get_current_provider(app_type).as_deref() == Some(id)
+        || db.get_current_provider(app_type.as_str())?.as_deref() == Some(id))
+}
+
 // ===== Skill 同步方式管理函数 =====
 
 /// 获取 Skill 同步方式配置

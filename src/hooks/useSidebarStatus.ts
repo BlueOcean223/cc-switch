@@ -16,7 +16,7 @@ export function useSidebarStatus() {
 
   const { data: codexAuthStatus } = useQuery({
     queryKey: ["managed-auth-status", "codex_oauth"],
-    queryFn: () => authApi.authGetStatus("codex_oauth"),
+    queryFn: () => authApi.authGetStatus(),
     staleTime: 60_000,
   });
 

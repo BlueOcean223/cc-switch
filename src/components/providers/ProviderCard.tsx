@@ -198,7 +198,7 @@ export function ProviderCard({
     isError: isCodexAuthStatusError,
   } = useQuery({
     queryKey: ["managed-auth-status", "codex_oauth"],
-    queryFn: () => authApi.authGetStatus("codex_oauth"),
+    queryFn: () => authApi.authGetStatus(),
     enabled:
       codexOfficialIdentity === "managed_account" &&
       Boolean(managedCodexAccountId),

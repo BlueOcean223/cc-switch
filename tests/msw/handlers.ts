@@ -394,14 +394,13 @@ export const handlers = [
       cacheHitRate: 0,
     }),
   ),
-  http.post(`${TAURI_ENDPOINT}/auth_get_status`, async ({ request }) => {
-    const { authProvider } = await withJson<{ authProvider: string }>(request);
-    return success({
-      provider: authProvider,
+  http.post(`${TAURI_ENDPOINT}/auth_get_status`, () =>
+    success({
+      provider: "codex_oauth",
       authenticated: false,
       accounts: [],
-    });
-  }),
+    }),
+  ),
   // 应用页页头的「提示词：X ›」会读各应用的提示词列表
   http.post(`${TAURI_ENDPOINT}/get_prompts`, () => success({})),
   http.post(

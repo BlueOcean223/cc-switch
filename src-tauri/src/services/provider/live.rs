@@ -741,7 +741,8 @@ pub(crate) fn sync_current_provider_for_app_live(
     app_type: &AppType,
 ) -> Result<bool, AppError> {
     let _switch_guard = crate::mode::lock_settled_blocking(state, app_type)?;
-    let Some(provider) = crate::mode::current::provider(&state.db, app_type)? else {
+    let Some(provider) = crate::settings::get_effective_current_provider_row(&state.db, app_type)?
+    else {
         return Ok(false);
     };
     write_live_for_state(state, app_type, &provider, None)?;

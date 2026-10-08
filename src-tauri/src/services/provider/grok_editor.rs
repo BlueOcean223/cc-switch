@@ -81,8 +81,10 @@ pub fn view(
     let file = grok_direct::config_file();
     let pre = read_current(&file.path)?;
     let mut doc = parse(&file.path, pre.as_deref())?;
-    let live_owner =
-        crate::mode::current::provider(&state.db, &crate::app_config::AppType::GrokBuild)?;
+    let live_owner = crate::settings::get_effective_current_provider_row(
+        &state.db,
+        &crate::app_config::AppType::GrokBuild,
+    )?;
     let retired = grok_direct::retired_tables(&DeviceStore::for_device(), live_owner.as_ref())?;
     GrokConfigPatch::direct(&projection, retired).apply_to(&file.path, &mut doc)?;
 

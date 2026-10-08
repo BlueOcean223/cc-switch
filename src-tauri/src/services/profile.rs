@@ -186,7 +186,7 @@ impl ProfileService {
 
         for app in scope.apps().iter() {
             if let Some(slot) = payload.providers.get_mut(app) {
-                *slot = crate::mode::current::provider_id(&state.db, app)?;
+                *slot = crate::settings::get_effective_current_provider(&state.db, app)?;
             }
             if let Some(slot) = payload.mcp.get_mut(app) {
                 *slot = Some(
@@ -348,7 +348,7 @@ impl ProfileService {
                         "[{app_str}] provider '{target_pid}' no longer exists, skipped"
                     ));
                 } else {
-                    let current = crate::mode::current::provider_id(&state.db, app)?;
+                    let current = crate::settings::get_effective_current_provider(&state.db, app)?;
                     if current.as_deref() != Some(target_pid.as_str()) {
                         match ProviderService::switch(state, app.clone(), target_pid) {
                             Ok(result) => warnings.extend(result.warnings),

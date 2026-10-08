@@ -51,11 +51,19 @@ impl SwitchLocks {
 /// 补不完（比如本机设置文件写不进去、改不了指针）就拒绝这次操作：这时读到的还是补完前的
 /// 指针，照着做下去（比如只存了一行、以为它不是当前供应商），等那次操作补完就和刚做的
 /// 对不上了。
-pub(crate) async fn lock_settled(
+///
+/// 累加式应用不经写引擎（`live-state.json` 里没有它们要补完的操作），不拿锁。
+///
+/// 切换锁是 tokio 的锁（异步命令里也要拿），这里用 `block_on` 等它；tokio 的
+/// `blocking_lock` 在异步上下文里会 panic，而调用方不全在 `spawn_blocking` 里。
+pub(crate) fn lock_settled_blocking(
     state: &AppState,
     app: &AppType,
-) -> Result<OwnedMutexGuard<()>, AppError> {
-    let guard = state.switch_locks.lock_for_app(app.as_str()).await;
+) -> Result<Option<OwnedMutexGuard<()>>, AppError> {
+    if app.is_additive_mode() {
+        return Ok(None);
+    }
+    let guard = futures::executor::block_on(state.switch_locks.lock_for_app(app.as_str()));
     operation::settle(&state.db, app.as_str()).map_err(|error| {
         AppError::localized(
             "mode.unsettled",
@@ -69,17 +77,5 @@ pub(crate) async fn lock_settled(
             ),
         )
     })?;
-    Ok(guard)
-}
-
-/// 同步代码里用的 [`lock_settled`]。累加式应用不经写引擎（`live-state.json` 里没有它们
-/// 要补完的操作），不拿锁。
-pub(crate) fn lock_settled_blocking(
-    state: &AppState,
-    app: &AppType,
-) -> Result<Option<OwnedMutexGuard<()>>, AppError> {
-    if app.is_additive_mode() {
-        return Ok(None);
-    }
-    futures::executor::block_on(lock_settled(state, app)).map(Some)
+    Ok(Some(guard))
 }
