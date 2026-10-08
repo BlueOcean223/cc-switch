@@ -35,6 +35,10 @@ pub struct SessionSyncResult {
     pub files_scanned: u32,
     pub deferred_files: u32,
     pub errors: Vec<String>,
+    /// 整个来源同步失败（数据库出错、根目录读不了）的来源名；单个文件的错误只在
+    /// `errors` 里
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub failed_sources: Vec<String>,
 }
 
 impl SessionSyncResult {
@@ -44,6 +48,7 @@ impl SessionSyncResult {
         self.files_scanned = self.files_scanned.saturating_add(other.files_scanned);
         self.deferred_files = self.deferred_files.saturating_add(other.deferred_files);
         self.errors.extend(other.errors);
+        self.failed_sources.extend(other.failed_sources);
     }
 }
 
@@ -78,7 +83,7 @@ pub(crate) struct SyncCursor {
     pub last_modified: i64,
     pub last_line_offset: i64,
     pub last_byte_offset: Option<i64>,
-    /// 游标边界前尾部字节的指纹（仅 Claude 路径写入），用于识别文件被
+    /// 游标边界前尾部字节的指纹（Claude、Grok 路径写入），用于识别文件被
     /// 外部重写；NULL 表示无指纹可校验。
     pub last_tail_fingerprint: Option<i64>,
     pub last_synced_at: i64,
@@ -122,7 +127,20 @@ fn merge_sync_step(
 ) {
     match step {
         Ok(result) => aggregate.merge(result),
-        Err(error) => aggregate.errors.push(format!("{name} 同步失败: {error}")),
+        Err(error) => {
+            aggregate.errors.push(format!("{name} 同步失败: {error}"));
+            aggregate.failed_sources.push(name.to_string());
+        }
+    }
+}
+
+/// 日志根目录存在却读不了时报错，让整个来源算作同步失败：当成没有日志的话，
+/// 重建会删掉明细却导不回来。
+pub(crate) fn ensure_readable_if_present(dir: &Path) -> Result<(), AppError> {
+    match fs::read_dir(dir) {
+        Ok(_) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(AppError::io(dir, e)),
     }
 }
 
@@ -130,6 +148,7 @@ fn merge_sync_step(
 /// 手动同步和 Codex 重建共享，避免 tokio Mutex 重入。
 pub fn sync_all_unlocked(db: &Database) -> SessionSyncResult {
     let mut result = SessionSyncResult::default();
+    let _dedup_round = crate::services::usage_proxy_dedup::begin_round(db);
     merge_sync_step(&mut result, "Claude", sync_claude_session_logs(db));
     merge_sync_step(
         &mut result,
@@ -370,6 +389,7 @@ pub fn sync_claude_session_logs(db: &Database) -> Result<SessionSyncResult, AppE
             files_scanned: 0,
             deferred_files: 0,
             errors: vec![],
+            failed_sources: vec![],
         });
     }
 
@@ -379,8 +399,10 @@ pub fn sync_claude_session_logs(db: &Database) -> Result<SessionSyncResult, AppE
         files_scanned: 0,
         deferred_files: 0,
         errors: vec![],
+        failed_sources: vec![],
     };
 
+    ensure_readable_if_present(&projects_dir)?;
     // 收集所有 .jsonl 文件
     let jsonl_files = collect_jsonl_files(&projects_dir);
     let cursors = load_sync_cursors(db)?;
@@ -528,8 +550,13 @@ const TAIL_FINGERPRINT_BYTES: i64 = 4096;
 
 /// 游标边界前尾部字节的指纹。域标签防止与其他用途的哈希混淆。
 fn claude_tail_fingerprint(tail: &[u8]) -> i64 {
+    tail_fingerprint(b"claude-session-tail-v1", tail)
+}
+
+/// 带域标签的尾部指纹，见 [`claude_tail_fingerprint`]。
+pub(crate) fn tail_fingerprint(domain: &[u8], tail: &[u8]) -> i64 {
     let mut hasher = Sha256::new();
-    hasher.update(b"claude-session-tail-v1");
+    hasher.update(domain);
     hasher.update(tail);
     let digest = hasher.finalize();
     i64::from(u32::from_be_bytes(
@@ -539,7 +566,7 @@ fn claude_tail_fingerprint(tail: &[u8]) -> i64 {
 
 /// 读取 `end` 之前最多 [`TAIL_FINGERPRINT_BYTES`] 字节；返回后文件位置
 /// 恰好停在 `end`，增量路径可直接从这里继续读。
-fn read_tail_before(file: &mut fs::File, end: i64) -> Result<Vec<u8>, AppError> {
+pub(crate) fn read_tail_before(file: &mut fs::File, end: i64) -> Result<Vec<u8>, AppError> {
     let len = end.clamp(0, TAIL_FINGERPRINT_BYTES);
     let mut tail = vec![0u8; len as usize];
     file.seek(SeekFrom::Start((end - len) as u64))
@@ -975,6 +1002,39 @@ pub(crate) fn update_sync_state(
     update_sync_state_on_conn(&conn, file_path, last_modified, last_offset)
 }
 
+/// 字节游标：`last_line_offset` 由调用方定义（Grok 记已提交的事件数）。
+pub(crate) fn update_byte_cursor_on_conn(
+    conn: &rusqlite::Connection,
+    file_path: &str,
+    last_modified: i64,
+    line_offset: i64,
+    byte_offset: i64,
+    tail_fingerprint: i64,
+) -> Result<(), AppError> {
+    let now = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    conn.prepare_cached(
+        "INSERT OR REPLACE INTO session_log_sync
+             (file_path, last_modified, last_line_offset, last_synced_at, last_byte_offset,
+              last_tail_fingerprint)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+    )
+    .and_then(|mut stmt| {
+        stmt.execute(rusqlite::params![
+            file_path,
+            last_modified,
+            line_offset,
+            now,
+            byte_offset,
+            tail_fingerprint
+        ])
+    })
+    .map_err(|e| AppError::Database(format!("更新同步状态失败: {e}")))?;
+    Ok(())
+}
+
 /// [`update_sync_state`] 的免锁版本，供调用方在已持锁的事务内把游标推进
 /// 与数据插入绑成原子提交。
 pub(crate) fn update_sync_state_on_conn(
@@ -1091,6 +1151,20 @@ fn refresh_session_log_entry_on_conn(
         return Ok(SessionRowOutcome::Updated);
     }
 
+    // 入库时用量还是中间值，对不上旧路由记的那一行；补全后对上了，说明这次请求
+    // 已经由旧路由记过，先前入库的这一行是重复的（账本里已有记录，不会再导入）
+    if crate::services::usage_proxy_dedup::has_matching_proxy_usage_log(
+        conn,
+        &claude_dedup_key(msg, created_at),
+    )? {
+        conn.execute(
+            "DELETE FROM proxy_request_logs WHERE request_id = ?1",
+            [request_id],
+        )
+        .map_err(|e| AppError::Database(format!("删除重复的会话日志失败: {e}")))?;
+        return Ok(SessionRowOutcome::Updated);
+    }
+
     let [input_cost, output_cost, cache_read_cost, cache_creation_cost, total_cost] =
         session_costs(conn, msg, created_at);
     conn.execute(
@@ -1120,6 +1194,21 @@ fn refresh_session_log_entry_on_conn(
     Ok(SessionRowOutcome::Updated)
 }
 
+fn claude_dedup_key(
+    msg: &ParsedAssistantUsage,
+    created_at: i64,
+) -> crate::services::usage_proxy_dedup::DedupKey<'_> {
+    crate::services::usage_proxy_dedup::DedupKey {
+        app_type: "claude",
+        model: &msg.model,
+        fresh_input_tokens: msg.input_tokens,
+        output_tokens: msg.output_tokens,
+        cache_read_tokens: msg.cache_read_tokens,
+        cache_creation_tokens: msg.cache_creation_tokens,
+        created_at,
+    }
+}
+
 /// 把一条回复写进 proxy_request_logs：没入过库就插入，入过库就按需补全
 /// （见 [`refresh_session_log_entry_on_conn`]）。
 ///
@@ -1146,8 +1235,8 @@ fn upsert_session_log_entry_on_conn(
                 .unwrap_or(0)
         });
 
-    // 保留期以前的日期已经汇总，再导入会在下次汇总时重复计入
-    if crate::services::usage_rebuild::is_below_import_floor(created_at) {
+    // 保留期以前的日期已经汇总，导入过的再导入会在下次汇总时重复计入
+    if !crate::services::usage_rebuild::import_gate(conn, "session_log", request_id, created_at) {
         return Ok(SessionRowOutcome::Skipped);
     }
 
@@ -1155,6 +1244,14 @@ fn upsert_session_log_entry_on_conn(
         return refresh_session_log_entry_on_conn(
             conn, request_id, msg, latency_ms, &stored, created_at,
         );
+    }
+    if crate::services::usage_proxy_dedup::skip_if_recorded_by_proxy(
+        conn,
+        "session_log",
+        request_id,
+        &claude_dedup_key(msg, created_at),
+    )? {
+        return Ok(SessionRowOutcome::Skipped);
     }
 
     let [input_cost, output_cost, cache_read_cost, cache_creation_cost, total_cost] =
@@ -2014,6 +2111,82 @@ mod tests {
 
         fs::remove_dir_all(&tmp).ok();
         fs::remove_dir_all(&whole_tmp).ok();
+        Ok(())
+    }
+
+    fn insert_old_proxy_row(db: &Database, app_type: &str, output_tokens: u32, created_at: i64) {
+        let conn = db.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO proxy_request_logs (
+                 request_id, provider_id, app_type, model, input_tokens, output_tokens,
+                 cache_read_tokens, cache_creation_tokens, total_cost_usd, latency_ms,
+                 status_code, created_at, data_source, input_token_semantics)
+             VALUES ('proxy-old', 'real-provider', ?1, 'claude-opus-4-8', 10, ?2, 100, 50,
+                     '0.1', 0, 200, ?3, 'proxy', 2)",
+            rusqlite::params![app_type, output_tokens, created_at],
+        )
+        .unwrap();
+    }
+
+    fn rows_for(db: &Database, msg_id: &str) -> (i64, i64) {
+        let request_id = format!("session:{msg_id}");
+        let conn = db.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT
+                 (SELECT COUNT(*) FROM proxy_request_logs WHERE request_id = ?1),
+                 (SELECT COUNT(*) FROM usage_import_ledger
+                  WHERE data_source = 'session_log' AND request_id = ?1)",
+            [&request_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn test_event_recorded_by_old_routing_is_skipped_and_ledgered() -> Result<(), AppError> {
+        let db = Database::memory()?;
+        let at = chrono::DateTime::parse_from_rfc3339("2026-06-07T13:01:23Z")
+            .unwrap()
+            .timestamp();
+        // Claude Desktop 的 Code 页面走旧路由时记的是 claude-desktop
+        insert_old_proxy_row(&db, "claude-desktop", 7, at - 5);
+        let (tmp, file) = temp_session_file();
+        append_lines(
+            &file,
+            &[
+                assistant_line("msg_routed", 7),
+                assistant_line("msg_direct", 8),
+            ],
+        );
+
+        let result = sync_with_cursor(&db, &file)?;
+        assert_eq!((result.imported, result.skipped), (1, 1));
+        assert_eq!(rows_for(&db, "msg_routed"), (0, 1));
+        assert_eq!(rows_for(&db, "msg_direct"), (1, 1));
+
+        fs::remove_dir_all(&tmp).ok();
+        Ok(())
+    }
+
+    #[test]
+    fn test_partial_row_is_dropped_once_it_matches_old_routing() -> Result<(), AppError> {
+        let db = Database::memory()?;
+        let at = chrono::DateTime::parse_from_rfc3339("2026-06-07T13:01:23Z")
+            .unwrap()
+            .timestamp();
+        insert_old_proxy_row(&db, "claude", 900, at);
+        let (tmp, file) = temp_session_file();
+        // 第一块的输出还是中间值，对不上旧路由的行，先入库
+        append_lines(&file, &[assistant_line("msg_partial", 3)]);
+        assert_eq!(sync_with_cursor(&db, &file)?.imported, 1);
+        assert_eq!(rows_for(&db, "msg_partial"), (1, 1));
+
+        append_lines(&file, &[assistant_line("msg_partial", 900)]);
+        bump_mtime(&file);
+        sync_with_cursor(&db, &file)?;
+        assert_eq!(rows_for(&db, "msg_partial"), (0, 1));
+
+        fs::remove_dir_all(&tmp).ok();
         Ok(())
     }
 

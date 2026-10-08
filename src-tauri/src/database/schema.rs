@@ -259,6 +259,7 @@ impl Database {
             [],
         )
         .map_err(|e| AppError::Database(e.to_string()))?;
+        Self::create_usage_import_ledger(conn)?;
 
         // 12. Profiles 表（全应用共享的项目实体，payload 按 app 分槽快照
         //     供应商/MCP/Skills/Prompt；各应用分组的 current 标记在 settings 表）
@@ -1114,6 +1115,7 @@ impl Database {
             }
         }
         Self::add_usage_pricing_columns(conn)?;
+        Self::start_usage_import_ledger(conn)?;
         // 导入逻辑和计价都改了（Claude 1 小时缓存与最终输出、Codex 缓存写入与
         // priority 档、超长上下文档位），已有用量要按会话日志重建一次
         if Self::table_exists(conn, "settings")? {
@@ -1185,16 +1187,88 @@ impl Database {
         Ok(())
     }
 
+    /// 导入账本：每个导入过的会话事件一行，明细汇总删除后仍在，用来判断 30 天前的
+    /// 事件导入过没有（见 `usage_rebuild::import_gate`）。触发器在会话来源的明细行
+    /// 插入时记账，各导入器不用自己写。
+    ///
+    /// 很旧的库的 `proxy_request_logs` 还没有 `data_source` 列，触发器等迁移补上列
+    /// 之后（v21）再建。
+    pub(crate) fn create_usage_import_ledger(conn: &Connection) -> Result<(), AppError> {
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS usage_import_ledger (
+                data_source TEXT NOT NULL,
+                request_id TEXT NOT NULL,
+                created_at INTEGER NOT NULL,
+                PRIMARY KEY (data_source, request_id)
+            ) WITHOUT ROWID",
+            [],
+        )
+        .map_err(|e| AppError::Database(format!("创建导入账本失败: {e}")))?;
+        if Self::table_exists(conn, "proxy_request_logs")?
+            && Self::has_column(conn, "proxy_request_logs", "data_source")?
+        {
+            conn.execute(
+                "CREATE TRIGGER IF NOT EXISTS usage_import_ledger_on_insert
+                 AFTER INSERT ON proxy_request_logs
+                 WHEN COALESCE(NEW.data_source, 'proxy') <> 'proxy'
+                 BEGIN
+                     INSERT OR IGNORE INTO usage_import_ledger (data_source, request_id, created_at)
+                     VALUES (NEW.data_source, NEW.request_id, NEW.created_at);
+                 END",
+                [],
+            )
+            .map_err(|e| AppError::Database(format!("创建导入账本触发器失败: {e}")))?;
+        }
+        Ok(())
+    }
+
+    /// v21 迁移：建导入账本，按现有会话明细回填，记下账本开始记账的时间。
+    fn start_usage_import_ledger(conn: &Connection) -> Result<(), AppError> {
+        Self::create_usage_import_ledger(conn)?;
+        let has_session_rows = Self::table_exists(conn, "proxy_request_logs")?
+            && Self::has_column(conn, "proxy_request_logs", "data_source")?
+            && Self::has_column(conn, "proxy_request_logs", "created_at")?;
+        if !has_session_rows {
+            return Ok(());
+        }
+        conn.execute(
+            "INSERT OR IGNORE INTO usage_import_ledger (data_source, request_id, created_at)
+             SELECT data_source, request_id, created_at FROM proxy_request_logs
+             WHERE COALESCE(data_source, 'proxy') <> 'proxy'",
+            [],
+        )
+        .map_err(|e| AppError::Database(format!("回填导入账本失败: {e}")))?;
+        if Self::table_exists(conn, "settings")? {
+            let since = crate::database::dao::usage_rollup::compute_local_midnight_cutoff(
+                chrono::Local::now(),
+                crate::database::dao::usage_rollup::USAGE_DETAIL_RETENTION_DAYS,
+            )?;
+            conn.execute(
+                "INSERT OR REPLACE INTO settings (key, value) VALUES (?1, ?2)",
+                rusqlite::params![
+                    crate::services::usage_rebuild::USAGE_IMPORT_LEDGER_SINCE_KEY,
+                    since.to_string()
+                ],
+            )
+            .map_err(|e| AppError::Database(format!("记录导入账本起点失败: {e}")))?;
+        }
+        Ok(())
+    }
+
     /// 用量明细的 1 小时缓存写入 / 服务档位 / 自带成本列，和定价表的超长上下文、
     /// priority 档列。
     fn add_usage_pricing_columns(conn: &Connection) -> Result<(), AppError> {
         if Self::table_exists(conn, "proxy_request_logs")? {
+            let adds_native_cost = !Self::has_column(conn, "proxy_request_logs", "native_cost")?;
             for (column, definition) in [
                 ("cache_creation_1h_tokens", "INTEGER NOT NULL DEFAULT 0"),
                 ("service_tier", "TEXT NOT NULL DEFAULT ''"),
                 ("native_cost", "INTEGER NOT NULL DEFAULT 0"),
             ] {
                 Self::add_column_if_missing(conn, "proxy_request_logs", column, definition)?;
+            }
+            if adds_native_cost {
+                Self::mark_upstream_native_costs(conn)?;
             }
         }
         if Self::table_exists(conn, "model_pricing")? {
@@ -1206,6 +1280,30 @@ impl Database {
                 Self::add_column_if_missing(conn, "model_pricing", column, definition)?;
             }
         }
+        Ok(())
+    }
+
+    /// 上游记下的工具自带成本标上 `native_cost`，免得按本地定价重算掉。
+    ///
+    /// 上游的写法：OpenCode 在 `cost > 0` 时、Pi 在日志带成本时、Grok Build 按
+    /// `costUsdTicks` 记工具成本，否则按本地定价算；mcode 有 `cost_usd` 就用（含 0，
+    /// 免费模型），没有才按本地定价算。成本为 0 的行分不出来源：OpenCode、Pi、Grok
+    /// 的按本地定价重算（多半是当时查不到定价），mcode 的全部保留。日志还在的行会被
+    /// 重建按现在的规则重新导入。
+    fn mark_upstream_native_costs(conn: &Connection) -> Result<(), AppError> {
+        if !Self::has_column(conn, "proxy_request_logs", "data_source")?
+            || !Self::has_column(conn, "proxy_request_logs", "total_cost_usd")?
+        {
+            return Ok(());
+        }
+        conn.execute(
+            "UPDATE proxy_request_logs SET native_cost = 1
+             WHERE data_source = 'mcode_session'
+                OR (data_source IN ('opencode_session', 'pi_session', 'grok_session')
+                    AND CAST(total_cost_usd AS REAL) > 0)",
+            [],
+        )
+        .map_err(|e| AppError::Database(format!("标记工具自带成本失败: {e}")))?;
         Ok(())
     }
 

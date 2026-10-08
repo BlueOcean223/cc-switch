@@ -1207,9 +1207,19 @@ pub fn run() {
 
                 initialize_common_config_snippets(&state);
 
-                // Periodic backup check (on startup)
-                if let Err(e) = state.db.periodic_backup_if_needed() {
-                    log::warn!("Periodic backup failed on startup: {e}");
+                // Periodic backup check (on startup)。拿会话同步锁的原因见下面的定时器
+                {
+                    let _guard = crate::services::session_usage::session_sync_mutex()
+                        .lock()
+                        .await;
+                    let db = state.db.clone();
+                    match tauri::async_runtime::spawn_blocking(move || db.periodic_backup_if_needed())
+                        .await
+                    {
+                        Ok(Ok(())) => {}
+                        Ok(Err(e)) => log::warn!("Periodic backup failed on startup: {e}"),
+                        Err(e) => log::warn!("Periodic backup task failed on startup: {e}"),
+                    }
                 }
 
                 // Periodic maintenance timer: run once per day while the app is running
@@ -1222,8 +1232,20 @@ pub fn run() {
                     interval.tick().await; // skip immediate first tick (already checked above)
                     loop {
                         interval.tick().await;
-                        if let Err(e) = db_for_timer.periodic_backup_if_needed() {
-                            log::warn!("Periodic maintenance timer failed: {e}");
+                        // 维护会汇总并删除 30 天前的明细。用量重建先删再重导旧明细、
+                        // 最后按重导的明细删汇总，中途被汇总掉的明细会让那些天算错，
+                        // 所以和会话同步、重建用同一把锁
+                        let _guard = crate::services::session_usage::session_sync_mutex()
+                            .lock()
+                            .await;
+                        let db = db_for_timer.clone();
+                        let outcome =
+                            tauri::async_runtime::spawn_blocking(move || db.periodic_backup_if_needed())
+                                .await;
+                        match outcome {
+                            Ok(Ok(())) => {}
+                            Ok(Err(e)) => log::warn!("Periodic maintenance timer failed: {e}"),
+                            Err(e) => log::warn!("Periodic maintenance task failed: {e}"),
                         }
                     }
                 });
@@ -1235,7 +1257,7 @@ pub fn run() {
 
                     async fn run_session_sync(db: std::sync::Arc<crate::database::Database>, backfill: bool) {
                         // 手动扫描模式下跳过定时扫描；backfill 轮（启动首轮）仍进入，
-                        // 按当前定价重算既有行的成本，不读会话文件
+                        // 定价变了就按当前定价重算既有行的成本，不读会话文件
                         if !backfill && !crate::settings::get_settings().session_auto_sync_enabled {
                             return;
                         }
@@ -1246,28 +1268,44 @@ pub fn run() {
                             let auto_sync = crate::settings::get_settings().session_auto_sync_enabled;
                             if backfill {
                                 // 导入或计价规则变了：启动首轮改为按会话日志整体重建
-                                match crate::services::usage_rebuild::is_rebuild_pending(&db) {
+                                let rebuilt = match crate::services::usage_rebuild::is_rebuild_pending(&db) {
                                     Ok(true) if auto_sync => {
-                                        return crate::services::usage_rebuild::rebuild_session_usage(&db)
-                                            .unwrap_or_else(|error| {
-                                                log::warn!("Usage rebuild failed: {error}");
-                                                crate::services::session_usage::SessionSyncResult {
-                                                    errors: vec![error.to_string()],
-                                                    ..Default::default()
-                                                }
-                                            });
+                                        Some(crate::services::usage_rebuild::rebuild_session_usage(&db))
                                     }
-                                    Ok(_) => {}
-                                    Err(error) => log::warn!("Reading usage rebuild flag failed: {error}"),
+                                    Ok(_) => None,
+                                    Err(error) => {
+                                        log::warn!("Reading usage rebuild flag failed: {error}");
+                                        None
+                                    }
+                                };
+                                // 重建只重导日志还在的行，其余本地计价的行在这里按新定价重算
+                                match db.reprice_usage_costs_if_pricing_changed() {
+                                    Ok(Some(repriced)) => log::info!("Pricing changed, repriced {repriced} usage row(s)"),
+                                    Ok(None) => {}
+                                    Err(error) => log::warn!("Usage cost startup reprice failed: {error}"),
                                 }
-                                if let Err(error) = db.reprice_usage_costs() {
-                                    log::warn!("Usage cost startup reprice failed: {error}");
+                                if let Some(outcome) = rebuilt {
+                                    return outcome.unwrap_or_else(|error| {
+                                        log::warn!("Usage rebuild failed: {error}");
+                                        crate::services::session_usage::SessionSyncResult {
+                                            errors: vec![error.to_string()],
+                                            ..Default::default()
+                                        }
+                                    });
                                 }
                             }
                             if !auto_sync {
                                 return crate::services::session_usage::SessionSyncResult::default();
                             }
-                            crate::services::session_usage::sync_all_unlocked(&db)
+                            // 启动首轮重建失败过的话，定时轮次不再重试
+                            crate::services::usage_rebuild::sync_or_rebuild(&db, false)
+                                .unwrap_or_else(|error| {
+                                    log::warn!("Usage rebuild failed: {error}");
+                                    crate::services::session_usage::SessionSyncResult {
+                                        errors: vec![error.to_string()],
+                                        ..Default::default()
+                                    }
+                                })
                         });
                         match task.await {
                             Ok(result) if !result.errors.is_empty() => {

@@ -759,6 +759,15 @@ fn hash_field(hasher: &mut Sha256, value: &[u8]) {
 }
 
 fn insert_pi_record(conn: &rusqlite::Connection, record: &PiUsageRecord) -> Result<bool, AppError> {
+    // 保留期以前的日期已经汇总，导入过的再导入会在下次汇总时重复计入
+    if !crate::services::usage_rebuild::import_gate(
+        conn,
+        DATA_SOURCE,
+        &record.request_id,
+        record.created_at,
+    ) {
+        return Ok(false);
+    }
     let request_seen: bool = conn
         .query_row(
             PI_REQUEST_DEDUP_SQL,

@@ -863,6 +863,9 @@ struct CodexFileSyncResult {
 /// 同步 Codex 使用数据（从 JSONL 会话日志）
 pub fn sync_codex_usage(db: &Database) -> Result<SessionSyncResult, AppError> {
     let codex_dir = get_codex_config_dir();
+    for root in ["sessions", "archived_sessions"] {
+        crate::services::session_usage::ensure_readable_if_present(&codex_dir.join(root))?;
+    }
     let files = collect_codex_session_files(&codex_dir);
     let rollout_index = build_rollout_index(&files);
     let mut pass = CodexSyncPass::load(db)?;
@@ -873,6 +876,7 @@ pub fn sync_codex_usage(db: &Database) -> Result<SessionSyncResult, AppError> {
         files_scanned: files.len() as u32,
         deferred_files: 0,
         errors: vec![],
+        failed_sources: vec![],
     };
 
     for file_path in &files {
@@ -1548,18 +1552,28 @@ const REWRITTEN_BURST_PAUSE_MS: i64 = 1_000;
 /// - 按写入节奏：开头前两条相隔不超过 [`REWRITTEN_BURST_PAUSE_MS`]，开头这段
 ///   连续密集写入的事件都算作重放。Codex 重放时会改写一部分复制来的累计值，
 ///   父文件里找不到同样的签名，签名对齐只能对上前面一段甚至一条都对不上，
-///   但这些事件都写在派生时刻。
-fn replay_prefix_len(child: &[ParsedTokenEvent], parent: &[TokenUsageSignature]) -> usize {
-    matching_replay_prefix(child, parent).max(rewritten_burst_len(child))
+///   但这些事件都写在派生时刻。这段的第一条要在派生时刻（root meta 的时间戳）
+///   之后 [`FORK_SETTINGS_MAX_DELAY_MS`] 以内：之后才出现的一串紧挨着的事件
+///   （例如回复之后紧跟一条重复的限流快照）是子会话自己的。
+fn replay_prefix_len(
+    child: &[ParsedTokenEvent],
+    parent: &[TokenUsageSignature],
+    forked_at: DateTime<Utc>,
+) -> usize {
+    matching_replay_prefix(child, parent).max(rewritten_burst_len(child, forked_at))
 }
 
-fn rewritten_burst_len(child: &[ParsedTokenEvent]) -> usize {
+fn rewritten_burst_len(child: &[ParsedTokenEvent], forked_at: DateTime<Utc>) -> usize {
+    let forked_at = forked_at.timestamp_millis();
     let mut previous: Option<i64> = None;
     let mut burst = 0usize;
     for event in child {
         let Some(at) = event.timestamp.as_deref().and_then(parse_timestamp_millis) else {
             break;
         };
+        if previous.is_none() && !(0..=FORK_SETTINGS_MAX_DELAY_MS).contains(&(at - forked_at)) {
+            break;
+        }
         if previous.is_some_and(|prev| !(0..=REWRITTEN_BURST_PAUSE_MS).contains(&(at - prev))) {
             break;
         }
@@ -1777,6 +1791,10 @@ fn sync_single_codex_file(
         ));
     }
 
+    // 父 rollout 不在了：本文件的 record（每次响应的用量，不含父历史）照常导入，
+    // 没被 record 覆盖的 token_count 要和父文件对齐才知道哪些是重放，先不导入，
+    // 游标也不推进，文件留在待处理队列里等父文件出现
+    let mut missing_parent: Option<String> = None;
     // 继承段只对没被 record 覆盖的 token_count 起作用（record 不经过这里）
     let replay_prefix = match (&parsed.parent, structural_replay_prefix(&parsed)) {
         (ParentResolution::None, _) => 0,
@@ -1813,49 +1831,49 @@ fn sync_single_codex_file(
             });
             match cached_prefix {
                 Some(Some(prefix)) => prefix,
-                Some(None) => {
-                    let parent_signatures =
-                        match resolve_parent_signatures(parent_id, cutoff, rollout_index) {
-                            Ok(signatures) => signatures,
-                            Err(reason) => {
-                                let pending_reason = if rollout_index.contains_key(parent_id) {
-                                    PendingReason::Retryable(reason)
-                                } else {
-                                    PendingReason::MissingParent(parent_id.clone())
-                                };
-                                return Ok(mark_deferred(
-                                    file_path,
-                                    file_modified,
-                                    file_size,
-                                    pending_reason,
-                                ));
-                            }
-                        };
-                    let prefix = replay_prefix_len(&parsed.token_events, &parent_signatures);
-                    if let Ok(mut caches) = replay_caches().lock() {
-                        caches.replay_prefixes.insert(
-                            file_path.to_path_buf(),
-                            CachedReplayPrefix {
-                                modified: file_modified,
-                                size: file_size,
-                                prefix,
-                            },
-                        );
+                Some(None) => match resolve_parent_signatures(parent_id, cutoff, rollout_index) {
+                    Ok(parent_signatures) => {
+                        let prefix =
+                            replay_prefix_len(&parsed.token_events, &parent_signatures, cutoff);
+                        if let Ok(mut caches) = replay_caches().lock() {
+                            caches.replay_prefixes.insert(
+                                file_path.to_path_buf(),
+                                CachedReplayPrefix {
+                                    modified: file_modified,
+                                    size: file_size,
+                                    prefix,
+                                },
+                            );
+                        }
+                        prefix
                     }
-                    prefix
-                }
+                    Err(reason) if rollout_index.contains_key(parent_id) => {
+                        return Ok(mark_deferred(
+                            file_path,
+                            file_modified,
+                            file_size,
+                            PendingReason::Retryable(reason),
+                        ));
+                    }
+                    Err(_) => {
+                        missing_parent = Some(parent_id.clone());
+                        usize::MAX
+                    }
+                },
                 None => {
                     let parent_signatures =
                         resolve_parent_signatures(parent_id, cutoff, rollout_index)
                             .map_err(AppError::Config)?;
-                    replay_prefix_len(&parsed.token_events, &parent_signatures)
+                    replay_prefix_len(&parsed.token_events, &parent_signatures, cutoff)
                 }
             }
         }
     };
 
-    if let Ok(mut caches) = replay_caches().lock() {
-        caches.pending.remove(file_path);
+    if missing_parent.is_none() {
+        if let Ok(mut caches) = replay_caches().lock() {
+            caches.pending.remove(file_path);
+        }
     }
 
     let mut result = CodexFileSyncResult::default();
@@ -1866,6 +1884,9 @@ fn sync_single_codex_file(
         };
         // 由 record 计费；旧版本导入过的行随 record 一起删掉（见下）
         if event.covered_by_record {
+            continue;
+        }
+        if missing_parent.is_some() {
             continue;
         }
         if token_offset < replay_prefix {
@@ -1898,15 +1919,10 @@ fn sync_single_codex_file(
             continue;
         }
         // 配对的 token_count 可能已按旧规则导入过（游标清零、文件被替换后重扫），
-        // 删掉那一行。record 低于导入下限时不会插入，旧行要留着，否则这次响应就丢了
-        let below_floor = crate::services::usage_rebuild::is_below_import_floor(codex_created_at(
-            record.timestamp.as_deref(),
-        ));
-        let replaces = paired_after_cursor
-            .filter(|_| !below_floor)
-            .map(|(_, event_index)| {
-                format!("{CODEX_THREAD_REQUEST_ID_PREFIX}:{root_thread_id}:{event_index}")
-            });
+        // 删掉那一行。record 不导入时旧行要留着（见下面写库处），否则这次响应就丢了
+        let replaces = paired_after_cursor.map(|(_, event_index)| {
+            format!("{CODEX_THREAD_REQUEST_ID_PREFIX}:{root_thread_id}:{event_index}")
+        });
         to_insert.push(CodexWrite {
             request_id,
             delta: DeltaTokens::from_usage(&record.usage).clamped(),
@@ -1939,6 +1955,50 @@ fn sync_single_codex_file(
         let mut batch_imported = 0u32;
         let mut batch_skipped = 0u32;
         for write in batch {
+            // 保留期以前的日期已经汇总，导入过的再导入会在下次汇总时重复计入；
+            // 被取代的 token_count 行已经汇总时，这次响应已经算过了
+            let counted = write.replaces.as_deref().is_some_and(|replaced| {
+                crate::services::usage_rebuild::already_rolled_up(&tx, "codex_session", replaced)
+            });
+            let created_at = codex_created_at(write.timestamp);
+            if counted
+                || !crate::services::usage_rebuild::import_gate(
+                    &tx,
+                    "codex_session",
+                    &write.request_id,
+                    created_at,
+                )
+            {
+                batch_skipped += 1;
+                continue;
+            }
+            // 旧路由已经记过这次请求。被取代的 token_count 行（如果有）照删
+            let usage = write.delta.token_usage();
+            let dedup_key = crate::services::usage_proxy_dedup::DedupKey {
+                app_type: "codex",
+                model: write.model,
+                fresh_input_tokens: usage.input_tokens,
+                output_tokens: usage.output_tokens,
+                cache_read_tokens: usage.cache_read_tokens,
+                cache_creation_tokens: usage.cache_creation_tokens,
+                created_at,
+            };
+            if crate::services::usage_proxy_dedup::skip_if_recorded_by_proxy(
+                &tx,
+                "codex_session",
+                &write.request_id,
+                &dedup_key,
+            )? {
+                if let Some(replaced) = &write.replaces {
+                    tx.prepare_cached("DELETE FROM proxy_request_logs WHERE request_id = ?1")
+                        .and_then(|mut stmt| stmt.execute([replaced]))
+                        .map_err(|e| {
+                            AppError::Database(format!("删除被 record 取代的 Codex 记录失败: {e}"))
+                        })?;
+                }
+                batch_skipped += 1;
+                continue;
+            }
             let inserted = insert_codex_session_entry_on_conn(
                 &tx,
                 &write.request_id,
@@ -1967,7 +2027,7 @@ fn sync_single_codex_file(
                 }
             }
         }
-        if is_last_batch {
+        if is_last_batch && missing_parent.is_none() {
             // 游标推进与最后一批数据同事务提交：中途崩溃时两者一起回滚，
             // 不会出现"游标已推进但数据缺失"的丢数据窗口。
             update_codex_sync_state_on_conn(&tx, &file_path_str, file_modified, &parsed)?;
@@ -1979,6 +2039,17 @@ fn sync_single_codex_file(
         result.skipped = result.skipped.saturating_add(batch_skipped);
     }
 
+    if let Some(parent) = missing_parent {
+        // record 已导入，下次处理时按 request_id 去重
+        let deferred = mark_deferred(
+            file_path,
+            file_modified,
+            file_size,
+            PendingReason::MissingParent(parent),
+        );
+        result.deferred = deferred.deferred;
+        return Ok(result);
+    }
     if to_insert.is_empty() {
         update_codex_sync_state(db, &file_path_str, file_modified, &parsed)?;
     }
@@ -2045,11 +2116,6 @@ fn insert_codex_session_entry_on_conn(
     pricing_cache: &mut HashMap<String, Option<ModelPricing>>,
 ) -> Result<bool, AppError> {
     let created_at = codex_created_at(timestamp);
-
-    // 保留期以前的日期已经汇总，再导入会在下次汇总时重复计入
-    if crate::services::usage_rebuild::is_below_import_floor(created_at) {
-        return Ok(false);
-    }
 
     // 入库用互不重叠的几桶
     let usage = delta.token_usage();
@@ -4713,14 +4779,49 @@ mod tests {
             ),
         );
 
-        assert!(sync_test_file(&db, &child, &[&child])?.deferred);
+        // 父文件还没出现：fork 自己的 record 先导入，token_count 等父文件
+        let first = sync_test_file(&db, &child, &[&child])?;
+        assert_eq!((first.imported, first.deferred), (1, true));
+        assert_only_fork_record_is_stored(&db)?;
         age_file(&parent);
         let result = sync_test_file(&db, &child, &[&parent, &child])?;
         assert_eq!(
             (result.imported, result.skipped, result.deferred),
-            (1, 1, false)
+            (0, 2, false)
         );
         assert_only_fork_record_is_stored(&db)
+    }
+
+    /// fork 之后很久才出现的一串紧挨着的 token_count（回复后紧跟一条重复的限流快照）
+    /// 是子会话自己的，不当作派生时写入的重放
+    #[test]
+    #[serial_test::serial]
+    fn test_late_burst_in_a_fork_is_not_treated_as_replay() -> Result<(), AppError> {
+        clear_codex_replay_caches();
+        let db = Database::memory()?;
+        let temp = tempdir().unwrap();
+        let parent = fixture_path(temp.path(), "2026-10-03T11-00-00", PARENT_ID);
+        let child = fixture_path(temp.path(), "2026-10-03T12-00-00", FORK_ID);
+        write_fixture(
+            &parent,
+            r#"
+            {"timestamp":"2026-10-03T11:00:00.000Z","type":"session_meta","payload":{"id":"P","cli_version":"0.150.0","source":"cli"}}
+            {"timestamp":"2026-10-03T11:00:05.000Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":U(5000,0,0,40,0),"last_token_usage":U(5000,0,0,40,0)}}}
+            "#,
+        );
+        age_file(&parent);
+        write_fixture(
+            &child,
+            r#"
+            {"timestamp":"2026-10-03T12:00:00.000Z","type":"session_meta","payload":{"id":"F","forked_from_id":"P","cli_version":"0.150.0","source":"cli"}}
+            {"timestamp":"2026-10-03T12:05:00.000Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":U(1000,0,0,10,0),"last_token_usage":U(1000,0,0,10,0)}}}
+            {"timestamp":"2026-10-03T12:05:00.300Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":U(1000,0,0,10,0),"last_token_usage":U(1000,0,0,10,0)}}}
+            "#,
+        );
+
+        let result = sync_test_file(&db, &child, &[&parent, &child])?;
+        assert_eq!((result.imported, result.deferred), (1, false));
+        Ok(())
     }
 
     /// 0.152 之前创建的 fork 被新版本 resume：本线程的 thread_settings_applied 是 resume
@@ -5028,7 +5129,7 @@ mod tests {
 
     /// T10：record 早于 30 天导入下限：不插入，配对的旧行也不删
     #[test]
-    fn test_record_below_import_floor_keeps_the_old_row() -> Result<(), AppError> {
+    fn test_record_does_not_recount_a_rolled_up_token_count_row() -> Result<(), AppError> {
         let db = Database::memory()?;
         let temp = tempdir().unwrap();
         let day = (Utc::now() - chrono::Duration::days(40))
@@ -5064,14 +5165,103 @@ mod tests {
             )?;
         }
 
+        // 旧行仍在明细里：record 取代它
+        {
+            let replaced_db = Database::memory()?;
+            let conn = lock_conn!(db.conn);
+            let row: (String, i64) = conn.query_row(
+                "SELECT request_id, created_at FROM proxy_request_logs",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )?;
+            drop(conn);
+            let conn = lock_conn!(replaced_db.conn);
+            conn.execute(
+                "INSERT INTO proxy_request_logs (
+                    request_id, provider_id, app_type, model, input_tokens, output_tokens,
+                    total_cost_usd, latency_ms, status_code, created_at, data_source
+                ) VALUES (?1, '_codex_session', 'codex', 'gpt-5.6-sol', 1000, 10, '0', 0, 200,
+                          ?2, 'codex_session')",
+                rusqlite::params![row.0, row.1],
+            )?;
+            drop(conn);
+            crate::services::usage_rebuild::set_test_import_floor(true);
+            let result = sync_test_file(&replaced_db, &file, &[&file]);
+            crate::services::usage_rebuild::set_test_import_floor(false);
+            assert_eq!(result?.imported, 1);
+            let ids = stored_request_ids(&replaced_db)?;
+            assert_eq!(ids.len(), 1);
+            assert_ne!(ids[0], thread_request_id(MAIN_ID, 1));
+        }
+
+        // 旧行已经汇总：这次响应已经算过，record 不再导入
+        db.rollup_and_prune(30)?;
         crate::services::usage_rebuild::set_test_import_floor(true);
         let result = sync_test_file(&db, &file, &[&file]);
         crate::services::usage_rebuild::set_test_import_floor(false);
         assert_eq!(result?.imported, 0);
-        assert_eq!(
-            stored_request_ids(&db)?,
-            vec![thread_request_id(MAIN_ID, 1)]
+        assert!(stored_request_ids(&db)?.is_empty());
+        let requests: i64 = lock_conn!(db.conn).query_row(
+            "SELECT SUM(request_count) FROM usage_daily_rollups",
+            [],
+            |row| row.get(0),
+        )?;
+        assert_eq!(requests, 1);
+        Ok(())
+    }
+
+    #[test]
+    fn test_record_recorded_by_old_routing_is_skipped() -> Result<(), AppError> {
+        let db = Database::memory()?;
+        let temp = tempdir().unwrap();
+        let day = (Utc::now() - chrono::Duration::days(2))
+            .format("%Y-%m-%d")
+            .to_string();
+        let file = fixture_path(temp.path(), &format!("{day}T10-00-00"), MAIN_ID);
+        write_fixture(
+            &file,
+            &r#"
+            {"timestamp":"DAYT10:00:00.000Z","ordinal":0,"type":"session_meta","payload":{"id":"M","session_id":"M","cli_version":"0.160.1","source":"cli","history_mode":"paginated"}}
+            {"timestamp":"DAYT10:00:00.100Z","ordinal":1,"type":"turn_context","payload":{"model":"gpt-5.6-sol"}}
+            {"timestamp":"DAYT10:00:05.000Z","ordinal":2,"type":"token_usage_record","payload":{"thread_id":"M","turn_id":"t1","session_id":"M","root_turn_id":"t1","response_id":"resp_a","usage":U(1000,0,0,10,0),"turn_token_usage":U(1000,0,0,10,0),"thread_token_usage":U(1000,0,0,10,0)}}
+            {"timestamp":"DAYT10:00:05.002Z","ordinal":3,"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":U(1000,0,0,10,0),"last_token_usage":U(1000,0,0,10,0)}}}
+            "#
+            .replace("DAY", &day),
         );
+        let at = unix_seconds(&format!("{day}T10:00:05Z"));
+        {
+            let conn = lock_conn!(db.conn);
+            // 旧路由记的行（输入含缓存，TOTAL 口径），和升级前没去重导入的 token_count 行
+            conn.execute(
+                "INSERT INTO proxy_request_logs (
+                    request_id, provider_id, app_type, model, input_tokens, output_tokens,
+                    total_cost_usd, latency_ms, status_code, created_at, data_source,
+                    input_token_semantics
+                ) VALUES ('proxy-old', 'real-provider', 'codex', 'gpt-5.6-sol', 1000, 10,
+                          '0.1', 0, 200, ?1, 'proxy', 1)",
+                [at - 2],
+            )?;
+            conn.execute(
+                "INSERT INTO proxy_request_logs (
+                    request_id, provider_id, app_type, model, input_tokens, output_tokens,
+                    total_cost_usd, latency_ms, status_code, created_at, data_source
+                ) VALUES (?1, '_codex_session', 'codex', 'gpt-5.6-sol', 1000, 10, '0', 0, 200,
+                          ?2, 'codex_session')",
+                rusqlite::params![thread_request_id(MAIN_ID, 1), at],
+            )?;
+        }
+
+        let result = sync_test_file(&db, &file, &[&file])?;
+        assert_eq!(result.imported, 0);
+        assert!(stored_request_ids(&db)?.is_empty());
+        let (proxy_rows, ledgered): (i64, i64) = lock_conn!(db.conn).query_row(
+            "SELECT
+                 (SELECT COUNT(*) FROM proxy_request_logs WHERE data_source = 'proxy'),
+                 (SELECT COUNT(*) FROM usage_import_ledger WHERE data_source = 'codex_session')",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+        assert_eq!((proxy_rows, ledgered), (1, 2));
         Ok(())
     }
 

@@ -287,7 +287,7 @@ pub fn delete_model_pricing(state: State<'_, AppState>, model_id: String) -> Res
     Ok(())
 }
 
-/// 手动触发会话日志同步
+/// 手动触发会话日志同步。有待处理的重建标记（例如关着自动同步升级的）时改为重建。
 #[tauri::command]
 pub async fn sync_session_usage(
     state: State<'_, AppState>,
@@ -297,10 +297,10 @@ pub async fn sync_session_usage(
         .lock()
         .await;
     tauri::async_runtime::spawn_blocking(move || {
-        crate::services::session_usage::sync_all_unlocked(&db)
+        crate::services::usage_rebuild::sync_or_rebuild(&db, true)
     })
     .await
-    .map_err(|error| AppError::Message(format!("会话用量同步任务失败: {error}")))
+    .map_err(|error| AppError::Message(format!("会话用量同步任务失败: {error}")))?
 }
 
 /// 会话日志扫描（后台定时或手动同步）最近一次完成的时间，毫秒时间戳；

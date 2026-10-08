@@ -90,12 +90,16 @@ const SYNC_LOCAL_TABLES: &[&str] = &[
     "usage_daily_rollups",
     "session_log_sync",
     "session_usage_dedup",
+    "usage_import_ledger",
 ];
 
 /// 描述本机用量表状态的 settings 键。用量表在同步导入时保留本机的，这些键也要跟着
 /// 保留：远端快照（或导入时跑的迁移）里的值说的是另一份用量表。
-const SYNC_LOCAL_SETTING_KEYS: &[&str] =
-    &[crate::services::usage_rebuild::USAGE_REBUILD_PENDING_KEY];
+const SYNC_LOCAL_SETTING_KEYS: &[&str] = &[
+    crate::services::usage_rebuild::USAGE_REBUILD_PENDING_KEY,
+    crate::services::usage_rebuild::USAGE_IMPORT_LEDGER_SINCE_KEY,
+    crate::services::usage_stats::USAGE_PRICING_FINGERPRINT_KEY,
+];
 
 /// A database backup entry for the UI
 #[derive(Debug, serde::Serialize)]

@@ -18,7 +18,7 @@ use crate::database::{lock_conn, Database};
 use crate::error::AppError;
 use crate::opencode_config::get_opencode_db_path;
 use crate::services::session_usage::{
-    metadata_modified_nanos, update_sync_state, SessionSyncResult,
+    metadata_modified_nanos, update_sync_state, update_sync_state_on_conn, SessionSyncResult,
 };
 use crate::services::sql_helpers::INPUT_TOKEN_SEMANTICS_FRESH;
 use crate::services::usage_stats::find_model_pricing;
@@ -85,6 +85,7 @@ pub fn sync_opencode_usage(db: &Database) -> Result<SessionSyncResult, AppError>
             files_scanned: 0,
             deferred_files: 0,
             errors: vec![],
+            failed_sources: vec![],
         });
     }
 
@@ -114,6 +115,7 @@ pub fn sync_opencode_usage(db: &Database) -> Result<SessionSyncResult, AppError>
             files_scanned: 1,
             deferred_files: 0,
             errors: vec![],
+            failed_sources: vec![],
         });
     }
 
@@ -128,6 +130,7 @@ pub fn sync_opencode_usage(db: &Database) -> Result<SessionSyncResult, AppError>
         files_scanned: 1,
         deferred_files: 0,
         errors: vec![],
+        failed_sources: vec![],
     };
     let mut has_sync_errors = false;
 
@@ -146,6 +149,12 @@ pub fn sync_opencode_usage(db: &Database) -> Result<SessionSyncResult, AppError>
 
         let mut session_had_error = false;
 
+        // 一个会话一个事务：逐行自动提交每行都要一次 fsync。单条失败照旧跳过
+        let conn = lock_conn!(db.conn);
+        let tx = conn
+            .unchecked_transaction()
+            .map_err(|e| AppError::Database(format!("开启 OpenCode 会话写入事务失败: {e}")))?;
+
         // 查询该会话的所有 assistant 消息
         let mut session_has_incomplete_usage = false;
         match query_assistant_messages(&opencode_conn, schema, session_id) {
@@ -154,7 +163,7 @@ pub fn sync_opencode_usage(db: &Database) -> Result<SessionSyncResult, AppError>
                 for (message_id, msg_data) in &query_result.messages {
                     let request_id = format!("opencode_session:{session_id}:{message_id}");
 
-                    match insert_opencode_message(db, &request_id, msg_data, session_id) {
+                    match insert_opencode_message(&tx, &request_id, msg_data, session_id) {
                         Ok(true) => result.imported += 1,
                         Ok(false) => result.skipped += 1,
                         Err(e) => {
@@ -175,20 +184,23 @@ pub fn sync_opencode_usage(db: &Database) -> Result<SessionSyncResult, AppError>
             }
         }
 
-        if session_had_error {
-            has_sync_errors = true;
-            continue;
-        }
-
-        if session_has_incomplete_usage {
-            continue;
-        }
-
         // 更新会话级同步状态。失败时不要推进文件级状态，确保下次可重试。
-        if let Err(e) = update_sync_state(db, &sync_key, *time_updated, 0) {
-            let msg = format!("OpenCode 会话同步状态更新失败 {session_id}: {e}");
+        if !session_had_error && !session_has_incomplete_usage {
+            if let Err(e) = update_sync_state_on_conn(&tx, &sync_key, *time_updated, 0) {
+                let msg = format!("OpenCode 会话同步状态更新失败 {session_id}: {e}");
+                log::warn!("[OPENCODE-SYNC] {msg}");
+                result.errors.push(msg);
+                session_had_error = true;
+            }
+        }
+        // 提交失败时这个会话的写入全部回滚，游标也没推进，下一轮重读
+        if let Err(e) = tx.commit() {
+            let msg = format!("OpenCode 会话写入提交失败 {session_id}: {e}");
             log::warn!("[OPENCODE-SYNC] {msg}");
             result.errors.push(msg);
+            session_had_error = true;
+        }
+        if session_had_error {
             has_sync_errors = true;
         }
     }
@@ -284,6 +296,7 @@ fn query_assistant_messages(
         .map_err(|e| AppError::Database(format!("查询消息失败: {e}")))?;
 
     let fork = schema == OpenCodeSchema::V2 && is_fork_session(conn, session_id);
+    let session_created = session_created_at(conn, schema, session_id);
     let mut messages = Vec::new();
     let mut has_incomplete_usage = false;
     for row in rows {
@@ -304,6 +317,17 @@ fn query_assistant_messages(
             && value.get("role").and_then(|r| r.as_str()) != Some("assistant")
         {
             continue;
+        }
+
+        // fork 复制来的消息保留原来的创建时间，早于这个会话本身
+        let message_created = value
+            .get("time")
+            .and_then(|t| t.get("created"))
+            .and_then(|v| v.as_i64());
+        if let (Some(session_created), Some(message_created)) = (session_created, message_created) {
+            if message_created < session_created {
+                continue;
+            }
         }
 
         // 必须有 tokens 字段
@@ -336,6 +360,29 @@ fn query_assistant_messages(
         messages,
         has_incomplete_usage,
     })
+}
+
+/// 会话的创建时间（毫秒）。没有这一列时返回 `None`。
+///
+/// 1.x 的 `Session.fork` 用新 id 复制源会话的消息（`...msg.info`，`time` 不变），
+/// 没有 fork 标记；复制来的消息创建时间早于新会话，按这一点识别。迁移到 2.x 的
+/// 1.x 会话同样适用。
+fn session_created_at(
+    conn: &rusqlite::Connection,
+    schema: OpenCodeSchema,
+    session_id: &str,
+) -> Option<i64> {
+    let table = match schema {
+        OpenCodeSchema::V1 => "session",
+        OpenCodeSchema::V2 => "session_v2",
+    };
+    conn.query_row(
+        &format!("SELECT time_created FROM {table} WHERE id = ?1"),
+        [session_id],
+        |row| row.get::<_, Option<i64>>(0),
+    )
+    .ok()
+    .flatten()
 }
 
 /// 2.x fork 出来的会话（`fork_session_id` 非空）。旧库没有这一列时视为不是。
@@ -424,13 +471,11 @@ fn parse_message_data(value: &serde_json::Value) -> Option<OpenCodeMessageData> 
 
 /// 插入单条 OpenCode 消息记录到 proxy_request_logs
 fn insert_opencode_message(
-    db: &Database,
+    conn: &rusqlite::Connection,
     request_id: &str,
     msg: &OpenCodeMessageData,
     session_id: &str,
 ) -> Result<bool, AppError> {
-    let conn = lock_conn!(db.conn);
-
     let created_at = if msg.timestamp_ms > 0 {
         msg.timestamp_ms / 1000
     } else {
@@ -439,8 +484,13 @@ fn insert_opencode_message(
             .map(|d| d.as_secs() as i64)
             .unwrap_or(0)
     };
-    // 保留期以前的日期已经汇总，再导入会在下次汇总时重复计入
-    if crate::services::usage_rebuild::is_below_import_floor(created_at) {
+    // 保留期以前的日期已经汇总，导入过的再导入会在下次汇总时重复计入
+    if !crate::services::usage_rebuild::import_gate(
+        conn,
+        "opencode_session",
+        request_id,
+        created_at,
+    ) {
         return Ok(false);
     }
 
@@ -455,6 +505,23 @@ fn insert_opencode_message(
     if already_imported {
         return Ok(false);
     }
+    let dedup_key = crate::services::usage_proxy_dedup::DedupKey {
+        app_type: "opencode",
+        model: &msg.model_id,
+        fresh_input_tokens: msg.input_tokens,
+        output_tokens: output_with_reasoning,
+        cache_read_tokens: msg.cache_read_tokens,
+        cache_creation_tokens: msg.cache_write_tokens,
+        created_at,
+    };
+    if crate::services::usage_proxy_dedup::skip_if_recorded_by_proxy(
+        conn,
+        "opencode_session",
+        request_id,
+        &dedup_key,
+    )? {
+        return Ok(false);
+    }
 
     // 有定价就按 cc-switch 的定价算，和其他应用用同一套价格：OpenCode 记的费用来自
     // 它自己的价格表，官方调价后不一定跟上。没有定价才用 OpenCode 记的费用（合计值，
@@ -466,7 +533,7 @@ fn insert_opencode_message(
         cache_creation_tokens: msg.cache_write_tokens,
         cache_creation_1h_tokens: 0,
     };
-    let pricing = find_model_pricing(&conn, &msg.model_id);
+    let pricing = find_model_pricing(conn, &msg.model_id);
     let native_cost = pricing.is_none() && msg.cost > 0.0;
     let [input_cost, output_cost, cache_read_cost, cache_creation_cost, total_cost] = match pricing
     {
@@ -642,6 +709,37 @@ mod tests {
         assert_eq!(result.messages.len(), 1);
         assert_eq!(result.messages[0].0, "done");
         assert!(result.has_incomplete_usage);
+    }
+
+    #[test]
+    fn v1_fork_skips_messages_copied_from_the_source_session() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE session (id TEXT, time_created INTEGER, time_updated INTEGER);
+             CREATE TABLE message (id TEXT, session_id TEXT, time_created INTEGER, data TEXT);
+             INSERT INTO session VALUES ('fork', 5000, 9000);",
+        )
+        .unwrap();
+        let message = |created: i64| {
+            serde_json::json!({
+                "role": "assistant",
+                "tokens": { "input": 100, "output": 10 },
+                "modelID": "m",
+                "cost": 0.01,
+                "time": { "created": created, "completed": created + 1 }
+            })
+            .to_string()
+        };
+        // 1.x fork：复制来的消息换了新 id，创建时间仍是源会话里的
+        conn.execute(
+            "INSERT INTO message VALUES ('msg_copied', 'fork', 5000, ?1), ('msg_new', 'fork', 6000, ?2)",
+            rusqlite::params![message(1000), message(6000)],
+        )
+        .unwrap();
+
+        let result = query_assistant_messages(&conn, OpenCodeSchema::V1, "fork").unwrap();
+        let ids: Vec<&str> = result.messages.iter().map(|(id, _)| id.as_str()).collect();
+        assert_eq!(ids, vec!["msg_new"]);
     }
 
     #[test]

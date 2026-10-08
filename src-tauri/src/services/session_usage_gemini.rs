@@ -36,7 +36,7 @@ use crate::database::{lock_conn, Database};
 use crate::error::AppError;
 use crate::gemini_config::get_gemini_dir;
 use crate::services::session_usage::{
-    metadata_modified_nanos, update_sync_state, SessionSyncResult,
+    metadata_modified_nanos, update_sync_state_on_conn, SessionSyncResult,
 };
 use crate::services::sql_helpers::INPUT_TOKEN_SEMANTICS_FRESH;
 use crate::services::usage_stats::find_model_pricing;
@@ -90,6 +90,7 @@ pub fn sync_gemini_usage(db: &Database) -> Result<SessionSyncResult, AppError> {
 }
 
 fn sync_gemini_usage_in(db: &Database, gemini_dir: &Path) -> Result<SessionSyncResult, AppError> {
+    crate::services::session_usage::ensure_readable_if_present(&gemini_dir.join("tmp"))?;
     let files = collect_gemini_session_files(gemini_dir);
 
     let mut result = SessionSyncResult {
@@ -98,6 +99,7 @@ fn sync_gemini_usage_in(db: &Database, gemini_dir: &Path) -> Result<SessionSyncR
         files_scanned: files.len() as u32,
         deferred_files: 0,
         errors: vec![],
+        failed_sources: vec![],
     };
 
     if files.is_empty() {
@@ -219,6 +221,13 @@ fn sync_single_gemini_file(
     let mut skipped: u32 = 0;
     let mut gemini_msg_count: i64 = 0;
 
+    // 一个文件一个事务：逐行自动提交每行都要一次 fsync。单条失败跳过；提交失败
+    // 整个文件回滚，游标不推进，下一轮重读
+    let conn = lock_conn!(db.conn);
+    let tx = conn
+        .unchecked_transaction()
+        .map_err(|e| AppError::Database(format!("开启 Gemini 会话写入事务失败: {e}")))?;
+
     for msg in &scan.messages {
         let tokens = parse_gemini_tokens(&msg.tokens);
         if tokens.token_usage().is_empty() {
@@ -235,7 +244,7 @@ fn sync_single_gemini_file(
         let request_id = format!("gemini_session:{session_id_str}:{}", msg.id);
 
         match insert_gemini_session_entry(
-            db,
+            &tx,
             &request_id,
             &tokens,
             model,
@@ -252,7 +261,9 @@ fn sync_single_gemini_file(
     }
 
     // 更新同步状态
-    update_sync_state(db, &file_path_str, file_modified, gemini_msg_count)?;
+    update_sync_state_on_conn(&tx, &file_path_str, file_modified, gemini_msg_count)?;
+    tx.commit()
+        .map_err(|e| AppError::Database(format!("提交 Gemini 会话写入事务失败: {e}")))?;
 
     Ok((imported, skipped))
 }
@@ -271,15 +282,13 @@ fn parse_gemini_tokens(tokens: &serde_json::Value) -> GeminiTokens {
 
 /// 插入单条 Gemini 会话记录到 proxy_request_logs
 fn insert_gemini_session_entry(
-    db: &Database,
+    conn: &rusqlite::Connection,
     request_id: &str,
     tokens: &GeminiTokens,
     model: &str,
     session_id: Option<&str>,
     timestamp: Option<&str>,
 ) -> Result<bool, AppError> {
-    let conn = lock_conn!(db.conn);
-
     let created_at = timestamp
         .and_then(|ts| {
             chrono::DateTime::parse_from_rfc3339(ts)
@@ -293,16 +302,42 @@ fn insert_gemini_session_entry(
                 .unwrap_or(0)
         });
 
-    // 保留期以前的日期已经汇总，再导入会在下次汇总时重复计入
-    if crate::services::usage_rebuild::is_below_import_floor(created_at) {
+    // 保留期以前的日期已经汇总，导入过的再导入会在下次汇总时重复计入
+    if !crate::services::usage_rebuild::import_gate(conn, "gemini_session", request_id, created_at)
+    {
         return Ok(false);
     }
 
     // 已入库的行不跳过：整份文件重读时要用下面的 UPSERT 补全写到一半的回复
     let usage = tokens.token_usage();
 
+    let dedup_key = crate::services::usage_proxy_dedup::DedupKey {
+        app_type: "gemini",
+        model,
+        fresh_input_tokens: usage.input_tokens,
+        output_tokens: usage.output_tokens,
+        cache_read_tokens: usage.cache_read_tokens,
+        cache_creation_tokens: 0,
+        created_at,
+    };
+    if crate::services::usage_proxy_dedup::skip_if_recorded_by_proxy(
+        conn,
+        "gemini_session",
+        request_id,
+        &dedup_key,
+    )? {
+        // 先前按中间值入库的行，补全后对上了旧路由记的行，是重复的
+        conn.execute(
+            "DELETE FROM proxy_request_logs
+             WHERE request_id = ?1 AND data_source = 'gemini_session'",
+            [request_id],
+        )
+        .map_err(|e| AppError::Database(format!("删除重复的 Gemini 会话用量失败: {e}")))?;
+        return Ok(false);
+    }
+
     let [input_cost, output_cost, cache_read_cost, cache_creation_cost, total_cost] =
-        match find_model_pricing(&conn, model) {
+        match find_model_pricing(conn, model) {
             Some(p) => CostCalculator::calculate(&usage, &p, ServiceTier::Standard, created_at)
                 .to_strings(),
             None => CostBreakdown::zero_strings(),
@@ -602,7 +637,7 @@ mod tests {
             ..Default::default()
         };
         let inserted = insert_gemini_session_entry(
-            &db,
+            &*lock_conn!(db.conn),
             "gemini-session-1",
             &tokens,
             "gemini-2.5-pro",

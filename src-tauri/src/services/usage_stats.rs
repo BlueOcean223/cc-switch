@@ -6,7 +6,7 @@ use crate::database::{lock_conn, Database};
 use crate::error::AppError;
 use crate::services::sql_helpers::{
     fresh_input_sql, real_total_tokens_sql, INPUT_TOKEN_SEMANTICS_FRESH,
-    INPUT_TOKEN_SEMANTICS_TOTAL,
+    INPUT_TOKEN_SEMANTICS_LEGACY, INPUT_TOKEN_SEMANTICS_TOTAL,
 };
 use crate::token_usage::calculator::{
     BasePrices, CostBreakdown, CostCalculator, LongContextPricing, ModelPricing, ServiceTier,
@@ -404,6 +404,9 @@ pub(crate) struct LogCountCache {
     computed_at: std::time::Instant,
     total: u32,
 }
+
+/// `settings` 表里上次全量重算成本时 `model_pricing` 的指纹，启动时据此判断定价变了没有。
+pub(crate) const USAGE_PRICING_FINGERPRINT_KEY: &str = "usage_pricing_fingerprint";
 
 const LOG_COUNT_CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(60);
 
@@ -1704,15 +1707,77 @@ struct RepriceRow {
 
 impl Database {
     /// 按当前定价重算全部本地计价的明细成本。
+    ///
+    /// 重算后记下当前定价的指纹，见 [`Self::reprice_usage_costs_if_pricing_changed`]。
     pub(crate) fn reprice_usage_costs(&self) -> Result<u64, AppError> {
         let conn = lock_conn!(self.conn);
-        Self::reprice_usage_costs_on_conn(&conn, None)
+        let repriced = Self::reprice_usage_costs_on_conn(&conn, None, None)?;
+        Self::store_pricing_fingerprint(&conn)?;
+        Ok(repriced)
     }
 
-    /// 只重算和 `model_id` 相关的明细；用于单个模型的定价更新。
+    /// 只重算和 `model_id` 相关的明细；用于单个模型的定价更新。不更新定价指纹：
+    /// 别的模型的定价可能也变了而没重算，下次启动时会全量重算一次。
     pub(crate) fn reprice_usage_costs_for_model(&self, model_id: &str) -> Result<u64, AppError> {
         let conn = lock_conn!(self.conn);
-        Self::reprice_usage_costs_on_conn(&conn, Some(model_id))
+        Self::reprice_usage_costs_on_conn(&conn, Some(model_id), None)
+    }
+
+    /// 定价和上次全量重算时不同才重算（启动时用）。返回 `None` 表示定价没变。
+    pub(crate) fn reprice_usage_costs_if_pricing_changed(&self) -> Result<Option<u64>, AppError> {
+        let conn = lock_conn!(self.conn);
+        let current = Self::pricing_fingerprint(&conn)?;
+        let stored: Option<String> = conn
+            .query_row(
+                "SELECT value FROM settings WHERE key = ?1",
+                [USAGE_PRICING_FINGERPRINT_KEY],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if stored.as_deref() == Some(current.as_str()) {
+            return Ok(None);
+        }
+        let repriced = Self::reprice_usage_costs_on_conn(&conn, None, None)?;
+        Self::write_pricing_fingerprint(&conn, &current)?;
+        Ok(Some(repriced))
+    }
+
+    fn store_pricing_fingerprint(conn: &Connection) -> Result<(), AppError> {
+        let fingerprint = Self::pricing_fingerprint(conn)?;
+        Self::write_pricing_fingerprint(conn, &fingerprint)
+    }
+
+    fn write_pricing_fingerprint(conn: &Connection, fingerprint: &str) -> Result<(), AppError> {
+        conn.execute(
+            "INSERT OR REPLACE INTO settings (key, value) VALUES (?1, ?2)",
+            params![USAGE_PRICING_FINGERPRINT_KEY, fingerprint],
+        )
+        .map_err(|e| AppError::Database(format!("保存定价指纹失败: {e}")))?;
+        Ok(())
+    }
+
+    /// `model_pricing` 全表按 model_id 排序后所有列的 SHA-256。
+    fn pricing_fingerprint(conn: &Connection) -> Result<String, AppError> {
+        let mut stmt = conn.prepare("SELECT * FROM model_pricing ORDER BY model_id")?;
+        let columns = stmt.column_count();
+        let mut text = String::new();
+        let mut rows = stmt.query([])?;
+        while let Some(row) = rows.next()? {
+            for index in 0..columns {
+                let value = match row.get_ref(index)? {
+                    rusqlite::types::ValueRef::Null => String::from("\\N"),
+                    rusqlite::types::ValueRef::Integer(v) => v.to_string(),
+                    rusqlite::types::ValueRef::Real(v) => v.to_string(),
+                    rusqlite::types::ValueRef::Text(v) | rusqlite::types::ValueRef::Blob(v) => {
+                        String::from_utf8_lossy(v).into_owned()
+                    }
+                };
+                text.push_str(&value);
+                text.push('\u{1f}');
+            }
+            text.push('\u{1e}');
+        }
+        Ok(crate::live::engine::sha256_hex(text.as_bytes()))
     }
 
     /// 成本是 token 和定价算出来的派生值：定价补上、改了、删了，已入库的明细都按
@@ -1720,9 +1785,12 @@ impl Database {
     ///
     /// 不动两类行：工具日志自带成本的（`native_cost = 1`，OpenCode、Pi、Grok、mcode
     /// 用工具记下的费用），和旧版本地路由记录的行（当时按上游计价，倍率也已作废）。
+    ///
+    /// `before` 只重算早于这个时间的行（汇总前用）。
     pub(crate) fn reprice_usage_costs_on_conn(
         conn: &Connection,
         only_model_id: Option<&str>,
+        before: Option<i64>,
     ) -> Result<u64, AppError> {
         let mut rows = {
             let mut stmt = conn.prepare(
@@ -1734,10 +1802,11 @@ impl Database {
                  FROM proxy_request_logs
                  WHERE native_cost = 0
                    AND COALESCE(data_source, 'proxy') <> 'proxy'
+                   AND (?1 IS NULL OR created_at < ?1)
                    AND (input_tokens > 0 OR output_tokens > 0
                         OR cache_read_tokens > 0 OR cache_creation_tokens > 0)",
             )?;
-            let mapped = stmt.query_map([], |row| {
+            let mapped = stmt.query_map([before], |row| {
                 let app_type: String = row.get(1)?;
                 let input_tokens: i64 = row.get(5)?;
                 let cache_read_tokens: i64 = row.get(7)?;
@@ -1911,15 +1980,23 @@ fn fresh_input_tokens(
     cache_read_tokens: i64,
     cache_creation_tokens: i64,
 ) -> u32 {
-    let fresh = if semantics == INPUT_TOKEN_SEMANTICS_FRESH
-        || !crate::services::sql_helpers::is_cache_inclusive_app(app_type)
-    {
+    // 分支和保护条件与 SQL 版一致：缓存比输入还多的旧行原样返回输入
+    let inclusive = crate::services::sql_helpers::is_cache_inclusive_app(app_type);
+    let fresh = if semantics == INPUT_TOKEN_SEMANTICS_FRESH {
         input_tokens
-    } else if semantics == INPUT_TOKEN_SEMANTICS_TOTAL {
+    } else if inclusive
+        && semantics == INPUT_TOKEN_SEMANTICS_TOTAL
+        && input_tokens >= cache_read_tokens + cache_creation_tokens
+    {
         input_tokens - cache_read_tokens - cache_creation_tokens
-    } else {
+    } else if inclusive
+        && semantics == INPUT_TOKEN_SEMANTICS_LEGACY
+        && input_tokens >= cache_read_tokens
+    {
         // v12 及更早：input 含缓存读，不含缓存写
         input_tokens - cache_read_tokens
+    } else {
+        input_tokens
     };
     clamp_u32(fresh)
 }
@@ -2593,6 +2670,150 @@ mod tests {
         assert_eq!(stored_total(&db, "stale")?, dec("0.03"));
         // 已经是当前价的行不再写回
         assert_eq!(db.reprice_usage_costs()?, 0);
+        Ok(())
+    }
+
+    #[test]
+    fn rust_fresh_input_matches_the_sql_expression() -> Result<(), AppError> {
+        let conn = Connection::open_in_memory()?;
+        conn.execute_batch(
+            "CREATE TABLE t (app_type TEXT, input_token_semantics INTEGER, input_tokens INTEGER,
+                             cache_read_tokens INTEGER, cache_creation_tokens INTEGER);",
+        )?;
+        let cases = [
+            ("codex", INPUT_TOKEN_SEMANTICS_LEGACY, 1000, 300, 0),
+            ("codex", INPUT_TOKEN_SEMANTICS_LEGACY, 100, 999, 0),
+            ("codex", INPUT_TOKEN_SEMANTICS_TOTAL, 1000, 300, 200),
+            ("codex", INPUT_TOKEN_SEMANTICS_TOTAL, 100, 300, 200),
+            ("codex", INPUT_TOKEN_SEMANTICS_FRESH, 100, 300, 200),
+            ("claude", INPUT_TOKEN_SEMANTICS_LEGACY, 100, 999, 0),
+            ("claude", INPUT_TOKEN_SEMANTICS_TOTAL, 1000, 300, 200),
+        ];
+        let sql = format!(
+            "SELECT {} FROM t",
+            crate::services::sql_helpers::fresh_input_sql("")
+        );
+        for (app, semantics, input, read, creation) in cases {
+            conn.execute("DELETE FROM t", [])?;
+            conn.execute(
+                "INSERT INTO t VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![app, semantics, input, read, creation],
+            )?;
+            let from_sql: i64 = conn.query_row(&sql, [], |row| row.get(0))?;
+            let from_rust = fresh_input_tokens(app, semantics, input, read, creation);
+            assert_eq!(
+                i64::from(from_rust),
+                from_sql,
+                "{app} semantics={semantics} input={input} read={read} creation={creation}"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn startup_reprice_runs_only_after_pricing_changes() -> Result<(), AppError> {
+        let db = Database::memory()?;
+        insert_row(
+            &db,
+            RowSpec {
+                request_id: "zero",
+                input: 1000,
+                output: 1000,
+                ..Default::default()
+            },
+        )?;
+
+        assert_eq!(db.reprice_usage_costs_if_pricing_changed()?, Some(1));
+        assert_eq!(db.reprice_usage_costs_if_pricing_changed()?, None);
+        add_pricing(&db, "brand-new-model", "1", "2")?;
+        assert_eq!(db.reprice_usage_costs_if_pricing_changed()?, Some(0));
+        assert_eq!(db.reprice_usage_costs_if_pricing_changed()?, None);
+        Ok(())
+    }
+
+    #[test]
+    fn rollup_reprices_only_the_rows_it_rolls_up() -> Result<(), AppError> {
+        let db = Database::memory()?;
+        let now = chrono::Local::now().timestamp();
+        for (request_id, created_at) in [("old", now - 60 * 86_400), ("recent", now - 3_600)] {
+            insert_row(
+                &db,
+                RowSpec {
+                    request_id,
+                    input: 1000,
+                    output: 1000,
+                    total_cost: "99",
+                    created_at,
+                    ..Default::default()
+                },
+            )?;
+        }
+
+        db.rollup_and_prune(30)?;
+
+        assert_eq!(stored_total(&db, "recent")?, dec("99"));
+        let rolled: String = lock_conn!(db.conn).query_row(
+            "SELECT total_cost_usd FROM usage_daily_rollups",
+            [],
+            |row| row.get(0),
+        )?;
+        assert_eq!(dec(&rolled), dec("0.03"));
+        Ok(())
+    }
+
+    #[test]
+    fn v21_migration_keeps_tool_reported_costs() -> Result<(), AppError> {
+        let conn = Connection::open_in_memory()?;
+        Database::create_tables_on_conn(&conn)?;
+        // 上游 v20 的明细表还没有 native_cost 列
+        conn.execute_batch("ALTER TABLE proxy_request_logs DROP COLUMN native_cost;")?;
+        for (request_id, source, cost) in [
+            ("opencode", "opencode_session", "0.42"),
+            ("pi", "pi_session", "0.1"),
+            ("grok", "grok_session", "0.2"),
+            ("mcode", "mcode_session", "0.3"),
+            ("mcode-free", "mcode_session", "0"),
+            ("opencode-unpriced", "opencode_session", "0"),
+            ("claude", "session_log", "0.5"),
+        ] {
+            conn.execute(
+                "INSERT INTO proxy_request_logs (request_id, provider_id, app_type, model,
+                     input_tokens, output_tokens, total_cost_usd, latency_ms, status_code,
+                     created_at, data_source)
+                 VALUES (?1, 'p', 'x', 'unpriced-model', 1000, 1000, ?2, 0, 200, 100, ?3)",
+                params![request_id, cost, source],
+            )?;
+        }
+        Database::set_user_version(&conn, 20)?;
+
+        Database::apply_schema_migrations_on_conn(&conn)?;
+        Database::reprice_usage_costs_on_conn(&conn, None, None)?;
+
+        let rows: Vec<(String, i64, String)> = conn
+            .prepare(
+                "SELECT request_id, native_cost, total_cost_usd FROM proxy_request_logs
+                 ORDER BY request_id",
+            )?
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?
+            .collect::<Result<_, _>>()?;
+        let expected = [
+            ("claude", 0, "0"),
+            ("grok", 1, "0.2"),
+            ("mcode", 1, "0.3"),
+            ("mcode-free", 1, "0"),
+            ("opencode", 1, "0.42"),
+            ("opencode-unpriced", 0, "0"),
+            ("pi", 1, "0.1"),
+        ];
+        let actual: Vec<(&str, i64, rust_decimal::Decimal)> = rows
+            .iter()
+            .map(|(id, native, cost)| (id.as_str(), *native, dec(cost)))
+            .collect();
+        let expected: Vec<(&str, i64, rust_decimal::Decimal)> = expected
+            .iter()
+            .map(|(id, native, cost)| (*id, *native, dec(cost)))
+            .collect();
+        assert_eq!(actual, expected);
         Ok(())
     }
 

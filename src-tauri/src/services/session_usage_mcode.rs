@@ -69,6 +69,17 @@ fn sync_from_database(
                 .unwrap_or_else(|| "0".into()),
         };
         let request_id = format!("mcode:{session_id}:{id}");
+        // 保留期以前的日期已经汇总，导入过的再导入会在下次汇总时重复计入
+        if !crate::services::usage_rebuild::import_gate(
+            &tx,
+            "mcode_session",
+            &request_id,
+            created_at,
+        ) {
+            result.skipped += 1;
+            cursor = id;
+            continue;
+        }
         let changed = tx.execute(
             "INSERT OR IGNORE INTO proxy_request_logs (
                 request_id, provider_id, app_type, model, request_model,
@@ -179,6 +190,46 @@ mod tests {
                 .imported,
             1
         );
+    }
+
+    /// 重建会清掉水位；已经汇总过的旧行靠导入账本挡住，不会再导入一次。
+    #[test]
+    fn mcode_rows_already_rolled_up_are_not_reimported_after_the_watermark_resets() {
+        crate::services::usage_rebuild::set_test_import_floor(true);
+        let source = rusqlite::Connection::open_in_memory().unwrap();
+        source.execute_batch("CREATE TABLE local_runtime_token_usage (
+            id INTEGER PRIMARY KEY,session_id TEXT,model TEXT,ts INTEGER,input_tokens INTEGER,
+            output_tokens INTEGER,reasoning_tokens INTEGER,cache_read_tokens INTEGER,
+            cache_write_tokens INTEGER,cost_usd REAL);
+            INSERT INTO local_runtime_token_usage VALUES (1,'s1','test/model',100000,10,20,0,0,0,0.1);").unwrap();
+        let db = Database::memory().unwrap();
+        assert_eq!(
+            sync_from_database(&db, &source, "mcode-test")
+                .unwrap()
+                .imported,
+            1
+        );
+        db.rollup_and_prune(30).unwrap();
+        db.conn
+            .lock()
+            .unwrap()
+            .execute("DELETE FROM session_log_sync", [])
+            .unwrap();
+
+        let again = sync_from_database(&db, &source, "mcode-test").unwrap();
+
+        crate::services::usage_rebuild::set_test_import_floor(false);
+        assert_eq!((again.imported, again.skipped), (0, 1));
+        let conn = db.conn.lock().unwrap();
+        let (details, requests): (i64, i64) = conn
+            .query_row(
+                "SELECT (SELECT COUNT(*) FROM proxy_request_logs),
+                        (SELECT SUM(request_count) FROM usage_daily_rollups)",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!((details, requests), (0, 1));
     }
 }
 

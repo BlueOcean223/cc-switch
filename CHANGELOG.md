@@ -17,7 +17,6 @@ First release of this fork of [farion1231/cc-switch](https://github.com/farion12
 - **GitHub Copilot and xAI sign-in**, and the Codex OAuth reverse proxy for Claude. ChatGPT accounts for the Codex OpenAI Official card stay.
 - The Compshare Coding Plan preset for Codex, which needed routing to map GPT model names to the plan's models, and the Baidu Qianfan Coding Plan preset, no longer sold since 2026-07-13 (Token Plan replaces it). The Compshare Coding Plan presets for Claude Code, OpenClaw and Hermes now use `deepseek-v4-pro`, as in Compshare's guide; the plan has no Claude or GPT models.
 - Provider spending limits, partner promotion, the tray "open website" item and the new-layout notice.
-- Matching session usage against rows recorded by the old local routing. Rows it recorded are kept and still counted.
 
 ### Changed
 
@@ -29,14 +28,14 @@ First release of this fork of [farion1231/cc-switch](https://github.com/farion12
 - **Usage pricing**:
   - Requests are priced at the rate in effect when they were made. Earlier prices are built in for GPT-5.6 Sol (cut on 2026-08-21) and GPT-5.6 Terra and Luna (cut on 2026-07-30).
   - Claude 1-hour cache writes cost 2x the input price; fast / priority requests use the model's multiplier; a request whose prompt exceeds the long-context threshold (272K for GPT-5.4 and later, 200K for Claude Sonnet 4 / 4.5, Gemini Pro and xAI) is billed at the higher rate in full. Models priced in several steps (Qwen and Doubao, for example 32K and 128K) use the highest step the prompt exceeds, and models.dev imports keep every step.
-  - Built-in prices win at startup and the overrides in `~/.cc-switch/model-pricing.json` are applied on top. Stored costs are recalculated on every launch and after pricing edits.
+  - Built-in prices win at startup and the overrides in `~/.cc-switch/model-pricing.json` are applied on top. Stored costs are recalculated after pricing edits, and at launch when the prices differ from the last recalculation. Costs that OpenCode, Pi, Grok Build and mcode recorded themselves are kept, including those recorded by upstream CC Switch before the upgrade. Before rows older than 30 days are folded into daily totals, only those rows are recalculated.
   - Pi and OpenCode are priced from the pricing table first; the cost they recorded is used only for models missing from it. Pi kept charging the old GPT-5.6 Sol price after the cut. Grok Build keeps the cost xAI returns.
 - **Pi presets for providers Pi ships**: the Kimi, DeepSeek, Zhipu GLM, MiniMax, Xiaomi MiMo, Bailing, OpenCode Go, OpenRouter and NVIDIA presets write only the API key, under Pi's own provider ID (for example `deepseek`). Pi keeps the address, API and model list current, so they no longer go stale in `models.json`. A key saved with `/login` in Pi takes priority over this one. `cc-switch-*` entries added earlier are left as they are.
 - **Grok Build API format**: the provider form has an API format choice (OpenAI Responses, Chat Completions or Anthropic Messages) that is written to `api_backend`, so Grok Build reaches Chat Completions and Anthropic upstreams on its own without the removed conversion. A value already in `config.toml` is kept instead of being reset to Responses. The Qiniu preset now uses Qiniu's general gateway with Chat Completions and `x-ai/grok-4.5`, and CherryIN uses `x-ai/grok-4.6`, the Grok models those services list. The two Compshare (UCloud) Grok Build presets are removed: the Coding Plan only offers Chinese models, and the pay-as-you-go service lists no current Grok model.
 
 ### Added
 
-- **Usage rebuild**: after upgrading, usage is rebuilt once from the session logs. "Rebuild Usage" in the usage Data sources sheet does the same on demand. The database is backed up first, and days whose logs have been deleted keep their daily totals.
+- **Usage rebuild**: after upgrading, usage is rebuilt once from the session logs. "Rebuild Usage" in the usage Data sources sheet does the same on demand. The database is backed up first. Each tool is recounted over the period its logs are kept: Claude Code back to its `cleanupPeriodDays` (30 days unless changed), Gemini CLI back to its session retention (30 days by default), mcode over the last 30 days, and Codex, OpenCode, Pi and Grok Build, which do not delete their logs, over all dates. Days before that period keep their daily totals. If the database fails or a tool's log directory cannot be read, the rebuild runs again at the next launch.
 - Pricing for Claude Sonnet 5.5, and long-context and priority settings for the built-in models.
 - **MiniMax pay-as-you-go balance**: a MiniMax key starting with `sk-api-` has no Token Plan, so the usage query shows the account balance instead (CNY on the China site, USD on the international site), the same way MiniMax's CLI does. A Token Plan query with such a key now says to use the Balance template.
 
@@ -47,7 +46,8 @@ First release of this fork of [farion1231/cc-switch](https://github.com/farion12
 - **Claude**: a reply stored while a subagent was still writing it gets its final output tokens and cost.
 - **Codex**: cache writes and the priority / fast tier from thread settings are recorded.
 - **Grok Build**: session logs above 50 MiB are read instead of skipped, and a turn total no longer triggers the long-context tier. Cache writes (reported on the Anthropic Messages backend) are recorded apart from fresh input; Grok models price them at the input price, as xAI has no separate cache-write price.
-- Events older than the 30-day detail window are not imported a second time after their days were rolled up.
+- **Usage recorded by the old local routing**: rows the upstream local routing recorded before the upgrade are kept and still counted. Session usage is still matched against them when imported (same app, model and token counts within 10 minutes; for Grok Build, any routed request within 10 minutes), so a request that went through the routing is counted once. Claude Desktop routing rows match Claude Code session logs.
+- **Usage import ledger**: every imported session event is recorded in an import ledger that outlives the 30-day detail window. Events older than 30 days that were never imported (for example while the app was not opened for weeks) are imported and added to their day; events already imported and rolled up are not imported again.
 - The connectivity check read the wrong base URL for Codex and Grok Build.
 - URL masking in logs drops `user:pass@` from URLs that have no host.
 
@@ -55,6 +55,7 @@ First release of this fork of [farion1231/cc-switch](https://github.com/farion12
 
 - Install this release manually. An installed upstream CC Switch updates from upstream releases and never sees this repository.
 - Upstream versions refuse to open the database after this release has migrated it to schema 21. The pre-migration backup is in `~/.cc-switch/backups/`.
+- Within the recounted period, sessions whose logs were deleted are no longer counted, and days where the old local routing recorded usage under the real provider are now shown under "<app> · Session logs". Requests that went through the routing without a session log (for example from another client) are no longer counted on those days.
 - Codex totals for past days can go down after the rebuild. The old totals counted the parent history that subagents and forks replay a second time. Separately, when Codex migrates old session logs to the paginated format (`codex migrate-rollouts --apply` or the background migration), a subagent log can keep only what follows its last compaction; usage before that point is no longer in the logs, so the rebuilt days come out lower than what was actually used.
 
 ## [4.0.3] - 2026-10-06

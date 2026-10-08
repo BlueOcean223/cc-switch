@@ -124,6 +124,9 @@ impl GrokSessionOrigin {
 
 /// 同步 Grok Build 使用数据（从 updates.jsonl 会话日志）
 pub fn sync_grokbuild_usage(db: &Database) -> Result<SessionSyncResult, AppError> {
+    for root in crate::session_manager::providers::grokbuild::session_roots() {
+        crate::services::session_usage::ensure_readable_if_present(&root)?;
+    }
     let files = collect_grok_updates_files();
     let files_by_session: HashMap<&str, &Path> = files
         .iter()
@@ -219,6 +222,122 @@ fn read_usage_events(path: &Path) -> Result<Vec<GrokUsageEvent>, AppError> {
         .map_err(|e| AppError::Config(format!("无法读取文件: {e}")))
 }
 
+const GROK_TAIL_DOMAIN: &[u8] = b"grok-updates-tail-v1";
+
+/// 一次增量读取的结果。
+#[derive(Debug)]
+struct GrokFileRead {
+    events: Vec<GrokUsageEvent>,
+    /// `events[0]` 在整个文件的用量事件里的序号（`idx{N}` 回退键用）
+    first_index: usize,
+    /// 以换行结尾的事件数；没有换行的尾行也解析，但不算已提交
+    committed_events: usize,
+    /// 最后一个完整行之后的字节位置
+    committed_offset: i64,
+    tail_fingerprint: i64,
+}
+
+/// 从游标处读 updates.jsonl 追加的部分。
+///
+/// 每个 turn_completed 事件是一轮的独立合计，不依赖前面的事件，所以只读游标之后
+/// 的字节就够了。游标超出文件大小（rewind 截断）或游标前的尾部字节变了（改写）时
+/// 从头读：入库按 prompt_id UPSERT，重读不会重复计数。
+fn read_usage_events_since(
+    path: &Path,
+    cursor: Option<&crate::services::session_usage::SyncCursor>,
+) -> Result<GrokFileRead, AppError> {
+    use crate::services::session_usage::{read_tail_before, tail_fingerprint};
+    use std::io::{Seek, SeekFrom};
+
+    let mut file =
+        fs::File::open(path).map_err(|e| AppError::Config(format!("无法打开文件: {e}")))?;
+    let size = file
+        .metadata()
+        .map_err(|e| AppError::Config(format!("无法读取文件元数据: {e}")))?
+        .len() as i64;
+    let resume = cursor.and_then(|cursor| {
+        let offset = cursor.last_byte_offset?;
+        let expected = cursor.last_tail_fingerprint?;
+        Some((offset, expected, cursor.last_line_offset))
+    });
+    let (start, first_index) = match resume {
+        Some((offset, expected, events)) if (0..=size).contains(&offset) => {
+            let tail = read_tail_before(&mut file, offset)?;
+            if tail_fingerprint(GROK_TAIL_DOMAIN, &tail) == expected {
+                (offset, usize::try_from(events).unwrap_or(0))
+            } else {
+                (0, 0)
+            }
+        }
+        _ => (0, 0),
+    };
+    file.seek(SeekFrom::Start(start as u64))
+        .map_err(|e| AppError::Config(format!("无法定位文件偏移: {e}")))?;
+
+    let mut reader = BufReader::new(file);
+    let mut events = Vec::new();
+    let mut committed_events = 0;
+    let mut committed_offset = start;
+    let mut line = Vec::new();
+    loop {
+        line.clear();
+        let read = reader
+            .read_until(b'\n', &mut line)
+            .map_err(|e| AppError::Config(format!("无法读取文件: {e}")))?;
+        if read == 0 {
+            break;
+        }
+        let complete = line.ends_with(b"\n");
+        if let Some(event) = parse_usage_line(&line) {
+            events.push(event);
+        }
+        if !complete {
+            break;
+        }
+        committed_offset += read as i64;
+        committed_events = events.len();
+    }
+
+    let mut file = reader.into_inner();
+    let tail = read_tail_before(&mut file, committed_offset)?;
+    Ok(GrokFileRead {
+        events,
+        first_index,
+        committed_events,
+        committed_offset,
+        tail_fingerprint: tail_fingerprint(GROK_TAIL_DOMAIN, &tail),
+    })
+}
+
+/// fork 源会话的 prompt_id 集合，按 (路径, mtime, 大小) 缓存：源会话日志可能很大，
+/// fork 会话每次变化都要用到。
+fn parent_prompt_ids(path: &Path) -> Option<std::sync::Arc<HashSet<String>>> {
+    use std::sync::{Arc, Mutex, OnceLock};
+    type Cache = HashMap<PathBuf, ((i64, u64), Arc<HashSet<String>>)>;
+    static CACHE: OnceLock<Mutex<Cache>> = OnceLock::new();
+
+    let metadata = fs::metadata(path).ok()?;
+    let version = (metadata_modified_nanos(&metadata), metadata.len());
+    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Some((cached_version, prompts)) = cache.lock().ok()?.get(path) {
+        if *cached_version == version {
+            return Some(prompts.clone());
+        }
+    }
+    let prompts: Arc<HashSet<String>> = Arc::new(
+        read_usage_events(path)
+            .ok()?
+            .into_iter()
+            .map(|event| event.prompt_id)
+            .collect(),
+    );
+    cache
+        .lock()
+        .ok()?
+        .insert(path.to_path_buf(), (version, prompts.clone()));
+    Some(prompts)
+}
+
 /// 同步单个 updates.jsonl 文件。游标来自调用方批量预取。
 fn sync_single_grok_file(
     db: &Database,
@@ -246,8 +365,8 @@ fn sync_single_grok_file(
         return Ok(SessionSyncResult::default());
     }
 
-    // 文件变更时全量重读，UPSERT 幂等使重读无害
-    let events = read_usage_events(file_path)?;
+    // 只读游标之后追加的部分；改写或截断时从头读，UPSERT 幂等使重读无害
+    let read = read_usage_events_since(file_path, cursors.get(&file_path_str))?;
 
     // request_id 唯一性押在会话 ID（UUIDv7）全局唯一上：同 ID 的归档/活跃副本经
     // UPSERT 幂等收敛（有意），不同 <enc-cwd> 下撞 ID 视为不可能。
@@ -255,46 +374,54 @@ fn sync_single_grok_file(
 
     // fork：源会话日志还在时取它的全部 prompt_id；源会话已删时逐条查库里有没有源会话的同一行
     let parent = origin.parent();
-    let parent_prompts: Option<HashSet<String>> = parent
+    let parent_prompts = parent
         .and_then(|id| files_by_session.get(id))
-        .and_then(|path| read_usage_events(path).ok())
-        .map(|events| events.into_iter().map(|e| e.prompt_id).collect());
+        .and_then(|path| parent_prompt_ids(path));
 
     let mut result = SessionSyncResult::default();
 
-    for (idx, event) in events.iter().enumerate() {
+    // 一个文件一个事务：逐行自动提交每行都要一次 fsync。单条失败跳过；提交失败
+    // 整个文件回滚，游标不推进，下一轮重读
+    let conn = lock_conn!(db.conn);
+    let tx = conn
+        .unchecked_transaction()
+        .map_err(|e| AppError::Database(format!("开启 Grok 会话写入事务失败: {e}")))?;
+
+    for (offset, event) in read.events.iter().enumerate() {
+        let idx = read.first_index + offset;
         for (model, turn) in &event.per_model {
             if turn.is_zero() {
                 continue;
             }
-            if let Some(parent) = parent.filter(|_| !event.prompt_id.is_empty()) {
+            // 幂等键锚定上游稳定 ID（prompt_id 是每轮唯一的 UUID），不含会话
+            // ID 和文件内序号：fork 复制的轮次 prompt_id 不变，和源会话是同一个
+            // 键，不用知道祖先链（A → B → C、B 已删除时也认得出）；updates.jsonl
+            // 前缀被改写（如 rewind 截断）导致事件序号前移时，幸存轮次仍命中原行
+            // 不会双算；被移除轮次的行保留——rewind 不退还已消耗的 token，留存即
+            // 正确记账。若上游对同一 prompt_id 写多条 turn_completed（未观测到），
+            // UPSERT 取后者，方向是少记不双算。prompt_id 缺失时回退
+            // "{session}:idx{N}"（UUID 形态的 prompt_id 不可能与之撞名）。
+            let request_id = if event.prompt_id.is_empty() {
+                format!("grok_session:{session_id}:idx{idx}:{model}")
+            } else {
+                format!("grok_session:{}:{model}", event.prompt_id)
+            };
+            if !event.prompt_id.is_empty() {
+                // 复制来的轮次：源会话日志还在时看它的 prompt_id；否则看这个键是不是
+                // 已经记在别的会话名下（已汇总的由导入账本挡住）
                 let inherited = match &parent_prompts {
                     Some(prompts) => prompts.contains(&event.prompt_id),
-                    None => grok_row_exists(
-                        db,
-                        &format!("grok_session:{parent}:{}:{model}", event.prompt_id),
-                    )?,
+                    None => {
+                        grok_row_session(&tx, &request_id)?.is_some_and(|owner| owner != session_id)
+                    }
                 };
                 if inherited {
                     result.skipped += 1;
                     continue;
                 }
             }
-            // 幂等键锚定上游稳定 ID（prompt_id 是每轮唯一的 UUID），不含文件
-            // 内序号：updates.jsonl 前缀被改写（如 rewind 截断）导致事件序号
-            // 前移时，幸存轮次仍命中原行不会双算；被移除轮次的行保留——
-            // rewind 不退还已消耗的 token，留存即正确记账。若上游对同一
-            // prompt_id 写多条 turn_completed（未观测到），UPSERT 取后者，
-            // 方向是少记不双算。prompt_id 缺失时回退 "idx{N}"（UUID 形态的
-            // prompt_id 不可能与之撞名）。
-            let turn_key = if event.prompt_id.is_empty() {
-                format!("idx{idx}")
-            } else {
-                event.prompt_id.clone()
-            };
-            let request_id = format!("grok_session:{session_id}:{turn_key}:{model}");
             match insert_grok_session_entry(
-                db,
+                &tx,
                 &request_id,
                 turn,
                 model,
@@ -311,7 +438,16 @@ fn sync_single_grok_file(
         }
     }
 
-    update_sync_state(db, &file_path_str, file_modified, events.len() as i64)?;
+    crate::services::session_usage::update_byte_cursor_on_conn(
+        &tx,
+        &file_path_str,
+        file_modified,
+        (read.first_index + read.committed_events) as i64,
+        read.committed_offset,
+        read.tail_fingerprint,
+    )?;
+    tx.commit()
+        .map_err(|e| AppError::Database(format!("提交 Grok 会话写入事务失败: {e}")))?;
 
     Ok(result)
 }
@@ -322,75 +458,72 @@ const USAGE_METHOD_MARKER: &[u8] = b"_x.ai/session/update";
 /// 从 updates.jsonl 解析出全部逐轮用量事件（保持文件顺序）。解析不了的行跳过。
 fn parse_grok_usage_events(reader: impl BufRead) -> std::io::Result<Vec<GrokUsageEvent>> {
     let mut events = Vec::new();
-
     for line in reader.split(b'\n') {
-        let line = line?;
-        // 先按行头过滤：绝大多数行是流式消息块，不用整行解析
-        if !line
-            .windows(USAGE_METHOD_MARKER.len())
-            .any(|window| window == USAGE_METHOD_MARKER)
-        {
-            continue;
+        if let Some(event) = parse_usage_line(&line?) {
+            events.push(event);
         }
-        let Ok(record) = serde_json::from_slice::<serde_json::Value>(&line) else {
-            continue;
-        };
-        if record.get("method").and_then(|v| v.as_str()) != Some("_x.ai/session/update") {
-            continue;
-        }
-        let update = record.get("params").and_then(|p| p.get("update"));
-        // 只认 turn_completed（实测全体带 usage 的事件均为此类；判别字段是
-        // sessionUpdate，serde internally-tagged）。字段缺失时向后兼容放行，
-        // 但显式标为其它类型的事件即使带 usage 也不导入——中途快照若与轮末
-        // 事件并存，双导会双算。
-        let kind = update
-            .and_then(|u| u.get("sessionUpdate"))
-            .and_then(|v| v.as_str());
-        if kind.is_some() && kind != Some("turn_completed") {
-            continue;
-        }
-        let Some(usage) = update
-            .and_then(|u| u.get("usage"))
-            .filter(|u| u.is_object())
-        else {
-            continue;
-        };
-        // 没有时间戳的事件不知道该记到哪一天，跳过。
-        let Some(created_at) = parse_event_timestamp(record.get("timestamp")) else {
-            continue;
-        };
-
-        let prompt_id = update
-            .and_then(|u| u.get("prompt_id"))
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string();
-
-        let mut per_model: Vec<(String, GrokCounters)> = usage
-            .get("modelUsage")
-            .and_then(|m| m.as_object())
-            .map(|map| {
-                map.iter()
-                    .map(|(model, counters)| (model.clone(), parse_grok_counters(counters)))
-                    .collect()
-            })
-            .unwrap_or_default();
-        if per_model.is_empty() {
-            // 缺 modelUsage 时退回顶层逐轮值；模型名未知，交由查价层兜底。
-            per_model.push(("unknown".to_string(), parse_grok_counters(usage)));
-        }
-        // modelUsage 是 JSON object，遍历序不保证稳定；排序保证插入顺序
-        // 与日志在多次重扫间确定。
-        per_model.sort_by(|a, b| a.0.cmp(&b.0));
-
-        events.push(GrokUsageEvent {
-            created_at,
-            prompt_id,
-            per_model,
-        });
     }
-
     Ok(events)
+}
+
+/// 解析一行；不是用量事件或解析不了返回 `None`。
+fn parse_usage_line(line: &[u8]) -> Option<GrokUsageEvent> {
+    // 先按行头过滤：绝大多数行是流式消息块，不用整行解析
+    if !line
+        .windows(USAGE_METHOD_MARKER.len())
+        .any(|window| window == USAGE_METHOD_MARKER)
+    {
+        return None;
+    }
+    let record = serde_json::from_slice::<serde_json::Value>(line).ok()?;
+    if record.get("method").and_then(|v| v.as_str()) != Some("_x.ai/session/update") {
+        return None;
+    }
+    let update = record.get("params").and_then(|p| p.get("update"));
+    // 只认 turn_completed（实测全体带 usage 的事件均为此类；判别字段是
+    // sessionUpdate，serde internally-tagged）。字段缺失时向后兼容放行，
+    // 但显式标为其它类型的事件即使带 usage 也不导入——中途快照若与轮末
+    // 事件并存，双导会双算。
+    let kind = update
+        .and_then(|u| u.get("sessionUpdate"))
+        .and_then(|v| v.as_str());
+    if kind.is_some() && kind != Some("turn_completed") {
+        return None;
+    }
+    let usage = update
+        .and_then(|u| u.get("usage"))
+        .filter(|u| u.is_object())?;
+    // 没有时间戳的事件不知道该记到哪一天，跳过。
+    let created_at = parse_event_timestamp(record.get("timestamp"))?;
+
+    let prompt_id = update
+        .and_then(|u| u.get("prompt_id"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+
+    let mut per_model: Vec<(String, GrokCounters)> = usage
+        .get("modelUsage")
+        .and_then(|m| m.as_object())
+        .map(|map| {
+            map.iter()
+                .map(|(model, counters)| (model.clone(), parse_grok_counters(counters)))
+                .collect()
+        })
+        .unwrap_or_default();
+    if per_model.is_empty() {
+        // 缺 modelUsage 时退回顶层逐轮值；模型名未知，交由查价层兜底。
+        per_model.push(("unknown".to_string(), parse_grok_counters(usage)));
+    }
+    // modelUsage 是 JSON object，遍历序不保证稳定；排序保证插入顺序
+    // 与日志在多次重扫间确定。
+    per_model.sort_by(|a, b| a.0.cmp(&b.0));
+
+    Some(GrokUsageEvent {
+        created_at,
+        prompt_id,
+        per_model,
+    })
 }
 
 fn parse_grok_counters(value: &serde_json::Value) -> GrokCounters {
@@ -420,33 +553,37 @@ fn parse_event_timestamp(value: Option<&serde_json::Value>) -> Option<i64> {
         .map(|dt| dt.timestamp())
 }
 
-/// 插入单条 Grok 会话记录到 proxy_request_logs
-fn grok_row_exists(db: &Database, request_id: &str) -> Result<bool, AppError> {
-    let conn = lock_conn!(db.conn);
+/// 这个键已入库时记在哪个会话名下
+fn grok_row_session(
+    conn: &rusqlite::Connection,
+    request_id: &str,
+) -> Result<Option<String>, AppError> {
     conn.query_row(
-        "SELECT 1 FROM proxy_request_logs WHERE request_id = ?1",
+        "SELECT COALESCE(session_id, '') FROM proxy_request_logs WHERE request_id = ?1",
         [request_id],
-        |_| Ok(()),
+        |row| row.get(0),
     )
     .optional()
-    .map(|row| row.is_some())
     .map_err(|e| AppError::Database(format!("查询 Grok 用量记录失败: {e}")))
 }
 
+/// 插入单条 Grok 会话记录到 proxy_request_logs
 fn insert_grok_session_entry(
-    db: &Database,
+    conn: &rusqlite::Connection,
     request_id: &str,
     turn: &GrokCounters,
     model: &str,
     session_id: &str,
     created_at: i64,
 ) -> Result<bool, AppError> {
-    // 保留期以前的日期已经汇总；整份文件重读时再写回会在下次汇总时重复计入
-    if crate::services::usage_rebuild::is_below_import_floor(created_at) {
+    // 保留期以前的日期已经汇总；导入过的整份文件重读时再写回会在下次汇总时重复计入
+    if !crate::services::usage_rebuild::import_gate(conn, "grok_session", request_id, created_at) {
         return Ok(false);
     }
-
-    let conn = lock_conn!(db.conn);
+    // 回合聚合的用量和旧路由逐请求记的行对不上指纹，按当时是否在走路由判断
+    if crate::services::usage_proxy_dedup::skip_if_grokbuild_routed(conn, request_id, created_at)? {
+        return Ok(false);
+    }
 
     // inputTokens 含缓存读和缓存写；入库换成未命中缓存的输入，缓存写单独计价
     let clamp = |v: u64| v.min(u32::MAX as u64) as u32;
@@ -461,7 +598,7 @@ fn insert_grok_session_entry(
     };
 
     // 一行是一轮的合计，超长上下文档位无从判断
-    let pricing = find_model_pricing(&conn, model).map(ModelPricing::without_long_context);
+    let pricing = find_model_pricing(conn, model).map(ModelPricing::without_long_context);
     let reported = turn.reported_cost_usd();
     // 合计取 CLI 自报的费用时标记 native_cost，按定价重算时不覆盖它
     let native_cost = reported.is_some();
@@ -710,6 +847,86 @@ mod tests {
             .filter_map(Result::ok)
             .collect();
         Ok(rows)
+    }
+
+    fn append_and_bump(path: &Path, text: &str) {
+        let mut file = std::fs::OpenOptions::new()
+            .append(true)
+            .open(path)
+            .expect("open for append");
+        file.write_all(text.as_bytes()).expect("append");
+        let later = SystemTime::now() + std::time::Duration::from_secs(5);
+        file.set_times(std::fs::FileTimes::new().set_modified(later))
+            .expect("bump mtime");
+    }
+
+    fn cursor_of(db: &Database, path: &Path) -> crate::services::session_usage::SyncCursor {
+        crate::services::session_usage::load_sync_cursors(db)
+            .unwrap()
+            .get(path.to_string_lossy().as_ref())
+            .copied()
+            .expect("cursor")
+    }
+
+    #[test]
+    fn appended_turns_are_read_from_the_byte_cursor() -> Result<(), AppError> {
+        let db = Database::memory()?;
+        let dir = tempdir().unwrap();
+        let line = |prompt: &str| {
+            usage_event_line(
+                OLD_EPOCH,
+                prompt,
+                &model_counters("grok-4.5-build", 100, 10, 0, 1),
+            )
+        };
+        let path = write_session_file(dir.path(), "s1", &[line("p1"), line("p2")]);
+        assert_eq!(sync_file(&db, &path)?.imported, 2);
+
+        // 尾行还没写完换行：照样解析，游标停在它前面
+        append_and_bump(&path, &format!("{}\n{}", line("p3"), line("p4")));
+        let read = read_usage_events_since(&path, Some(&cursor_of(&db, &path)))?;
+        assert_eq!((read.first_index, read.events.len()), (2, 2));
+        assert_eq!(read.committed_events, 1);
+        assert_eq!(sync_file(&db, &path)?.imported, 2);
+        assert_eq!(cursor_of(&db, &path).last_line_offset, 3);
+
+        append_and_bump(&path, "\n");
+        let read = read_usage_events_since(&path, Some(&cursor_of(&db, &path)))?;
+        assert_eq!((read.first_index, read.events.len()), (3, 1));
+        sync_file(&db, &path)?;
+        assert_eq!(query_rows(&db)?.len(), 4);
+        Ok(())
+    }
+
+    #[test]
+    fn rewritten_file_is_read_again_without_double_counting() -> Result<(), AppError> {
+        let db = Database::memory()?;
+        let dir = tempdir().unwrap();
+        let line = |prompt: &str| {
+            usage_event_line(
+                OLD_EPOCH,
+                prompt,
+                &model_counters("grok-4.5-build", 100, 10, 0, 1),
+            )
+        };
+        let path = write_session_file(dir.path(), "s1", &[line("p1"), line("p2"), line("p3")]);
+        assert_eq!(sync_file(&db, &path)?.imported, 3);
+
+        // rewind 截掉最后一轮，再写新的一轮：文件内容在游标前就变了
+        let rewound = write_session_file(dir.path(), "s1", &[line("p1"), line("p2"), line("p4")]);
+        append_and_bump(&rewound, "");
+        let read = read_usage_events_since(&rewound, Some(&cursor_of(&db, &rewound)))?;
+        assert_eq!((read.first_index, read.events.len()), (0, 3));
+        sync_file(&db, &rewound)?;
+
+        let ids: Vec<String> = query_rows(&db)?.into_iter().map(|row| row.0).collect();
+        assert_eq!(
+            ids,
+            ["p1", "p2", "p3", "p4"]
+                .map(|p| format!("grok_session:{p}:grok-4.5-build"))
+                .to_vec()
+        );
+        Ok(())
     }
 
     #[test]
@@ -1271,9 +1488,9 @@ mod tests {
         assert_eq!(
             row_ids(&db),
             vec![
-                "grok_session:sess-fork:p3:grok-4.5-build",
-                "grok_session:sess-parent:p1:grok-4.5-build",
-                "grok_session:sess-parent:p2:grok-4.5-build",
+                "grok_session:p1:grok-4.5-build",
+                "grok_session:p2:grok-4.5-build",
+                "grok_session:p3:grok-4.5-build",
             ]
         );
         Ok(())
@@ -1309,8 +1526,49 @@ mod tests {
         assert_eq!(
             row_ids(&db),
             vec![
-                "grok_session:sess-fork:p2:grok-4.5-build",
-                "grok_session:sess-gone:p1:grok-4.5-build",
+                "grok_session:p1:grok-4.5-build",
+                "grok_session:p2:grok-4.5-build",
+            ]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn fork_of_a_fork_skips_turns_after_the_middle_session_is_deleted() -> Result<(), AppError> {
+        let db = Database::memory()?;
+        let temp = tempdir().expect("tempdir");
+        let counters = model_counters("grok-4.5-build", 100, 10, 0, 1);
+        let line = |at: i64, prompt: &str| usage_event_line(at, prompt, &counters);
+        let a = write_session_file(temp.path(), "sess-a", &[line(OLD_EPOCH, "p1")]);
+        sync_file(&db, &a)?;
+        // B 是 A 的 fork，C 是 B 的 fork；同步 C 时 B 已删除
+        let c = write_session_file(
+            temp.path(),
+            "sess-c",
+            &[line(OLD_EPOCH + 60, "p1"), line(OLD_EPOCH + 120, "p2")],
+        );
+        write_summary(
+            &c,
+            r#"{"info":{"id":"sess-c"},"session_kind":"fork","parent_session_id":"sess-b"}"#,
+        );
+
+        let result = sync_file(&db, &c)?;
+        assert_eq!((result.imported, result.skipped), (1, 1));
+        let owners: Vec<(String, String)> = lock_conn!(db.conn)
+            .prepare("SELECT request_id, session_id FROM proxy_request_logs ORDER BY request_id")?
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+            .collect::<Result<_, _>>()?;
+        assert_eq!(
+            owners,
+            vec![
+                (
+                    "grok_session:p1:grok-4.5-build".to_string(),
+                    "sess-a".to_string()
+                ),
+                (
+                    "grok_session:p2:grok-4.5-build".to_string(),
+                    "sess-c".to_string()
+                ),
             ]
         );
         Ok(())
