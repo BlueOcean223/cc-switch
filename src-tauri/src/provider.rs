@@ -501,6 +501,21 @@ pub struct UniversalProvider {
     pub sort_index: Option<usize>,
 }
 
+/// 统一供应商没填模型时写入的默认值。表单的配置预览
+/// （`src/components/universal/universalConfigPreview.ts`）用同样的默认值和补全规则，改一边要改另一边。
+const UNIVERSAL_CLAUDE_DEFAULT_MODEL: &str = "claude-sonnet-5-5";
+const UNIVERSAL_CODEX_DEFAULT_MODEL: &str = "gpt-5.6-sol";
+const UNIVERSAL_CODEX_DEFAULT_REASONING_EFFORT: &str = "high";
+const UNIVERSAL_GEMINI_DEFAULT_MODEL: &str = "gemini-3.8-flash";
+
+/// 去掉首尾空白；空的当作没填（表单清空输入框后存的是空字符串）
+fn filled(value: Option<&String>) -> Option<String> {
+    value
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
 impl UniversalProvider {
     /// 创建新的统一供应商
     pub fn new(
@@ -535,18 +550,15 @@ impl UniversalProvider {
         }
 
         let models = self.models.claude.as_ref();
-        let model = models
-            .and_then(|m| m.model.clone())
-            .unwrap_or_else(|| "claude-sonnet-4-20250514".to_string());
-        let haiku = models
-            .and_then(|m| m.haiku_model.clone())
-            .unwrap_or_else(|| model.clone());
-        let sonnet = models
-            .and_then(|m| m.sonnet_model.clone())
-            .unwrap_or_else(|| model.clone());
-        let opus = models
-            .and_then(|m| m.opus_model.clone())
-            .unwrap_or_else(|| model.clone());
+        let model = filled(models.and_then(|m| m.model.as_ref()))
+            .unwrap_or_else(|| UNIVERSAL_CLAUDE_DEFAULT_MODEL.to_string());
+        // 没填的 Haiku / Sonnet / Opus 用主模型：中转站不一定提供其他模型，主模型是用户确认过能用的
+        let haiku =
+            filled(models.and_then(|m| m.haiku_model.as_ref())).unwrap_or_else(|| model.clone());
+        let sonnet =
+            filled(models.and_then(|m| m.sonnet_model.as_ref())).unwrap_or_else(|| model.clone());
+        let opus =
+            filled(models.and_then(|m| m.opus_model.as_ref())).unwrap_or_else(|| model.clone());
 
         let settings_config = serde_json::json!({
             "env": {
@@ -581,12 +593,10 @@ impl UniversalProvider {
         }
 
         let models = self.models.codex.as_ref();
-        let model = models
-            .and_then(|m| m.model.clone())
-            .unwrap_or_else(|| "gpt-4o".to_string());
-        let reasoning_effort = models
-            .and_then(|m| m.reasoning_effort.clone())
-            .unwrap_or_else(|| "high".to_string());
+        let model = filled(models.and_then(|m| m.model.as_ref()))
+            .unwrap_or_else(|| UNIVERSAL_CODEX_DEFAULT_MODEL.to_string());
+        let reasoning_effort = filled(models.and_then(|m| m.reasoning_effort.as_ref()))
+            .unwrap_or_else(|| UNIVERSAL_CODEX_DEFAULT_REASONING_EFFORT.to_string());
 
         // Codex/OpenAI 的 base_url 既可能是纯 origin（需要补 /v1），也可能包含自定义前缀（不应强行补版本）
         let base_trimmed = self.base_url.trim_end_matches('/');
@@ -644,9 +654,8 @@ requires_openai_auth = true"#
         }
 
         let models = self.models.gemini.as_ref();
-        let model = models
-            .and_then(|m| m.model.clone())
-            .unwrap_or_else(|| "gemini-2.5-pro".to_string());
+        let model = filled(models.and_then(|m| m.model.as_ref()))
+            .unwrap_or_else(|| UNIVERSAL_GEMINI_DEFAULT_MODEL.to_string());
 
         let settings_config = serde_json::json!({
             "env": {
@@ -783,7 +792,8 @@ pub struct OpenCodeModelLimit {
 mod tests {
     use super::{
         ClaudeModelConfig, CodexModelConfig, GeminiModelConfig, OpenCodeProviderConfig, Provider,
-        UniversalProvider,
+        UniversalProvider, UNIVERSAL_CLAUDE_DEFAULT_MODEL, UNIVERSAL_CODEX_DEFAULT_MODEL,
+        UNIVERSAL_CODEX_DEFAULT_REASONING_EFFORT, UNIVERSAL_GEMINI_DEFAULT_MODEL,
     };
     use serde_json::json;
 
@@ -862,6 +872,93 @@ mod tests {
                 .and_then(|item| item.as_str()),
             Some("claude-opus")
         );
+    }
+
+    /// 没填或只填了空白的模型：主模型用默认值，Haiku / Sonnet / Opus 用主模型
+    #[test]
+    fn universal_provider_to_claude_provider_fills_missing_models() {
+        let mut universal = UniversalProvider::new(
+            "u1".to_string(),
+            "Universal".to_string(),
+            "newapi".to_string(),
+            "https://api.example.com".to_string(),
+            "api-key".to_string(),
+        );
+        universal.apps.claude = true;
+        let env_model = |provider: &Provider, key: &str| {
+            provider
+                .settings_config
+                .pointer(&format!("/env/{key}"))
+                .and_then(|item| item.as_str())
+                .map(str::to_string)
+        };
+
+        let provider = universal.to_claude_provider().expect("claude provider");
+        for key in [
+            "ANTHROPIC_MODEL",
+            "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+            "ANTHROPIC_DEFAULT_SONNET_MODEL",
+            "ANTHROPIC_DEFAULT_OPUS_MODEL",
+        ] {
+            assert_eq!(
+                env_model(&provider, key).as_deref(),
+                Some(UNIVERSAL_CLAUDE_DEFAULT_MODEL),
+                "{key}"
+            );
+        }
+
+        universal.models.claude = Some(ClaudeModelConfig {
+            model: Some(" relay-sonnet ".to_string()),
+            haiku_model: Some(String::new()),
+            sonnet_model: None,
+            opus_model: Some("relay-opus".to_string()),
+        });
+        let provider = universal.to_claude_provider().expect("claude provider");
+        assert_eq!(
+            env_model(&provider, "ANTHROPIC_MODEL").as_deref(),
+            Some("relay-sonnet")
+        );
+        assert_eq!(
+            env_model(&provider, "ANTHROPIC_DEFAULT_HAIKU_MODEL").as_deref(),
+            Some("relay-sonnet")
+        );
+        assert_eq!(
+            env_model(&provider, "ANTHROPIC_DEFAULT_SONNET_MODEL").as_deref(),
+            Some("relay-sonnet")
+        );
+        assert_eq!(
+            env_model(&provider, "ANTHROPIC_DEFAULT_OPUS_MODEL").as_deref(),
+            Some("relay-opus")
+        );
+    }
+
+    /// Codex 清空的输入框按没填处理，用默认模型和推理强度
+    #[test]
+    fn universal_provider_to_codex_provider_fills_blank_fields() {
+        let mut universal = UniversalProvider::new(
+            "u1".to_string(),
+            "Universal".to_string(),
+            "newapi".to_string(),
+            "https://api.example.com".to_string(),
+            "api-key".to_string(),
+        );
+        universal.apps.codex = true;
+        universal.models.codex = Some(CodexModelConfig {
+            model: Some(String::new()),
+            reasoning_effort: Some("  ".to_string()),
+        });
+
+        let provider = universal.to_codex_provider().expect("codex provider");
+        let config = provider
+            .settings_config
+            .get("config")
+            .and_then(|item| item.as_str())
+            .expect("config toml");
+
+        assert!(config.contains(&format!("model = \"{UNIVERSAL_CODEX_DEFAULT_MODEL}\"")));
+        assert!(config.contains(&format!(
+            "model_reasoning_effort = \"{UNIVERSAL_CODEX_DEFAULT_REASONING_EFFORT}\""
+        )));
     }
 
     #[test]
@@ -961,7 +1058,7 @@ mod tests {
                 .settings_config
                 .pointer("/env/GEMINI_MODEL")
                 .and_then(|item| item.as_str()),
-            Some("gemini-2.5-pro")
+            Some(UNIVERSAL_GEMINI_DEFAULT_MODEL)
         );
     }
 
