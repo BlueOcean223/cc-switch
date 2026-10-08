@@ -67,8 +67,6 @@ Laden Sie den neuesten Linux-Build von der Seite [Releases](../../releases) heru
 - `CC-Switch-v{version}-Linux-x86_64.rpm` / `-Linux-arm64.rpm` (Fedora und andere RPM-Distributionen mit WebKitGTK 4.1)
 - `CC-Switch-v{version}-Linux-x86_64.AppImage` / `-Linux-arm64.AppImage` (jede Distribution, die die obigen Systemanforderungen erfüllt)
 
-> **Flatpak**: Nicht in den offiziellen Releases enthalten. Sie können es selbst aus dem `.deb` bauen — eine Anleitung finden Sie unter [`flatpak/README.md`](flatpak/README.md).
-
 ## Schnellstart
 
 ### Grundlegende Verwendung
@@ -146,7 +144,7 @@ Ausführliche Anleitungen zu allen Funktionen finden Sie im **[Benutzerhandbuch]
 
 - **Cloud-Synchronisierung** — Geräteübergreifende Synchronisierung über WebDAV (Jianguoyun, Nextcloud, Synology NAS usw.) oder S3-kompatiblen Speicher (AWS S3, Cloudflare R2, Alibaba Cloud OSS, Tencent Cloud COS usw.); alternativ können Sie das CC-Switch-Konfigurationsverzeichnis in einen Cloud-Speicher-Ordner wie Dropbox, OneDrive oder iCloud legen
 - **CLI-Werkzeugverwaltung** — Auf der Seite „About“ sehen Sie die installierte und die neueste Version von Kommandozeilenwerkzeugen wie Claude Code und Codex, können sie mit einem Klick installieren, aktualisieren oder alle auf einmal aktualisieren und doppelte Installationen diagnostizieren; unter Windows lassen sich auch Werkzeuge in WSL verwalten (siehe FAQ)
-- **Deep Link** (`ccswitch://`) — Anbieter, MCP-Server und Prompts per Link mit einem Klick importieren oder Skill-Repositorys hinzufügen
+- **Deep Link** (`ccslite://`) — Anbieter, MCP-Server und Prompts per Link mit einem Klick importieren oder Skill-Repositorys hinzufügen
 - **Hilfsprogramme** — Überspringen der Erststart-Bestätigung von Claude Code, Ausblenden der KI-Attribution, Übernahme des in CC Switch gewählten Anbieters durch die Claude-Code-Erweiterung für VS Code und mehr
 - Dunkles / Helles / System-Theme, automatischer Start, automatischer Updater, atomare Schreibvorgänge, automatische Backups, i18n (zh/zh-TW/en/ja)
 
@@ -177,7 +175,7 @@ Nein. Beim Anbieterwechsel für Claude Code, Codex, Gemini CLI oder Grok Build e
 
 Diese gemeinsamen Einstellungen können Sie direkt im Werkzeug ändern oder die Konfigurationsdatei von Hand bearbeiten. Sie können auch einen beliebigen Anbieter in CC Switch bearbeiten: Der Editor zeigt, „wie die Konfigurationsdatei nach dem Wechsel zu diesem Anbieter aussieht“. Beim Speichern werden die Kernfelder in diesem Anbieter gespeichert; alle anderen Änderungen werden in die Konfigurationsdatei geschrieben und gelten für alle Anbieter.
 
-Das frühere „Common Config Snippet“ wird daher nicht mehr gebraucht, und die zugehörigen Schaltflächen wurden entfernt. Einstellungen, die vor dem Upgrade im Snippet standen, wurden beim Wechseln bereits in die Konfigurationsdatei geschrieben und bleiben dort erhalten. Bevor CC Switch eine Konfigurationsdatei zum ersten Mal umschreibt, sichert es außerdem das Original unter `~/.cc-switch/backups/live-first-write/`.
+Das frühere „Common Config Snippet“ wird daher nicht mehr gebraucht, und die zugehörigen Schaltflächen wurden entfernt. Einstellungen, die vor dem Upgrade im Snippet standen, wurden beim Wechseln bereits in die Konfigurationsdatei geschrieben und bleiben dort erhalten. Bevor CC Switch eine Konfigurationsdatei zum ersten Mal umschreibt, sichert es außerdem das Original unter `~/.ccs-lite/backups/live-first-write/`.
 
 </details>
 
@@ -218,6 +216,20 @@ ccs-lite hat kein lokales Routing. Beim Start prüft es die Konfigurationsdateie
 </details>
 
 <details>
+<summary><strong>Kann ich den Upstream-CC-Switch neben ccs-lite installiert lassen?</strong></summary>
+
+Ja. ccs-lite speichert seine Daten in `~/.ccs-lite`. Beim ersten Start importiert es Anbieter, MCP-Server, Prompts, Skills, ChatGPT-Konten und Einstellungen einmalig aus dem Datenverzeichnis von Upstream (`~/.cc-switch` oder das in Upstream eingestellte Verzeichnis); danach liest und schreibt es dieses Verzeichnis nicht mehr, und Upstream arbeitet mit seinen eigenen Daten weiter. Deep Links verwenden `ccslite://`, und die WebDAV- und S3-Synchronisierung verwendet ein eigenes Remote-Verzeichnis `ccs-lite`.
+
+Was beide Apps in die Werkzeuge schreiben, teilen sie sich weiterhin:
+
+- Beide schreiben dieselben Konfigurationsdateien der Werkzeuge, etwa `~/.claude/settings.json` und `~/.codex/config.toml`. Welchen Anbieter ein Werkzeug verwendet, entscheidet die App, in der zuletzt gewechselt wurde.
+- ChatGPT-Konten werden mit derselben Anmeldung importiert. OpenAI ersetzt das Refresh-Token eines Kontos bei jeder Verwendung; nachdem eine App ein Konto aktualisiert hat, funktioniert die Kopie in der anderen App daher nicht mehr, außer für das Konto, mit dem Codex gerade angemeldet ist. Melden Sie sich in dieser App erneut bei dem Konto an.
+- Ein Skill im Skills-Ordner eines Werkzeugs verweist auf die Kopie der App, die ihn zuletzt synchronisiert hat. Nachdem ccs-lite einen Skill synchronisiert hat, verwendet das Werkzeug die Kopie von ccs-lite (standardmäßig in `~/.ccs-lite/skills`).
+- War „Launch on Startup“ in Upstream eingeschaltet, registriert ccs-lite einen eigenen Anmeldeeintrag, sodass beide Apps mit dem Rechner starten. Schalten Sie die Option in der App aus, die Sie beim Start nicht brauchen.
+
+</details>
+
+<details>
 <summary><strong>Kann ich in Claude Code OpenAI-kompatible Schnittstellen oder lokale Modelle verwenden?</strong></summary>
 
 Nur wenn der Dienst einen Endpunkt in dem Format anbietet, das das Werkzeug erwartet. CC Switch schreibt nur Konfigurationsdateien und konvertiert keine Schnittstellenformate: Claude Code braucht einen Anthropic-Messages-Endpunkt, Codex und Grok Build einen OpenAI-Responses-Endpunkt und Gemini CLI die Gemini-API. Viele Anbieter (DeepSeek, Kimi, Zhipu GLM, MiniMax u. a.) bieten einen Anthropic-kompatiblen Endpunkt an, und ihre Presets verwenden ihn bereits. Für einen Dienst, der nur Chat Completions anbietet, betreiben Sie selbst einen Proxy zur Formatkonvertierung und tragen dessen Adresse als Endpunkt des Anbieters ein.
@@ -234,7 +246,7 @@ Der „Connectivity check“ auf der Anbieterkarte prüft nur, ob die Anbieterad
 <details>
 <summary><strong>Wo werden meine Daten gespeichert?</strong></summary>
 
-Standardmäßig liegen alle Daten im Ordner `.cc-switch` in Ihrem Benutzerverzeichnis (unter Windows `C:\Users\<Benutzername>\.cc-switch`):
+Standardmäßig liegen alle Daten im Ordner `.ccs-lite` in Ihrem Benutzerverzeichnis (unter Windows `C:\Users\<Benutzername>\.ccs-lite`):
 
 - **Datenbank**: `cc-switch.db` (SQLite — Anbieter, MCP, Prompts, Skills, Projekte, Nutzungsdaten usw.)
 - **Lokale Einstellungen**: `settings.json` (gerätebezogene Einstellungen, z. B. die Konfigurationsverzeichnisse der einzelnen Werkzeuge, Backup-Richtlinie, Verbindungsdaten für die Cloud-Synchronisierung)
@@ -262,7 +274,7 @@ CC Switch erkennt WSL nicht automatisch. Ändern Sie unter „Settings → Advan
 
 CC Switch selbst gibt es nur als Desktop-Version mit grafischer Oberfläche (Systemanforderungen siehe [Download & Installation](#download--installation)). Für Server, SSH-Remote-Sitzungen oder Rechner ohne Desktop-Umgebung empfehlen wir das von der Community gepflegte **[CC Switch CLI](https://github.com/SaladDay/cc-switch-cli)**: Es bietet sowohl eine interaktive Terminaloberfläche (TUI) als auch eine Kommandozeilenschnittstelle, unterstützt Claude Code, Codex, Gemini CLI, OpenCode, OpenClaw, Hermes und Pi und lässt sich über Homebrew (`brew install cc-switch-cli`) oder ein Installationsskript installieren.
 
-CC Switch CLI verwendet standardmäßig dasselbe Datenverzeichnis `~/.cc-switch` wie die Desktop-Version und ist auch mit deren WebDAV-Synchronisierung kompatibel. Die beiden Projekte werden unabhängig voneinander veröffentlicht, daher kann die von der CLI-Version unterstützte Datenbankversion zeitweise hinter der Desktop-Version zurückliegen; erscheint der Hinweis, dass die Datenbankversion zu neu ist, aktualisieren Sie die CLI-Version oder warten Sie, bis sie nachzieht.
+CC Switch CLI verwendet das Datenverzeichnis `~/.cc-switch` und die WebDAV-Synchronisierung des Upstream-Projekts CC Switch. ccs-lite speichert seine Daten in `~/.ccs-lite` und synchronisiert in ein eigenes Remote-Verzeichnis `ccs-lite` in einem eigenen Format; die CLI sieht daher weder die Anbieter noch die Sync-Daten von ccs-lite.
 
 </details>
 

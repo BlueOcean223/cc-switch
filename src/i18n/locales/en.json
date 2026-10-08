@@ -179,7 +179,7 @@
     "piDefaultProviderWarning": "Pi's global default currently points to this provider. If you continue, Pi will try another available model; use /model to choose one or /login to sign in to another provider.",
     "unifyCodexHistory": {
       "title": "Unified Codex session history",
-      "message": "When enabled, the official subscription and third-party providers share one session history list. Note: resuming an old session across providers may fail because its encrypted_content reasoning cannot be decrypted by another backend.\n\nYou can also migrate your existing official session history into the shared list (originals are backed up to ~/.cc-switch/backups first and can be restored when you turn this off).",
+      "message": "When enabled, the official subscription and third-party providers share one session history list. Note: resuming an old session across providers may fail because its encrypted_content reasoning cannot be decrypted by another backend.\n\nYou can also migrate your existing official session history into the shared list (originals are backed up to ~/.ccs-lite/backups first and can be restored when you turn this off).",
       "migrateExisting": "Also migrate existing official session history",
       "confirm": "I understand, enable"
     },
@@ -618,7 +618,7 @@
     "configDirectoryDescription": "When using Claude Code or Codex in environments like WSL, you can manually specify the configuration directory to the one in WSL to keep provider data consistent with the main environment.",
     "appConfigDir": "CC Switch Configuration Directory",
     "appConfigDirDescription": "Customize the storage location for CC Switch configuration (point to cloud sync folder to enable config sync)",
-    "browsePlaceholderApp": "e.g., C:\\Users\\Administrator\\.cc-switch",
+    "browsePlaceholderApp": "e.g., C:\\Users\\Administrator\\.ccs-lite",
     "claudeConfigDir": "Claude Code Configuration Directory",
     "codexConfigDir": "Codex Configuration Directory",
     "geminiConfigDir": "Gemini Configuration Directory",

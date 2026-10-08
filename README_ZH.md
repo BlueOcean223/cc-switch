@@ -67,8 +67,6 @@ Claude Code、Codex、Gemini CLI 等 AI 编程工具各有各的配置格式。�
 - `CC-Switch-v{版本号}-Linux-x86_64.rpm` / `-Linux-arm64.rpm`（Fedora 等提供 WebKitGTK 4.1 的 RPM 发行版）
 - `CC-Switch-v{版本号}-Linux-x86_64.AppImage` / `-Linux-arm64.AppImage`（满足上述系统要求的发行版）
 
-> **Flatpak**：官方 Release 不包含 Flatpak 包。如需使用，可从 `.deb` 自行构建 — 参见 [`flatpak/README.md`](flatpak/README.md)。
-
 ## 快速开始
 
 ### 基本使用
@@ -146,7 +144,7 @@ Claude Code、Codex、Gemini CLI 等 AI 编程工具各有各的配置格式。�
 
 - **云同步** — 通过 WebDAV（坚果云、Nextcloud、群晖 NAS 等）或 S3 兼容存储（AWS S3、Cloudflare R2、阿里云 OSS、腾讯云 COS 等）在多台设备之间同步；也可以把 CC Switch 配置目录放到 Dropbox、OneDrive、iCloud 等网盘文件夹中
 - **CLI 工具管理** — 在「关于」页查看 Claude Code、Codex 等命令行工具的当前版本和最新版本，一键安装、升级或全部升级，并诊断重复安装；Windows 上还能管理 WSL 里的工具（见常见问题）
-- **Deep Link**（`ccswitch://`）— 通过链接一键导入供应商、MCP 服务器和提示词，或添加技能仓库
+- **Deep Link**（`ccslite://`）— 通过链接一键导入供应商、MCP 服务器和提示词，或添加技能仓库
 - **小工具** — 跳过 Claude Code 初次安装确认、隐藏 AI 署名、让 VS Code 的 Claude Code 插件随本软件切换供应商等
 - 深色 / 浅色 / 跟随系统主题、开机自启、自动更新、原子写入、自动备份、国际化（简中/繁中/英/日）
 
@@ -177,7 +175,7 @@ CC Switch 支持九个工具：**Claude Code**、**Codex**、**Gemini CLI**、**
 
 这些共享设置可以直接在工具里改，或手动编辑配置文件；也可以在 CC Switch 里编辑任意一个供应商：编辑框显示的是“切到这个供应商之后配置文件的样子”，保存时关键字段存进这个供应商，其余改动写进配置文件，对所有供应商生效。
 
-所以以前的“通用配置片段”已经不需要了，相关按钮已移除。升级前片段里的设置在切换时早已写进配置文件，会继续保留。CC Switch 第一次改写每个配置文件之前，还会把原文件备份到 `~/.cc-switch/backups/live-first-write/`。
+所以以前的“通用配置片段”已经不需要了，相关按钮已移除。升级前片段里的设置在切换时早已写进配置文件，会继续保留。CC Switch 第一次改写每个配置文件之前，还会把原文件备份到 `~/.ccs-lite/backups/live-first-write/`。
 
 </details>
 
@@ -218,6 +216,20 @@ ccs-lite 没有本地路由。启动时它会检查 Claude Code、Codex、Gemini
 </details>
 
 <details>
+<summary><strong>能同时保留上游 CC Switch 和 ccs-lite 吗？</strong></summary>
+
+可以。ccs-lite 的数据在 `~/.ccs-lite`。第一次启动时，它会从上游的数据目录（`~/.cc-switch`，或在上游里设置的目录）导入一次供应商、MCP 服务器、提示词、Skills、ChatGPT 账号和设置；之后不再读写那个目录，上游继续使用它自己的数据。深链接用 `ccslite://`，WebDAV 和 S3 同步用单独的 `ccs-lite` 远端目录。
+
+两个应用写给工具的东西仍然是共用的：
+
+- 两边写的是同一份工具配置文件，例如 `~/.claude/settings.json` 和 `~/.codex/config.toml`。工具用哪个供应商，取决于最后一次在哪个应用里切换。
+- ChatGPT 账号导入时带着同一份登录凭据。OpenAI 每次使用刷新令牌后都会换一个新的，所以一个应用刷新某个账号后，另一个应用里的这个账号就失效了，Codex 当前登录的账号除外。在失效的那个应用里重新登录这个账号即可。
+- 工具 skills 目录里的技能链接到最后一次同步它的应用里的副本。ccs-lite 同步某个技能后，工具用的就是 ccs-lite 的副本（默认在 `~/.ccs-lite/skills`）。
+- 如果上游开着“开机自启”，ccs-lite 也会注册自己的开机启动项，开机时两个应用都会启动。只想启动一个的话，在另一个应用里关掉这个选项。
+
+</details>
+
+<details>
 <summary><strong>能在 Claude Code 里使用 OpenAI 兼容接口或本地模型吗？</strong></summary>
 
 要看服务有没有提供工具需要的接口格式。CC Switch 只写配置文件，不转换接口格式：Claude Code 需要 Anthropic Messages 接口，Codex 和 Grok Build 需要 OpenAI Responses 接口，Gemini CLI 需要 Gemini API。很多供应商（DeepSeek、Kimi、智谱 GLM、MiniMax 等）都提供 Anthropic 兼容接口，对应的预设已经填好。只提供 Chat Completions 接口的服务，需要你自己运行一个格式转换代理，再把它的地址填为供应商的请求地址。
@@ -234,7 +246,7 @@ ccs-lite 没有本地路由。启动时它会检查 Claude Code、Codex、Gemini
 <details>
 <summary><strong>我的数据存储在哪里？</strong></summary>
 
-默认都在用户主目录下的 `.cc-switch` 文件夹（Windows 为 `C:\Users\<用户名>\.cc-switch`）：
+默认都在用户主目录下的 `.ccs-lite` 文件夹（Windows 为 `C:\Users\<用户名>\.ccs-lite`）：
 
 - **数据库**：`cc-switch.db`（SQLite — 供应商、MCP、提示词、Skills、项目、用量记录等）
 - **本地设置**：`settings.json`（设备级设置，如各工具的配置目录、备份策略、云同步连接信息）
@@ -262,7 +274,7 @@ CC Switch 不会自动识别 WSL。请在「设置 → 高级 → 配置文件�
 
 CC Switch 本身只提供需要图形界面的桌面版（系统要求见[下载安装](#下载安装)）。在服务器、SSH 远程或没有桌面环境的机器上，推荐使用社区维护的 **[CC Switch CLI](https://github.com/SaladDay/cc-switch-cli)**：它提供交互式终端界面（TUI）和命令行两种用法，支持 Claude Code、Codex、Gemini CLI、OpenCode、OpenClaw、Hermes、Pi，可以通过 Homebrew（`brew install cc-switch-cli`）或安装脚本安装。
 
-CC Switch CLI 默认与桌面版共用数据目录 `~/.cc-switch`，也兼容桌面版的 WebDAV 同步。两个项目分别发版，CLI 版支持的数据库版本有时会落后于桌面版；遇到“数据库版本过新”的提示时，请升级 CLI 版，或等它跟进更新。
+CC Switch CLI 使用上游 CC Switch 的数据目录 `~/.cc-switch` 和它的 WebDAV 同步。ccs-lite 的数据在 `~/.ccs-lite`，同步用单独的 `ccs-lite` 远端目录和自己的格式，所以 CLI 看不到 ccs-lite 的供应商和同步数据。
 
 </details>
 

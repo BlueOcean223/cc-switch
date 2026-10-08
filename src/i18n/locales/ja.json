@@ -179,7 +179,7 @@
     "piDefaultProviderWarning": "Pi のグローバルデフォルトは現在このプロバイダーを参照しています。続行すると、Pi は別の利用可能なモデルを試します。/model で再選択するか、/login で別のプロバイダーにログインできます。",
     "unifyCodexHistory": {
       "title": "Codex セッション履歴を統一",
-      "message": "オンにすると、公式サブスクリプションとサードパーティが同じセッション履歴リストを共有します。注意：プロバイダーをまたいで古いセッションを再開すると、encrypted_content を相手のバックエンドが復号できず失敗する場合があります。\n\n既存の公式セッション履歴を共有リストへ移行することもできます（移行前に ~/.cc-switch/backups へ自動バックアップされ、オフにする際に復元を選択できます）。",
+      "message": "オンにすると、公式サブスクリプションとサードパーティが同じセッション履歴リストを共有します。注意：プロバイダーをまたいで古いセッションを再開すると、encrypted_content を相手のバックエンドが復号できず失敗する場合があります。\n\n既存の公式セッション履歴を共有リストへ移行することもできます（移行前に ~/.ccs-lite/backups へ自動バックアップされ、オフにする際に復元を選択できます）。",
       "migrateExisting": "既存の公式セッション履歴も移行する",
       "confirm": "理解しました、オンにする"
     },
@@ -618,7 +618,7 @@
     "configDirectoryDescription": "WSL などで Claude Code や Codex を使う場合、ここで設定ディレクトリを WSL 側に合わせるとデータを揃えられます。",
     "appConfigDir": "CC Switch 設定ディレクトリ",
     "appConfigDirDescription": "CC Switch の保存場所をカスタマイズします（クラウド同期フォルダを指定すると設定を同期できます）",
-    "browsePlaceholderApp": "例: C:\\\\Users\\\\Administrator\\\\.cc-switch",
+    "browsePlaceholderApp": "例: C:\\Users\\Administrator\\.ccs-lite",
     "claudeConfigDir": "Claude Code 設定ディレクトリ",
     "codexConfigDir": "Codex 設定ディレクトリ",
     "geminiConfigDir": "Gemini 設定ディレクトリ",

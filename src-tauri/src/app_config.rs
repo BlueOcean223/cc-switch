@@ -628,7 +628,7 @@ impl MultiAppConfig {
     /// 保存配置到文件
     pub fn save(&self) -> Result<(), AppError> {
         let config_path = get_app_config_path();
-        // 先备份旧版（若存在）到 ~/.cc-switch/config.json.bak，再写入新内容
+        // 先备份旧版（若存在）到 ~/.ccs-lite/config.json.bak，再写入新内容
         if config_path.exists() {
             let backup_path = get_app_config_dir().join("config.json.bak");
             if let Err(e) = copy_file(&config_path, &backup_path) {

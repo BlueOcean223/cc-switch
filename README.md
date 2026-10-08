@@ -67,8 +67,6 @@ Download the latest Linux build from the [Releases](../../releases) page:
 - `CC-Switch-v{version}-Linux-x86_64.rpm` / `-Linux-arm64.rpm` (Fedora and other RPM distros that ship WebKitGTK 4.1)
 - `CC-Switch-v{version}-Linux-x86_64.AppImage` / `-Linux-arm64.AppImage` (any distro meeting the requirements above)
 
-> **Flatpak**: Not included in official releases. You can build it yourself from the `.deb` — see [`flatpak/README.md`](flatpak/README.md) for instructions.
-
 ## Quick Start
 
 ### Basic Usage
@@ -146,7 +144,7 @@ For detailed guides on every feature, check out the **[User Manual](docs/user-ma
 
 - **Cloud sync** — Sync across devices via WebDAV (Jianguoyun, Nextcloud, Synology NAS, etc.) or S3-compatible storage (AWS S3, Cloudflare R2, Alibaba Cloud OSS, Tencent Cloud COS, etc.); you can also put the CC Switch configuration directory in a cloud drive folder such as Dropbox, OneDrive, or iCloud
 - **CLI tool management** — On the "About" page, see the current and latest versions of command-line tools like Claude Code and Codex, install, upgrade, or upgrade all in one click, and diagnose duplicate installations; on Windows it can also manage tools inside WSL (see FAQ)
-- **Deep Link** (`ccswitch://`) — Import providers, MCP servers, and prompts, or add skill repositories, in one click via a link
+- **Deep Link** (`ccslite://`) — Import providers, MCP servers, and prompts, or add skill repositories, in one click via a link
 - **Built-in utilities** — Skip Claude Code's first-run confirmation, hide AI attribution, have the VS Code Claude Code extension follow CC Switch's provider switches, and more
 - Dark / Light / System theme, auto-launch, auto-updater, atomic writes, auto-backups, i18n (zh/zh-TW/en/ja)
 
@@ -177,7 +175,7 @@ No. When you switch providers for Claude Code, Codex, Gemini CLI, or Grok Build,
 
 You can change these shared settings in the tool itself or by editing the config file by hand. You can also edit any provider in CC Switch: the editor shows "what the config file will look like after switching to this provider". When you save, the key fields are stored in that provider, and every other change is written to the config file and applies to every provider.
 
-So the old "Common Config Snippet" is no longer needed, and its buttons have been removed. Settings that were in your snippet before the upgrade were already written into the config file when you switched, so they stay. Before CC Switch rewrites each config file for the first time, it also backs up the original to `~/.cc-switch/backups/live-first-write/`.
+So the old "Common Config Snippet" is no longer needed, and its buttons have been removed. Settings that were in your snippet before the upgrade were already written into the config file when you switched, so they stay. Before CC Switch rewrites each config file for the first time, it also backs up the original to `~/.ccs-lite/backups/live-first-write/`.
 
 </details>
 
@@ -218,6 +216,20 @@ ccs-lite has no local routing. On startup it checks the config files of Claude C
 </details>
 
 <details>
+<summary><strong>Can I keep upstream CC Switch installed next to ccs-lite?</strong></summary>
+
+Yes. ccs-lite keeps its data in `~/.ccs-lite`. On first launch it imports providers, MCP servers, prompts, skills, ChatGPT accounts and settings once from upstream's data directory (`~/.cc-switch`, or the directory set in upstream); after that it does not read or write that directory, and upstream keeps working with its own data. Deep links use `ccslite://`, and WebDAV and S3 sync use a separate `ccs-lite` remote directory.
+
+The two apps still share what they write to the tools:
+
+- Both write the same tool config files, such as `~/.claude/settings.json` and `~/.codex/config.toml`. The app that switched last decides which provider a tool uses.
+- ChatGPT accounts are imported with the same sign-in. OpenAI replaces an account's refresh token each time it is used, so after one app refreshes an account, the other app's copy stops working, unless it is the account Codex is currently signed in with. Sign in to the account again in that app.
+- A skill in a tool's skills folder links to the copy of the app that synced it last. After ccs-lite syncs a skill, the tool uses ccs-lite's copy (in `~/.ccs-lite/skills` by default).
+- If "Launch on Startup" was on in upstream, ccs-lite registers its own login item, so both apps start with the computer. Turn the option off in the app you don't need at startup.
+
+</details>
+
+<details>
 <summary><strong>Can I use OpenAI-compatible APIs or local models in Claude Code?</strong></summary>
 
 Only if the service offers an endpoint in the format the tool expects. CC Switch only writes config files and doesn't convert API formats: Claude Code needs an Anthropic Messages endpoint, Codex and Grok Build need an OpenAI Responses endpoint, and Gemini CLI needs the Gemini API. Many providers (DeepSeek, Kimi, Zhipu GLM, MiniMax, and others) offer an Anthropic-compatible endpoint, and their presets already use it. For a service that only offers Chat Completions, run a format-conversion proxy yourself and enter its address as the provider's endpoint.
@@ -234,7 +246,7 @@ The "Connectivity check" on a provider card only checks whether the provider add
 <details>
 <summary><strong>Where is my data stored?</strong></summary>
 
-By default, everything is stored in the `.cc-switch` folder in your home directory (`C:\Users\<user>\.cc-switch` on Windows):
+By default, everything is stored in the `.ccs-lite` folder in your home directory (`C:\Users\<user>\.ccs-lite` on Windows):
 
 - **Database**: `cc-switch.db` (SQLite — providers, MCP, prompts, Skills, projects, usage records, etc.)
 - **Local settings**: `settings.json` (device-level settings such as each tool's config directory, backup policy, and cloud sync connection details)
@@ -262,7 +274,7 @@ CC Switch doesn't detect WSL automatically. In "Settings → Advanced → Config
 
 CC Switch itself only ships as a desktop app that requires a graphical interface (see [Download & Installation](#download--installation) for system requirements). For servers, SSH sessions, or machines without a desktop environment, we recommend the community-maintained **[CC Switch CLI](https://github.com/SaladDay/cc-switch-cli)**: it offers both an interactive terminal UI (TUI) and a command-line mode, supports Claude Code, Codex, Gemini CLI, OpenCode, OpenClaw, Hermes, and Pi, and can be installed via Homebrew (`brew install cc-switch-cli`) or an install script.
 
-By default, CC Switch CLI shares the `~/.cc-switch` data directory with the desktop app and is compatible with the desktop app's WebDAV sync. The two projects are released separately, and the database version the CLI supports sometimes lags behind the desktop app; if you see a "database version is too new" message, upgrade the CLI or wait for it to catch up.
+CC Switch CLI uses upstream CC Switch's data directory `~/.cc-switch` and its WebDAV sync. ccs-lite keeps its own data in `~/.ccs-lite` and syncs under a separate `ccs-lite` remote directory in its own format, so the CLI does not see ccs-lite's providers or sync data.
 
 </details>
 

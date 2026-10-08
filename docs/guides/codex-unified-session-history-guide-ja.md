@@ -80,7 +80,7 @@ Codex セッションを 1 つ開くたびに、Codex はセッションファ�
 「引き出しの統合」では、一部の公式セッションのラベルを `openai` から `custom` に変更する必要があります（この操作を **移行** と呼び、これは **任意で、あなたが能動的にチェックを入れる必要があります**）。そして **どの書き換えの前にも、CC Switch はまず元ファイルをそのままコピー** して、ここに保存します。
 
 ```text
-~/.cc-switch/backups/codex-official-history-unify-v1/<時間スタンプ>/
+~/.ccs-lite/backups/codex-official-history-unify-v1/<時間スタンプ>/
 ```
 
 このバックアップが、後の「バックアップから正確に復元する」ための唯一の拠り所です。これによってプロセス全体が **可逆** になります——いつでもスイッチをオフにして、移行した公式セッションを正確に `openai` の引き出しへ戻せます。
@@ -116,7 +116,7 @@ Codex セッションを 1 つ開くたびに、Codex はセッションファ�
 
   > オンにすると、公式サブスクリプションとサードパーティが同じセッション履歴リストを共有します。注意：プロバイダーをまたいで古いセッションを再開すると、encrypted_content を相手のバックエンドが復号できず失敗する場合があります。
   >
-  > 既存の公式セッション履歴を共有リストへ移行することもできます（移行前に ~/.cc-switch/backups へ自動バックアップされ、オフにする際に復元を選択できます）。
+  > 既存の公式セッション履歴を共有リストへ移行することもできます（移行前に ~/.ccs-lite/backups へ自動バックアップされ、オフにする際に復元を選択できます）。
 
 - **チェックボックス**: 既存の公式セッション履歴も移行する
 - **確認ボタン**: 理解しました、オンにする
@@ -147,7 +147,7 @@ Codex セッションを 1 つ開くたびに、Codex はセッションファ�
    ③ インデックス DB state_5.sqlite も同じトランザクション内でラベルを変更
 ```
 
-- **バックアップの場所**: `~/.cc-switch/backups/codex-official-history-unify-v1/<時間スタンプ>/`。移行のたびに、タイムスタンプ付きの「世代ディレクトリ」を生成し、その中に `jsonl/`（セッションのコピー）、`state/`（インデックス DB のコピー）、`meta.json`（この移行がどの Codex ディレクトリに属するかの記録）が含まれます。
+- **バックアップの場所**: `~/.ccs-lite/backups/codex-official-history-unify-v1/<時間スタンプ>/`。移行のたびに、タイムスタンプ付きの「世代ディレクトリ」を生成し、その中に `jsonl/`（セッションのコピー）、`state/`（インデックス DB のコピー）、`meta.json`（この移行がどの Codex ディレクトリに属するかの記録）が含まれます。
 - **変更するもの**: `model_provider` というフィールドの値だけ。あなたの会話内容、推論内容、すべての本文は **そのまま保持** されます。
 - **削除するもの**: **何も削除しません**。バックアップは「コピー」、書き換えは「同一ファイルの原子的な置換」であり、全工程でセッションやインデックスを削除する操作は一切ありません。ファイルはいかなる時点でも完全です（古い内容か新しい内容かのどちらかであり、空や中途半端になることは決してありません）。
 
@@ -184,7 +184,7 @@ Codex セッションを 1 つ開くたびに、Codex はセッションファ�
 
 ```text
 ① まず現在の状態を独立した復元バックアップディレクトリへもう一度コピー
-   ~/.cc-switch/backups/codex-official-history-unify-restore-v1/<時間スタンプ>/
+   ~/.ccs-lite/backups/codex-official-history-unify-restore-v1/<時間スタンプ>/
    （復元自体もまずバックアップするので、復元でもデータは失われない）
 ② すべての移行バックアップ世代を走査し、「当初のラベルが openai」のセッション id を集めて「台帳」を作る
 ③ 【台帳に含まれ、かつ現在もまだ custom】のセッションだけ、ラベルを "openai" に戻す
@@ -283,7 +283,7 @@ Codex セッションを 1 つ開くたびに、Codex はセッションファ�
 
 この 3 つのケースでは、どのセッションも削除されていません。
 
-**どうするか**: 巻末のコマンドで `~/.codex/sessions/` 内のセッションファイル総数を数え、ファイルがすべて残っていることを確認してください。次に `~/.cc-switch/backups/` に `codex-official-history-unify-v1` ディレクトリがあるかを見てください——もしこのディレクトリすらなければ、あなたは一度も移行を起動しておらず、セッションはずっと元の引き出しにある、ということです。
+**どうするか**: 巻末のコマンドで `~/.codex/sessions/` 内のセッションファイル総数を数え、ファイルがすべて残っていることを確認してください。次に `~/.ccs-lite/backups/` に `codex-official-history-unify-v1` ディレクトリがあるかを見てください——もしこのディレクトリすらなければ、あなたは一度も移行を起動しておらず、セッションはずっと元の引き出しにある、ということです。
 
 ### シナリオ F: 復元が拒否され、「統一セッション履歴が再度有効化されたため、復元をスキップしました」と通知
 
@@ -303,8 +303,8 @@ Codex セッションを 1 つ開くたびに、Codex はセッションファ�
 
 ### 最も簡単な方法: ファイルマネージャーで直接開く（コマンドライン完全不要）
 
-- **macOS（Finder）**: `Cmd + Shift + G` を押して `~/.codex/sessions` を貼り付けて Enter すれば、たくさんの `.jsonl` セッションファイルとその更新時刻が見えます。バックアップディレクトリは `~/.cc-switch/backups` を貼り付けます。
-- **Windows（エクスプローラー）**: アドレスバーに `%USERPROFILE%\.codex\sessions` を貼り付けて Enter すれば、セッションフォルダとその中の `.jsonl` が見えます。バックアップディレクトリは `%USERPROFILE%\.cc-switch\backups` を貼り付けます。
+- **macOS（Finder）**: `Cmd + Shift + G` を押して `~/.codex/sessions` を貼り付けて Enter すれば、たくさんの `.jsonl` セッションファイルとその更新時刻が見えます。バックアップディレクトリは `~/.ccs-lite/backups` を貼り付けます。
+- **Windows（エクスプローラー）**: アドレスバーに `%USERPROFILE%\.codex\sessions` を貼り付けて Enter すれば、セッションフォルダとその中の `.jsonl` が見えます。バックアップディレクトリは `%USERPROFILE%\.ccs-lite\backups` を貼り付けます。
 
 **ここで一連の `.jsonl` ファイルが見えれば、それがセッションデータが無傷でディスク上にある証拠です。** ファイル数や更新時刻は、どんな文章よりも直感的です。
 
@@ -315,8 +315,8 @@ Codex セッションを 1 つ開くたびに、Codex はセッションファ�
 | **セッション本文（コア）** | `~/.codex/sessions/`（日付別サブディレクトリを含む、再帰的） | セッション 1 つにつき 1 つの `.jsonl` テキストファイル。**これがあなたの会話内容** |
 | **アーカイブ済みセッション** | `~/.codex/archived_sessions/` | 同じく `.jsonl` |
 | **セッションインデックス DB** | `~/.codex/state_5.sqlite` | `threads` テーブルの `model_provider` 列が「引き出しラベル」。**これこそ、セッション再開リストが実際に読み取る分類のソース** |
-| **移行バックアップ**（移行をオンにすると自動生成） | `~/.cc-switch/backups/codex-official-history-unify-v1/<時間スタンプ>/` | `jsonl/`、`state/`、`meta.json` を含む |
-| **復元バックアップ**（復元を押すと自動生成） | `~/.cc-switch/backups/codex-official-history-unify-restore-v1/<時間スタンプ>/` | 復元前の安全なコピー |
+| **移行バックアップ**（移行をオンにすると自動生成） | `~/.ccs-lite/backups/codex-official-history-unify-v1/<時間スタンプ>/` | `jsonl/`、`state/`、`meta.json` を含む |
+| **復元バックアップ**（復元を押すと自動生成） | `~/.ccs-lite/backups/codex-official-history-unify-restore-v1/<時間スタンプ>/` | 復元前の安全なコピー |
 
 > **注意**: CC Switch で Codex ディレクトリを変更した場合や、`config.toml` で `sqlite_home` を設定している場合は、上記の `~/.codex` をあなたの実際のディレクトリに置き換えてください。以下の `~` = あなたのユーザーホームディレクトリ。
 
@@ -371,13 +371,13 @@ open -e "<ファイル名>.jsonl"      # macOS
 **5. CC Switch のバックアップディレクトリを見る（移行 / 復元の前に必ずコピーを残した証拠）**
 
 ```bash
-ls -la ~/.cc-switch/backups/codex-official-history-unify-v1/ 2>/dev/null
-ls -la ~/.cc-switch/backups/codex-official-history-unify-restore-v1/ 2>/dev/null
+ls -la ~/.ccs-lite/backups/codex-official-history-unify-v1/ 2>/dev/null
+ls -la ~/.ccs-lite/backups/codex-official-history-unify-restore-v1/ 2>/dev/null
 ```
 
 ### Windows コマンド（PowerShell）
 
-セッションディレクトリは通常 `C:\Users\<あなたのユーザー名>\.codex\` にあり、バックアップは `C:\Users\<あなたのユーザー名>\.cc-switch\backups\` にあります。
+セッションディレクトリは通常 `C:\Users\<あなたのユーザー名>\.codex\` にあり、バックアップは `C:\Users\<あなたのユーザー名>\.ccs-lite\backups\` にあります。
 
 ```powershell
 # 1. セッションファイルの総数（「消えていない」ことの動かぬ証拠）
@@ -394,8 +394,8 @@ Get-ChildItem "$env:USERPROFILE\.codex\sessions" -Recurse -Filter *.jsonl |
   Select-String -Pattern 'model_provider"\s*:\s*"custom"' -List).Count
 
 # 4. バックアップディレクトリを見る
-Get-ChildItem "$env:USERPROFILE\.cc-switch\backups\codex-official-history-unify-v1" -ErrorAction SilentlyContinue
-Get-ChildItem "$env:USERPROFILE\.cc-switch\backups\codex-official-history-unify-restore-v1" -ErrorAction SilentlyContinue
+Get-ChildItem "$env:USERPROFILE\.ccs-lite\backups\codex-official-history-unify-v1" -ErrorAction SilentlyContinue
+Get-ChildItem "$env:USERPROFILE\.ccs-lite\backups\codex-official-history-unify-restore-v1" -ErrorAction SilentlyContinue
 ```
 
 > 同じく注意: ステップ 3 の grep の数がファイル総数より **少なくなる** のは正常です（古いセッションはこのフィールドを書き込まないため）。「セッションが消えていない」の判断は、ステップ 1 の **ファイル総数** を基準にしてください。
@@ -461,4 +461,4 @@ wire_api = "responses"
 
 ---
 
-**最後に一言**: あなたが見た「セッションが消えた / 再開失敗」は、本質的には **セッションが別の履歴リスト（引き出し）に移されたか、相手のバックエンドが古い推論内容を復号できない** ことであり、ファイルは常にそっくりそのまま `~/.codex/sessions/`（および `state_5.sqlite`）に横たわっています。スイッチをオフにするとき「バックアップから復元する」にチェックを入れれば、移行した公式セッションを正確に公式リストへ戻せます。たとえ復元しなくても、元の `.jsonl` ファイルと `~/.cc-switch/backups/codex-official-history-unify-*/` 配下のバックアップコピーはどちらも残っています——**データが本当に失われることは決してありません。**
+**最後に一言**: あなたが見た「セッションが消えた / 再開失敗」は、本質的には **セッションが別の履歴リスト（引き出し）に移されたか、相手のバックエンドが古い推論内容を復号できない** ことであり、ファイルは常にそっくりそのまま `~/.codex/sessions/`（および `state_5.sqlite`）に横たわっています。スイッチをオフにするとき「バックアップから復元する」にチェックを入れれば、移行した公式セッションを正確に公式リストへ戻せます。たとえ復元しなくても、元の `.jsonl` ファイルと `~/.ccs-lite/backups/codex-official-history-unify-*/` 配下のバックアップコピーはどちらも残っています——**データが本当に失われることは決してありません。**

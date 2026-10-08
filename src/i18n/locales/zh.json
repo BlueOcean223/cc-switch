@@ -179,7 +179,7 @@
     "piDefaultProviderWarning": "Pi 的全局默认项当前指向此供应商。继续后，Pi 会尝试其他可用模型；你可以在 Pi 中使用 /model 重新选择，或使用 /login 登录其他供应商。",
     "unifyCodexHistory": {
       "title": "统一 Codex 会话历史",
-      "message": "开启后，官方订阅与第三方将共用同一个会话历史列表。注意：跨供应商继续旧会话时，可能因对方后端无法解密 encrypted_content 推理内容而失败。\n\n可选择同时把现有官方会话历史迁入共享列表（迁移前自动备份到 ~/.cc-switch/backups，关闭开关时可选择恢复）。",
+      "message": "开启后，官方订阅与第三方将共用同一个会话历史列表。注意：跨供应商继续旧会话时，可能因对方后端无法解密 encrypted_content 推理内容而失败。\n\n可选择同时把现有官方会话历史迁入共享列表（迁移前自动备份到 ~/.ccs-lite/backups，关闭开关时可选择恢复）。",
       "migrateExisting": "同时迁入现有官方会话历史",
       "confirm": "我已了解，继续开启"
     },
@@ -618,7 +618,7 @@
     "configDirectoryDescription": "在 WSL 等环境使用 Claude Code 或 Codex 的时候，可手动指定为 WSL 里的配置目录，供应商数据与主环境保持一致。",
     "appConfigDir": "CC Switch 配置目录",
     "appConfigDirDescription": "自定义 CC Switch 的配置存储位置（指定到云同步文件夹即可云同步配置）",
-    "browsePlaceholderApp": "例如：C:\\Users\\Administrator\\.cc-switch",
+    "browsePlaceholderApp": "例如：C:\\Users\\Administrator\\.ccs-lite",
     "claudeConfigDir": "Claude Code 配置目录",
     "codexConfigDir": "Codex 配置目录",
     "geminiConfigDir": "Gemini 配置目录",
