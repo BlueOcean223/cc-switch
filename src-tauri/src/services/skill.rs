@@ -582,6 +582,9 @@ impl Default for SkillService {
     }
 }
 
+/// 检查更新时同时下载的仓库数：每个请求最多等 15 + 60 秒，串行时仓库多就要等很久。
+const UPDATE_CHECK_CONCURRENCY: usize = 4;
+
 impl SkillService {
     pub fn new() -> Self {
         Self {
@@ -1329,7 +1332,7 @@ impl SkillService {
     /// 检查所有已安装 Skill 的更新，并逐仓库报告没读到的仓库（下载失败 / 超时 / 扫描失败）。
     ///
     /// 仅检查有 repo_owner 的 Skill（本地 Skill 跳过），
-    /// 按仓库分组下载，避免重复下载同一仓库。
+    /// 按仓库分组下载，避免重复下载同一仓库；最多同时查 [`UPDATE_CHECK_CONCURRENCY`] 个仓库。
     pub async fn check_updates_report(&self, db: &Arc<Database>) -> Result<SkillUpdateCheckResult> {
         let skills = db.get_all_installed_skills()?;
         let mut updates = Vec::new();
@@ -1355,152 +1358,185 @@ impl SkillService {
         let ssot_dir = Self::get_ssot_dir()?;
         let remote_commits = db.get_skill_remote_commits()?;
 
-        for ((owner, name, branch), group_skills) in &repo_groups {
-            let repo = SkillRepo {
-                owner: owner.clone(),
-                name: name.clone(),
-                branch: branch.clone(),
-                enabled: true,
-            };
-
-            // 先问仓库现在指向哪个提交（一百多字节）。技能记着哪个提交里的版本与本地
-            // 内容相同，提交和本地内容都没变的不用再比；都不用比就不下载整包。
-            // 查不到提交时照旧下载比对。
-            let commit = match timeout(
-                std::time::Duration::from_secs(15),
-                self.resolve_repo_commit(&repo),
-            )
-            .await
-            {
-                Ok(Ok(commit)) => commit,
-                Ok(Err(e)) => {
-                    log::debug!("查询 {owner}/{name} 的当前提交失败，改为下载比对: {e}");
-                    None
-                }
-                Err(_) => {
-                    log::debug!("查询 {owner}/{name} 的当前提交超时，改为下载比对");
-                    None
-                }
-            };
-            let pending: Vec<&InstalledSkill> = {
-                let _state_guard = skill_state_read_guard();
-                group_skills
-                    .iter()
-                    .filter(|skill| {
-                        let Some(commit) = commit.as_deref() else {
-                            return true;
-                        };
-                        let Some((local_hash, freshly_computed)) =
-                            Self::local_hash_for_update_check(
-                                &ssot_dir,
-                                &skill.directory,
-                                skill.content_hash.as_deref(),
-                            )
-                        else {
-                            return true;
-                        };
-                        if freshly_computed {
-                            let _ = db.update_skill_hash(&skill.id, &local_hash, 0);
-                        }
-                        remote_commits.get(&skill.id) != Some(&(commit.to_string(), local_hash))
-                    })
-                    .collect()
-            };
-            if pending.is_empty() {
-                continue;
-            }
-
-            // 下载仓库 ZIP；查到了提交就下载那个提交，比对结果与记下的提交一致
-            let download = async {
-                match commit.as_deref() {
-                    Some(commit) => self.download_repo_at(&repo, commit).await,
-                    None => self.download_repo(&repo).await.map(|(dir, _)| dir),
-                }
-            };
-            let temp_guard = match timeout(std::time::Duration::from_secs(60), download).await {
-                Ok(Ok(result)) => result,
-                Ok(Err(e)) => {
-                    log::warn!("检查更新时下载 {}/{} 失败: {e}", owner, name);
-                    failures.push(Self::repo_failure(&repo, e.to_string()));
-                    continue;
-                }
-                Err(_) => {
-                    log::warn!("检查更新时下载 {}/{} 超时", owner, name);
-                    failures.push(Self::repo_failure(
-                        &repo,
-                        Self::download_timeout_error(&repo),
-                    ));
-                    continue;
-                }
-            };
-            let temp_dir = temp_guard.path();
-
-            // 扫描仓库中的所有 Skill 目录
-            let mut remote_skills: Vec<DiscoverableSkill> = Vec::new();
-            if let Err(e) = self.scan_dir_recursive(temp_dir, temp_dir, &repo, &mut remote_skills) {
-                // 扫到一半失败：已扫到的照常比对，但如实报告这个仓库可能不完整
-                log::warn!("检查更新时扫描 {}/{} 失败: {e}", owner, name);
-                failures.push(Self::repo_failure(&repo, e.to_string()));
-            }
-
-            // Remote I/O is complete. Stabilize the local DB + SSOT while hashes
-            // are read and any missing hash metadata is backfilled.
-            let _state_guard = skill_state_read_guard();
-
-            for skill in pending {
-                let remote_match = Self::find_remote_skill_for_install(
-                    &remote_skills,
-                    &skill.directory,
-                    skill.readme_url.as_deref(),
-                );
-                let remote_skill_dir = match remote_match {
-                    Some(rs) => match Self::resolve_skill_source_dir(temp_dir, &rs.directory) {
-                        Some(path) => path,
-                        None => continue,
-                    },
-                    None => continue,
-                };
-
-                let remote_hash = match Self::compute_dir_hash(&remote_skill_dir) {
-                    Ok(h) => h,
-                    Err(e) => {
-                        log::warn!("计算远程哈希失败 {}: {e}", skill.id);
-                        continue;
-                    }
-                };
-
-                let local_hash = match Self::local_hash_for_update_check(
+        use futures::StreamExt;
+        let checks: Vec<_> = repo_groups
+            .iter()
+            .map(|((owner, name, branch), group_skills)| {
+                self.check_repo_updates(
+                    db,
                     &ssot_dir,
-                    &skill.directory,
-                    skill.content_hash.as_deref(),
-                ) {
-                    Some((h, freshly_computed)) => {
-                        if freshly_computed {
-                            let _ = db.update_skill_hash(&skill.id, &h, 0);
-                        }
-                        Some(h)
-                    }
-                    None => None,
-                };
+                    &remote_commits,
+                    SkillRepo {
+                        owner: owner.clone(),
+                        name: name.clone(),
+                        branch: branch.clone(),
+                        enabled: true,
+                    },
+                    group_skills,
+                )
+            })
+            .collect();
+        let results: Vec<(Vec<SkillUpdateInfo>, Vec<SkillRepoFailure>)> =
+            futures::stream::iter(checks)
+                .buffer_unordered(UPDATE_CHECK_CONCURRENCY)
+                .collect()
+                .await;
+        for (repo_updates, repo_failures) in results {
+            updates.extend(repo_updates);
+            failures.extend(repo_failures);
+        }
 
-                if local_hash.as_deref() == Some(&remote_hash) {
-                    if let Some(commit) = commit.as_deref() {
-                        let _ = db.set_skill_remote_commit(&skill.id, commit, &remote_hash);
+        // 仓库并发检查、分组用的是 HashMap，排一下让结果稳定
+        updates.sort_by(|a: &SkillUpdateInfo, b| a.id.cmp(&b.id));
+        failures.sort_by(|a: &SkillRepoFailure, b| (&a.owner, &a.name).cmp(&(&b.owner, &b.name)));
+        Ok(SkillUpdateCheckResult { updates, failures })
+    }
+
+    /// 检查一个仓库里已安装 Skill 的更新，见 [`Self::check_updates_report`]。
+    async fn check_repo_updates(
+        &self,
+        db: &Arc<Database>,
+        ssot_dir: &Path,
+        remote_commits: &HashMap<String, (String, String)>,
+        repo: SkillRepo,
+        group_skills: &[InstalledSkill],
+    ) -> (Vec<SkillUpdateInfo>, Vec<SkillRepoFailure>) {
+        let mut updates = Vec::new();
+        let mut failures = Vec::new();
+        let (owner, name) = (&repo.owner, &repo.name);
+        // 先问仓库现在指向哪个提交（一百多字节）。技能记着哪个提交里的版本与本地
+        // 内容相同，提交和本地内容都没变的不用再比；都不用比就不下载整包。
+        // 查不到提交时照旧下载比对。
+        let commit = match timeout(
+            std::time::Duration::from_secs(15),
+            self.resolve_repo_commit(&repo),
+        )
+        .await
+        {
+            Ok(Ok(commit)) => commit,
+            Ok(Err(e)) => {
+                log::debug!("查询 {owner}/{name} 的当前提交失败，改为下载比对: {e}");
+                None
+            }
+            Err(_) => {
+                log::debug!("查询 {owner}/{name} 的当前提交超时，改为下载比对");
+                None
+            }
+        };
+        let pending: Vec<&InstalledSkill> = {
+            let _state_guard = skill_state_read_guard();
+            group_skills
+                .iter()
+                .filter(|skill| {
+                    let Some(commit) = commit.as_deref() else {
+                        return true;
+                    };
+                    let Some((local_hash, freshly_computed)) = Self::local_hash_for_update_check(
+                        ssot_dir,
+                        &skill.directory,
+                        skill.content_hash.as_deref(),
+                    ) else {
+                        return true;
+                    };
+                    if freshly_computed {
+                        let _ = db.update_skill_hash(&skill.id, &local_hash, 0);
                     }
-                } else {
-                    updates.push(SkillUpdateInfo {
-                        id: skill.id.clone(),
-                        name: skill.name.clone(),
-                        current_hash: local_hash,
-                        remote_hash,
-                    });
+                    remote_commits.get(&skill.id) != Some(&(commit.to_string(), local_hash))
+                })
+                .collect()
+        };
+        if pending.is_empty() {
+            return (updates, failures);
+        }
+
+        // 下载仓库 ZIP；查到了提交就下载那个提交，比对结果与记下的提交一致
+        let download = async {
+            match commit.as_deref() {
+                Some(commit) => self.download_repo_at(&repo, commit).await,
+                None => self.download_repo(&repo).await.map(|(dir, _)| dir),
+            }
+        };
+        let temp_guard = match timeout(std::time::Duration::from_secs(60), download).await {
+            Ok(Ok(result)) => result,
+            Ok(Err(e)) => {
+                log::warn!("检查更新时下载 {}/{} 失败: {e}", owner, name);
+                failures.push(Self::repo_failure(&repo, e.to_string()));
+                return (updates, failures);
+            }
+            Err(_) => {
+                log::warn!("检查更新时下载 {}/{} 超时", owner, name);
+                failures.push(Self::repo_failure(
+                    &repo,
+                    Self::download_timeout_error(&repo),
+                ));
+                return (updates, failures);
+            }
+        };
+        let temp_dir = temp_guard.path();
+
+        // 扫描仓库中的所有 Skill 目录
+        let mut remote_skills: Vec<DiscoverableSkill> = Vec::new();
+        if let Err(e) = self.scan_dir_recursive(temp_dir, temp_dir, &repo, &mut remote_skills) {
+            // 扫到一半失败：已扫到的照常比对，但如实报告这个仓库可能不完整
+            log::warn!("检查更新时扫描 {}/{} 失败: {e}", owner, name);
+            failures.push(Self::repo_failure(&repo, e.to_string()));
+        }
+
+        // Remote I/O is complete. Stabilize the local DB + SSOT while hashes
+        // are read and any missing hash metadata is backfilled.
+        let _state_guard = skill_state_read_guard();
+
+        for skill in pending {
+            let remote_match = Self::find_remote_skill_for_install(
+                &remote_skills,
+                &skill.directory,
+                skill.readme_url.as_deref(),
+            );
+            let remote_skill_dir = match remote_match {
+                Some(rs) => match Self::resolve_skill_source_dir(temp_dir, &rs.directory) {
+                    Some(path) => path,
+                    None => continue,
+                },
+                None => continue,
+            };
+
+            let remote_hash = match Self::compute_dir_hash(&remote_skill_dir) {
+                Ok(h) => h,
+                Err(e) => {
+                    log::warn!("计算远程哈希失败 {}: {e}", skill.id);
+                    continue;
                 }
+            };
+
+            let local_hash = match Self::local_hash_for_update_check(
+                ssot_dir,
+                &skill.directory,
+                skill.content_hash.as_deref(),
+            ) {
+                Some((h, freshly_computed)) => {
+                    if freshly_computed {
+                        let _ = db.update_skill_hash(&skill.id, &h, 0);
+                    }
+                    Some(h)
+                }
+                None => None,
+            };
+
+            if local_hash.as_deref() == Some(&remote_hash) {
+                if let Some(commit) = commit.as_deref() {
+                    let _ = db.set_skill_remote_commit(&skill.id, commit, &remote_hash);
+                }
+            } else {
+                updates.push(SkillUpdateInfo {
+                    id: skill.id.clone(),
+                    name: skill.name.clone(),
+                    current_hash: local_hash,
+                    remote_hash,
+                });
             }
         }
 
-        // 分组用的是 HashMap，排一下让结果稳定
-        failures.sort_by(|a: &SkillRepoFailure, b| (&a.owner, &a.name).cmp(&(&b.owner, &b.name)));
-        Ok(SkillUpdateCheckResult { updates, failures })
+        (updates, failures)
     }
 
     fn repo_failure(repo: &SkillRepo, error: String) -> SkillRepoFailure {
