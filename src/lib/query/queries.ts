@@ -121,12 +121,14 @@ export const KEEP_LAST_GOOD_MS = 10 * 60 * 1000; // 10 分钟
  * **HTTP 5xx/429**，网络类文案匹配仅作兼容冗余。
  *
  * 采用**白名单**，失败安全——任何未识别的错误一律按"非瞬时"立即透出，绝不误掩盖
- * 确定性失败。需与后端错误文案保持同步：
+ * 确定性失败。托盘缓存用后端 `services/usage_cache.rs` 的 `is_transient_usage_error`
+ * 做同样的判断，改一边要同步另一边。需与后端错误文案保持同步：
  * - 原生 balance/coding_plan/subscription：上游非 2xx → `"API error (HTTP <code>…)"`
  * - JS 脚本 usage_script：上游非 2xx → `"HTTP <code> …"`
  *
- * HTTP 状态：**5xx**（服务端错误，通常瞬时）与 **429**（限流，稍后重试即可）归为
- * transient；其余 **4xx**（鉴权/客户端错误，如 401/403/404）保持确定性，立即透出。
+ * HTTP 状态：**5xx**（服务端错误，通常瞬时）、**429**（限流，稍后重试即可）与 **408**
+ * （服务端超时）归为 transient；其余 **4xx**（鉴权/客户端错误，如 401/403/404）保持
+ * 确定性，立即透出。
  */
 export function isTransientUsageError(result: UsageLikeResult): boolean {
   if (result.success) return false;
@@ -150,12 +152,12 @@ export function isTransientUsageError(result: UsageLikeResult): boolean {
     return true;
   }
 
-  // HTTP 状态码：5xx 与 429（限流）视为瞬时，其余 4xx 视为确定性。错误文案里第一处
+  // HTTP 状态码：5xx、429（限流）与 408（超时）视为瞬时，其余 4xx 视为确定性。错误文案里第一处
   // "HTTP <code>" 即为上游状态码（原生 "API error (HTTP 500…)"、JS 脚本 "HTTP 500 …"）。
   const httpMatch = e.match(/http\s+(\d{3})/);
   if (httpMatch) {
     const status = Number(httpMatch[1]);
-    return (status >= 500 && status <= 599) || status === 429;
+    return (status >= 500 && status <= 599) || status === 429 || status === 408;
   }
 
   return false;

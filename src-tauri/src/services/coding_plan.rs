@@ -197,7 +197,7 @@ async fn query_kimi(api_key: &str, is_cn: bool) -> Result<SubscriptionQuota, Str
 ///
 /// 旧形态：`limits[].detail` 是 5h 窗口、`usage` 是周额度，各带 `limit`、
 /// `resetTime` 以及 `used` 或 `remaining`。用 API key 调用时平台是否已换成新形态
-/// 没有出处，两种都认。
+/// 没有出处，两种都认。`usages` 存在但一个窗口都解析不出时也返回 None。
 fn parse_kimi_tiers(body: &serde_json::Value) -> Option<Vec<QuotaTier>> {
     if let Some(usages) = body.get("usages").and_then(|v| v.as_object()) {
         const WINDOWS: [(&str, &str); 3] = [
@@ -227,8 +227,9 @@ fn parse_kimi_tiers(body: &serde_json::Value) -> Option<Vec<QuotaTier>> {
                     max_value_usd: None,
                 })
             })
-            .collect();
-        return Some(tiers);
+            .collect::<Vec<_>>();
+        // 有 `usages` 但三个窗口都解析不出：形态变了，按不认识处理，不返回空的成功结果
+        return (!tiers.is_empty()).then_some(tiers);
     }
 
     let legacy_tier = |detail: &serde_json::Value, name: &str| {
@@ -647,8 +648,8 @@ async fn query_zenmux_at(url: &str, api_key: &str) -> Result<SubscriptionQuota, 
 /// 这里只取 `general`,跳过 video。`*_usage_count` 在新旧响应里一个是剩余次数、
 /// 一个是已用次数(官方 CLI 靠百分比反推),所以只用百分比。
 ///
-/// `current_*_status` 按官方 CLI 的注释是 1=正常、2=已用完、3=不限。5h 桶始终
-/// 展示;周桶在 status=3 时不展示(无周限额套餐的 `remaining_percent` 恒为 100),
+/// `current_*_status` 按官方 CLI 的注释是 1=正常、2=已用完、3=不限。5h 桶和周桶
+/// 都在 status=3 时不展示(这个窗口没有限额,`remaining_percent` 恒为 100),
 /// status=2 时展示,缺百分比则按已用 100% 计。
 ///
 /// `weekly_boost_permille` 不参与计算:CLI 用它放大剩余百分比的展示值,总量也
@@ -670,11 +671,21 @@ fn parse_minimax_tiers(body: &serde_json::Value) -> Vec<QuotaTier> {
         return tiers;
     };
 
+    // 剩余百分比:status=3 表示该窗口不限额,不展示;status=2 表示已用完
+    let remaining =
+        |status_key: &str, percent_key: &str| match item.get(status_key).and_then(|v| v.as_i64()) {
+            Some(3) => None,
+            status => item
+                .get(percent_key)
+                .and_then(|v| v.as_f64())
+                .or((status == Some(2)).then_some(0.0)),
+        };
+
     // 5h 桶:剩余百分比 → 已用百分比
-    if let Some(remain_pct) = item
-        .get("current_interval_remaining_percent")
-        .and_then(|v| v.as_f64())
-    {
+    if let Some(remain_pct) = remaining(
+        "current_interval_status",
+        "current_interval_remaining_percent",
+    ) {
         let resets_at = item
             .get("end_time")
             .and_then(|v| v.as_i64())
@@ -688,15 +699,8 @@ fn parse_minimax_tiers(body: &serde_json::Value) -> Vec<QuotaTier> {
         });
     }
 
-    // 周桶:status=3 表示该套餐无周限额;status=2 表示已用完
-    let weekly_remaining = match item.get("current_weekly_status").and_then(|v| v.as_i64()) {
-        Some(3) => None,
-        status => item
-            .get("current_weekly_remaining_percent")
-            .and_then(|v| v.as_f64())
-            .or((status == Some(2)).then_some(0.0)),
-    };
-    if let Some(remain_pct) = weekly_remaining {
+    if let Some(remain_pct) = remaining("current_weekly_status", "current_weekly_remaining_percent")
+    {
         let resets_at = item
             .get("weekly_end_time")
             .and_then(|v| v.as_i64())
@@ -1273,6 +1277,10 @@ async fn volcengine_openapi_call(
         return VolcCall::Auth(format!(
             "Authentication failed (HTTP {status}). {VOLCENGINE_AKSK_HINT}"
         ));
+    }
+    // 408 是服务端超时，和 read_json 一样按瞬时失败处理
+    if status == reqwest::StatusCode::REQUEST_TIMEOUT {
+        return VolcCall::Transient(format!("Transient HTTP failure (HTTP {status})"));
     }
     if !status.is_success() {
         // 火山 OpenAPI 网关对签名/凭据类错误常返 4xx（多为 HTTP 400）并携带与 200
@@ -1893,6 +1901,22 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn read_json_treats_408_as_transient() {
+        ensure_no_proxy_for_loopback();
+        let (url, handle) = spawn_once_server(Some(http_response("408 Request Timeout", "slow")));
+        let resp = crate::http_client::get()
+            .get(&url)
+            .send()
+            .await
+            .expect("send");
+        let error = crate::http_client::read_json::<serde_json::Value>(resp)
+            .await
+            .expect_err("408 is transient");
+        assert_eq!(error, "Transient HTTP failure (HTTP 408 Request Timeout)");
+        handle.join().expect("server thread");
+    }
+
+    #[tokio::test]
     async fn command_code_invalid_json_is_deterministic_parse_error() {
         ensure_no_proxy_for_loopback();
         let (base_url, handle) = spawn_once_server(Some(http_response("200 OK", "not-json")));
@@ -2409,6 +2433,8 @@ mod tests {
     fn kimi_unrecognized_response_is_none() {
         assert!(parse_kimi_tiers(&json!({})).is_none());
         assert!(parse_kimi_tiers(&json!({ "usage": null, "data": {} })).is_none());
+        assert!(parse_kimi_tiers(&json!({ "usages": {} })).is_none());
+        assert!(parse_kimi_tiers(&json!({ "usages": { "limit_5h": {} } })).is_none());
     }
 
     // ── MiniMax ──
@@ -2562,6 +2588,23 @@ mod tests {
         assert_eq!(tiers[0].name, TIER_FIVE_HOUR);
         assert_eq!(tiers[0].utilization, 1.0);
         assert!(tiers[0].resets_at.is_some());
+    }
+
+    #[test]
+    fn minimax_interval_status_3_skips_five_hour_tier() {
+        let body = json!({
+            "model_remains": [{
+                "model_name": "general",
+                "current_interval_status": 3,
+                "current_interval_remaining_percent": 100,
+                "current_weekly_status": 1,
+                "current_weekly_remaining_percent": 60
+            }]
+        });
+        let tiers = parse_minimax_tiers(&body);
+        assert_eq!(tiers.len(), 1);
+        assert_eq!(tiers[0].name, TIER_WEEKLY_LIMIT);
+        assert_eq!(tiers[0].utilization, 40.0);
     }
 
     #[test]

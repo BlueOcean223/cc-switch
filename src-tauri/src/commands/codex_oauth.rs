@@ -43,11 +43,13 @@ pub async fn get_codex_oauth_quota(
 
     let result = query_codex_oauth_quota_for(manager, &id).await;
     // Cache by the resolved account, even if the default/binding changes while
-    // the request is in flight. Transport errors retain the last good snapshot;
-    // authentication/HTTP failures replace it so the tray hides invalid quotas.
+    // the request is in flight. Transport errors and transient failures (rate
+    // limits, 5xx) retain the last good snapshot; authentication and other HTTP
+    // failures replace it so the tray hides invalid quotas.
     if let Ok(quota) = &result {
-        app_state.usage_cache.put_codex_oauth(id, quota.clone());
-        crate::tray::schedule_tray_refresh(&app);
+        if app_state.usage_cache.put_codex_oauth(id, quota.clone()) {
+            crate::tray::schedule_tray_refresh(&app);
+        }
     }
     result
 }

@@ -186,14 +186,18 @@ fn env_proxy_on_upstream_routing_port(
 
 /// 读出响应体并按 JSON 解析，供额度、余额查询使用。
 ///
-/// 外层 `Err` 是读体中断（超时、连接断开），属于瞬时失败，调用方用 `?` 原样返回。
-/// 内层 `Err` 是确定性失败的文案：非 2xx 写成 `API error (HTTP <code>): <body>`
+/// 外层 `Err` 是瞬时失败：HTTP 408（服务端超时）或读体中断（超时、连接断开），调用方
+/// 用 `?` 原样返回。
+/// 内层 `Err` 是确定性失败的文案：其余非 2xx 写成 `API error (HTTP <code>): <body>`
 /// （前端按其中的状态码判断要不要沿用上次的读数），或响应不是预期的 JSON。
 /// 先 `bytes()` 再解析：reqwest 的 `json()` 把读体错误也包成 decode 错误，两者分不开。
 pub async fn read_json<T: serde::de::DeserializeOwned>(
     resp: reqwest::Response,
 ) -> Result<Result<T, String>, String> {
     let status = resp.status();
+    if status == reqwest::StatusCode::REQUEST_TIMEOUT {
+        return Err(format!("Transient HTTP failure (HTTP {status})"));
+    }
     if !status.is_success() {
         let body = resp.text().await.unwrap_or_default();
         return Ok(Err(format!("API error (HTTP {status}): {body}")));

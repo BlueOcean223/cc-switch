@@ -64,8 +64,14 @@ describe("isTransientUsageError", () => {
     expect(
       isTransientUsageError(fail("API error (HTTP 429): rate limited")),
     ).toBe(true);
+    expect(isTransientUsageError(fail("HTTP 429 Too Many Requests : x"))).toBe(
+      true,
+    );
+    // 408 是服务端超时，与后端 read_json 一致归瞬时
     expect(
-      isTransientUsageError(fail("HTTP 429 Too Many Requests : x")),
+      isTransientUsageError(
+        fail("Transient HTTP failure (HTTP 408 Request Timeout)"),
+      ),
     ).toBe(true);
     expect(
       isTransientUsageError(fail("Authentication failed (HTTP 403)")),

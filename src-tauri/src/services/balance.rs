@@ -297,8 +297,9 @@ fn openrouter_key_usage(key: &serde_json::Value) -> UsageResult {
             total: Some(limit),
             used: Some(limit - remaining),
             unit: Some("USD".to_string()),
-            is_valid: Some(remaining > 0.0),
-            invalid_message: (remaining <= 0.0).then(|| "Key spending limit reached".to_string()),
+            // 额度用完不是 Key 失效：is_valid 留给鉴权失败，remaining 为 0 由界面显示「已用完」
+            is_valid: Some(true),
+            invalid_message: None,
             extra: key
                 .get("limit_reset")
                 .and_then(|v| v.as_str())
@@ -376,8 +377,9 @@ fn novita_balance(body: &serde_json::Value) -> UsageResult {
             total: None,
             used: None,
             unit: Some("USD".to_string()),
-            is_valid: Some(available > 0.0),
-            invalid_message: (available <= 0.0).then(|| "No balance remaining".to_string()),
+            // 余额用完不是 Key 失效：is_valid 留给鉴权失败，remaining 为 0 由界面显示「已用完」
+            is_valid: Some(true),
+            invalid_message: None,
             extra,
         }]),
         error: None,
@@ -489,8 +491,9 @@ fn minimax_balance(body: &serde_json::Value, plan_name: &str, unit: &str) -> Usa
             total: None,
             used: None,
             unit: Some(unit.to_string()),
-            is_valid: Some(available > 0.0),
-            invalid_message: (available <= 0.0).then(|| "No balance remaining".to_string()),
+            // 余额用完不是 Key 失效：is_valid 留给鉴权失败，remaining 为 0 由界面显示「已用完」
+            is_valid: Some(true),
+            invalid_message: None,
             extra,
         }]),
         error: None,
@@ -633,9 +636,29 @@ mod tests {
         assert_eq!(data.is_valid, Some(true));
         assert_eq!(data.extra.as_deref(), Some("Key limit resets monthly"));
 
+        // 额度用完：Key 仍有效，remaining 为 0（界面显示「已用完」而不是「套餐已过期」）
         let spent = serde_json::json!({ "limit": 10, "limit_remaining": 0, "usage": 10 });
         let data = &openrouter_key_usage(&spent).data.unwrap()[0];
-        assert_eq!(data.is_valid, Some(false));
+        assert_eq!(data.is_valid, Some(true));
+        assert_eq!(data.remaining, Some(0.0));
+    }
+
+    #[test]
+    fn a_zero_balance_keeps_the_key_valid() {
+        let novita = novita_balance(&serde_json::json!({
+            "availableBalance": "0", "cashBalance": "0", "creditLimit": "0"
+        }));
+        let minimax = minimax_balance(
+            &serde_json::json!({ "available_amount": "0.00", "cash_balance": "0.00" }),
+            "MiniMax",
+            "CNY",
+        );
+        for result in [novita, minimax] {
+            let data = &result.data.unwrap()[0];
+            assert_eq!(data.is_valid, Some(true));
+            assert_eq!(data.remaining, Some(0.0));
+            assert_eq!(data.invalid_message, None);
+        }
     }
 
     #[test]

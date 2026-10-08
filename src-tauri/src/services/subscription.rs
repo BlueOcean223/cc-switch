@@ -159,8 +159,9 @@ const CLAUDE_KEYCHAIN_SERVICE: &str = "Claude Code-credentials";
 ///
 /// Claude Code（2.1.284 `wN("-credentials")`）在设了 `CLAUDE_CONFIG_DIR` 时给服务名加
 /// `-` + sha256(该环境变量原文) 的前 8 位十六进制，没设时不加后缀。cc-switch 拿不到
-/// Claude 进程的环境变量，只能按覆盖目录推：shell 展开 `~` 后的路径，以及带末尾
-/// `/` 的写法；覆盖目录就是默认的 `~/.claude` 时环境变量多半没设，再试无后缀的名字。
+/// Claude 进程的环境变量，只能按覆盖目录推：shell 展开 `~` 后去掉末尾 `/` 的路径，
+/// 以及带末尾 `/` 的写法；最后总是再试无后缀的名字（覆盖目录写法和环境变量原文稍有
+/// 不同、或 Claude 启动时没设环境变量，都只能靠它读到）。
 /// 没设覆盖目录时反过来，先试无后缀，再试显式设成默认目录的情况。
 #[cfg(any(target_os = "macos", test))]
 fn claude_keychain_services(
@@ -176,10 +177,15 @@ fn claude_keychain_services(
         None => vec![CLAUDE_KEYCHAIN_SERVICE.to_string(), hashed(&default)],
         Some(dir) => {
             let dir = dir.to_string_lossy();
-            let mut services = vec![hashed(&dir), hashed(&format!("{dir}/"))];
-            if dir == default {
-                services.push(CLAUDE_KEYCHAIN_SERVICE.to_string());
+            let dir = match dir.trim_end_matches('/') {
+                "" => "/",
+                trimmed => trimmed,
+            };
+            let mut services = vec![hashed(dir)];
+            if dir != "/" {
+                services.push(hashed(&format!("{dir}/")));
             }
+            services.push(CLAUDE_KEYCHAIN_SERVICE.to_string());
             services
         }
     }
@@ -934,8 +940,9 @@ fn unix_ts_to_iso(ts: i64) -> Option<String> {
 
 #[derive(Deserialize)]
 struct CodexResetCreditsResponse {
+    /// `Option`：`#[serde(default)]` 只管字段缺失，显式的 `null` 会让整个响应解析失败。
     #[serde(default)]
-    credits: Vec<CodexResetCreditEntry>,
+    credits: Option<Vec<CodexResetCreditEntry>>,
 }
 
 #[derive(Deserialize)]
@@ -954,6 +961,7 @@ fn parse_codex_reset_credits(
     let mut expiries: Vec<Option<chrono::DateTime<chrono::Utc>>> = body
         .credits
         .into_iter()
+        .flatten()
         .filter(|credit| credit.status.as_deref() == Some("available"))
         .filter_map(|credit| match credit.expires_at {
             None => Some(None),
@@ -1026,6 +1034,32 @@ pub(crate) async fn query_codex_quota(
     Ok(quota)
 }
 
+/// 401 和 403 的分类，规则同 [`claude_http_error`]：401 和带 JSON 错误体（OpenAI 的
+/// `{"error":…}` 或 ChatGPT 的 `{"detail":…}`）的 403 是登录失效；HTML 或空体的 403
+/// 是 Cloudflare 拦截，按限流处理，前端当瞬时失败，沿用上次成功的读数。
+fn codex_auth_error(
+    status: reqwest::StatusCode,
+    body: &[u8],
+    tool_label: &str,
+    expired_message: &str,
+) -> SubscriptionQuota {
+    let json_error = serde_json::from_slice::<serde_json::Value>(body)
+        .ok()
+        .is_some_and(|v| v.get("error").is_some() || v.get("detail").is_some());
+    if status == reqwest::StatusCode::FORBIDDEN && !json_error {
+        return SubscriptionQuota::error(
+            tool_label,
+            CredentialStatus::Valid,
+            format!("Rate limited (HTTP {status})"),
+        );
+    }
+    SubscriptionQuota::error(
+        tool_label,
+        CredentialStatus::Expired,
+        format!("{expired_message} (HTTP {status})"),
+    )
+}
+
 async fn query_codex_usage(
     access_token: &str,
     account_id: Option<&str>,
@@ -1052,11 +1086,8 @@ async fn query_codex_usage(
 
     let status = resp.status();
     if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
-        return Ok(SubscriptionQuota::error(
-            tool_label,
-            CredentialStatus::Expired,
-            format!("{expired_message} (HTTP {status})"),
-        ));
+        let body = resp.bytes().await.unwrap_or_default();
+        return Ok(codex_auth_error(status, &body, tool_label, expired_message));
     }
 
     let body: CodexUsageResponse = match read_json(resp).await? {
@@ -1291,11 +1322,20 @@ const GEMINI_OAUTH_CLIENT_ID: &str =
     "681255809395-oo8ft2oprdrnp9e3aqf6av3hmdib135j.apps.googleusercontent.com";
 const GEMINI_OAUTH_CLIENT_SECRET: &str = "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";
 
+/// Gemini access token 刷新失败的原因。
+#[derive(Debug, PartialEq)]
+enum GeminiRefreshError {
+    /// Google 拒绝了 refresh_token（撤销授权、过期）：要重新登录。
+    Rejected,
+    /// 网络、超时、限流、5xx：稍后重试即可，不能报成过期。
+    Transient(String),
+}
+
 /// 使用 refresh_token 刷新 Gemini access token
 ///
 /// Google OAuth access_token 仅有 ~1h 有效期，需要定期用 refresh_token 刷新。
 /// refresh_token 本身不过期（除非用户撤销授权）。
-async fn refresh_gemini_token(refresh_token: &str) -> Option<String> {
+async fn refresh_gemini_token(refresh_token: &str) -> Result<String, GeminiRefreshError> {
     let client = crate::http_client::get();
 
     let resp = client
@@ -1309,14 +1349,43 @@ async fn refresh_gemini_token(refresh_token: &str) -> Option<String> {
         .timeout(std::time::Duration::from_secs(15))
         .send()
         .await
-        .ok()?;
+        .map_err(|e| GeminiRefreshError::Transient(format!("Network error: {e}")))?;
 
-    if !resp.status().is_success() {
-        return None;
+    let status = resp.status();
+    let body = if status.is_success() {
+        Some(resp.json::<serde_json::Value>().await.map_err(|e| {
+            GeminiRefreshError::Transient(format!("Failed to read token response: {e}"))
+        })?)
+    } else {
+        None
+    };
+    classify_gemini_refresh(status, body)
+}
+
+/// 刷新响应 → 新 token 或失败原因：5xx、408、429 是瞬时的，其余 4xx（`invalid_grant`
+/// 是 400）说明 refresh_token 不能用了。
+fn classify_gemini_refresh(
+    status: reqwest::StatusCode,
+    body: Option<serde_json::Value>,
+) -> Result<String, GeminiRefreshError> {
+    if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
+        return Err(GeminiRefreshError::Transient(format!(
+            "Rate limited (HTTP {status}) while refreshing the Gemini token"
+        )));
     }
-
-    let body: serde_json::Value = resp.json().await.ok()?;
-    body.get("access_token")?.as_str().map(String::from)
+    if status.is_server_error() || status == reqwest::StatusCode::REQUEST_TIMEOUT {
+        return Err(GeminiRefreshError::Transient(format!(
+            "Gemini token refresh failed (HTTP {status})"
+        )));
+    }
+    if !status.is_success() {
+        return Err(GeminiRefreshError::Rejected);
+    }
+    body.as_ref()
+        .and_then(|body| body.get("access_token"))
+        .and_then(serde_json::Value::as_str)
+        .map(String::from)
+        .ok_or(GeminiRefreshError::Rejected)
 }
 
 // ── Gemini API 查询 ──────────────────────────────────────
@@ -1329,8 +1398,9 @@ struct GeminiLoadCodeAssistResponse {
     /// 没有时账号还没在 gemini-cli 里完成初始化（onboard）
     #[serde(rename = "currentTier")]
     current_tier: Option<serde_json::Value>,
+    /// `Option`：`#[serde(default)]` 只管字段缺失，显式的 `null` 会让整个响应解析失败。
     #[serde(rename = "ineligibleTiers", default)]
-    ineligible_tiers: Vec<GeminiIneligibleTier>,
+    ineligible_tiers: Option<Vec<GeminiIneligibleTier>>,
 }
 
 #[derive(Deserialize)]
@@ -1427,6 +1497,7 @@ fn gemini_missing_project_message(load: &GeminiLoadCodeAssistResponse) -> String
     let reasons: Vec<&str> = load
         .ineligible_tiers
         .iter()
+        .flatten()
         .filter_map(|tier| tier.reason_message.as_deref())
         .filter(|reason| !reason.is_empty())
         .collect();
@@ -1728,17 +1799,27 @@ pub async fn get_subscription_quota(tool: &str) -> Result<SubscriptionQuota, Str
                 )),
                 CredentialStatus::Expired | CredentialStatus::RefreshPending => {
                     // Gemini access_token 仅 ~1h 有效，尝试用 refresh_token 刷新
+                    let mut transient = None;
                     if let Some(ref rt) = refresh_token {
-                        if let Some(new_token) = refresh_gemini_token(rt).await {
-                            return query_gemini_quota(&new_token).await;
+                        match refresh_gemini_token(rt).await {
+                            Ok(new_token) => return query_gemini_quota(&new_token).await,
+                            Err(GeminiRefreshError::Transient(error)) => transient = Some(error),
+                            Err(GeminiRefreshError::Rejected) => {}
                         }
                     }
-                    // 刷新失败，尝试用旧 token
+                    // 刷新失败，尝试用旧 token；只有接口也拒绝了它才报过期，限流、5xx 原样
+                    // 返回，同 Claude 分支。
                     if let Some(ref token) = token {
                         let result = query_gemini_quota(token).await?;
-                        if result.success {
+                        if result.success
+                            || !matches!(result.credential_status, CredentialStatus::Expired)
+                        {
                             return Ok(result);
                         }
+                    }
+                    // 刷新只是暂时失败（网络、5xx）：按瞬时失败传播，前端保留上次的读数
+                    if let Some(error) = transient {
+                        return Err(error);
                     }
                     Ok(SubscriptionQuota::error(
                         "gemini",
@@ -1785,9 +1866,21 @@ mod tests {
             claude_keychain_services(Some(std::path::Path::new("/Users/x/claude-work")), default),
             vec![
                 "Claude Code-credentials-8e8c5344",
-                "Claude Code-credentials-8ac017c5"
+                "Claude Code-credentials-8ac017c5",
+                "Claude Code-credentials"
             ]
         );
+        // 末尾带 `/` 的覆盖目录和不带的得到同样的候选
+        for dir in ["/Users/x/.claude", "/Users/x/.claude/"] {
+            assert_eq!(
+                claude_keychain_services(Some(std::path::Path::new(dir)), default),
+                vec![
+                    "Claude Code-credentials-c72cc1ce",
+                    "Claude Code-credentials-95d5ea82",
+                    "Claude Code-credentials"
+                ]
+            );
+        }
         assert_eq!(
             claude_keychain_services(Some(default), default),
             vec![
@@ -1825,6 +1918,10 @@ mod tests {
             .unwrap()
             .starts_with("2026-10-20"));
         assert_eq!(credits.expires_at[2], None);
+
+        let none = parse_codex_reset_credits(br#"{"available_count":0,"credits":null}"#, now)
+            .expect("a null credits list still parses");
+        assert!(none.expires_at.is_empty());
     }
 
     #[test]
@@ -2000,6 +2097,32 @@ mod tests {
         let recent = chrono::Utc::now().to_rfc3339();
         let (_, _, status, _) = parse_codex_credentials_json(&codex_auth_json(None, "rt", &recent));
         assert!(matches!(status, CredentialStatus::Valid));
+    }
+
+    #[test]
+    fn codex_403_is_expired_only_with_a_json_error_body() {
+        use reqwest::StatusCode;
+        let expired = |status, body: &[u8]| {
+            let q = codex_auth_error(status, body, "codex", "Login expired");
+            (
+                matches!(q.credential_status, CredentialStatus::Expired),
+                q.error.unwrap(),
+            )
+        };
+        assert!(expired(StatusCode::UNAUTHORIZED, b"").0);
+        assert!(expired(StatusCode::FORBIDDEN, br#"{"detail":"Unauthorized"}"#).0);
+        assert!(
+            expired(
+                StatusCode::FORBIDDEN,
+                br#"{"error":{"message":"bad token","code":"token_invalid"}}"#
+            )
+            .0
+        );
+        for body in [&b"<html>Just a moment...</html>"[..], b""] {
+            let (is_expired, error) = expired(StatusCode::FORBIDDEN, body);
+            assert!(!is_expired);
+            assert_eq!(error, "Rate limited (HTTP 403 Forbidden)");
+        }
     }
 
     #[test]
@@ -2215,6 +2338,36 @@ mod tests {
     }
 
     #[test]
+    fn gemini_refresh_failures_are_transient_unless_google_rejects_the_token() {
+        use reqwest::StatusCode;
+        let transient = |status| {
+            matches!(
+                classify_gemini_refresh(status, None),
+                Err(GeminiRefreshError::Transient(_))
+            )
+        };
+        assert!(transient(StatusCode::SERVICE_UNAVAILABLE));
+        assert!(transient(StatusCode::INTERNAL_SERVER_ERROR));
+        assert!(transient(StatusCode::TOO_MANY_REQUESTS));
+        assert!(transient(StatusCode::REQUEST_TIMEOUT));
+        assert_eq!(
+            classify_gemini_refresh(StatusCode::BAD_REQUEST, None),
+            Err(GeminiRefreshError::Rejected)
+        );
+        assert_eq!(
+            classify_gemini_refresh(StatusCode::UNAUTHORIZED, None),
+            Err(GeminiRefreshError::Rejected)
+        );
+        assert_eq!(
+            classify_gemini_refresh(
+                StatusCode::OK,
+                Some(serde_json::json!({"access_token": "new"}))
+            ),
+            Ok("new".to_string())
+        );
+    }
+
+    #[test]
     fn gemini_missing_project_message_matches_gemini_cli_errors() {
         let load = |body: serde_json::Value| -> GeminiLoadCodeAssistResponse {
             serde_json::from_value(body).unwrap()
@@ -2230,6 +2383,13 @@ mod tests {
         );
         assert!(gemini_missing_project_message(&load(serde_json::json!({
             "currentTier": {"id": "standard-tier"}
+        })))
+        .starts_with("This account requires setting GOOGLE_CLOUD_PROJECT"));
+        // 显式的 null 不能让整个响应解析失败
+        assert!(gemini_missing_project_message(&load(serde_json::json!({
+            "currentTier": {"id": "standard-tier"},
+            "paidTier": null,
+            "ineligibleTiers": null
         })))
         .starts_with("This account requires setting GOOGLE_CLOUD_PROJECT"));
         assert_eq!(extract_project_id(&serde_json::json!("")), None);

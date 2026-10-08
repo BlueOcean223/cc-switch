@@ -352,10 +352,12 @@ pub(crate) async fn get_grok_subscription_quota() -> Result<SubscriptionQuota, S
             message.unwrap_or_else(|| "Failed to parse Grok credentials".to_string()),
         )),
         CredentialStatus::Expired | CredentialStatus::RefreshPending => {
-            // 即使过期也尝试调用 API（时钟偏差时 token 可能仍有效）
+            // 即使过期也尝试调用 API（时钟偏差时 token 可能仍有效）。只有接口也拒绝了
+            // 这个 token 才报过期；5xx 等失败原样返回，前端才能按瞬时失败处理。
             if let Some(ref auth) = auth {
                 let result = query_grok_quota(auth).await?;
-                if result.success {
+                if result.success || !matches!(result.credential_status, CredentialStatus::Expired)
+                {
                     return Ok(result);
                 }
             }
