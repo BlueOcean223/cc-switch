@@ -241,13 +241,10 @@ fn backend_tool_blocks(value: &Value, span: JsonlSpan) -> Vec<SessionBlock> {
         || Some(span.content_ref("/kind")),
     )];
 
-    let sources: Vec<&str> = kind
+    let sources = kind
         .pointer("/action/sources")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(|source| source.get("url").and_then(Value::as_str))
-        .collect();
+        .map(web_search_sources_text)
+        .unwrap_or_default();
     let status = match kind.get("status").and_then(Value::as_str) {
         Some("completed") => Some(ToolStatus::Success),
         Some("failed") => Some(ToolStatus::Error),
@@ -257,11 +254,25 @@ fn backend_tool_blocks(value: &Value, span: JsonlSpan) -> Vec<SessionBlock> {
         blocks.push(tool_result_block(
             id,
             status.unwrap_or(ToolStatus::Unknown),
-            &sources.join("\n"),
-            || Some(span.content_ref("/kind/action/sources")),
+            &sources,
+            || Some(span.content_ref(WEB_SEARCH_SOURCES_POINTER)),
         ));
     }
     blocks
+}
+
+/// web_search 结果的引用位置；展开全文时按 [`web_search_sources_text`] 拼成网址列表。
+pub(crate) const WEB_SEARCH_SOURCES_POINTER: &str = "/kind/action/sources";
+
+/// web_search 的 `sources`（`[{type:"url", url}]`）→ 每行一个网址。
+pub(crate) fn web_search_sources_text(sources: &Value) -> String {
+    sources
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|source| source.get("url").and_then(Value::as_str))
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// content part 数组里的图片（`{type:"image", url}`，url 是 data URL 或本地路径）
@@ -314,6 +325,8 @@ pub fn delete_session(root: &Path, path: &Path, session_id: &str) -> Result<bool
             session_dir.display()
         ));
     }
+    // 子代理会话在列表里隐藏，只能跟着父会话删；先删子会话，再删父会话目录
+    delete_subagent_sessions(root, session_dir);
     std::fs::remove_dir_all(session_dir).map_err(|e| {
         format!(
             "Failed to delete Grok Build session directory {}: {e}",
@@ -321,6 +334,65 @@ pub fn delete_session(root: &Path, path: &Path, session_id: &str) -> Result<bool
         )
     })?;
     Ok(true)
+}
+
+/// 会话 `updates.jsonl` 里记下的子代理会话 id（`params.update.child_session_id`）。
+fn child_session_ids(session_dir: &Path) -> Vec<String> {
+    let mut ids = Vec::new();
+    let _ = for_each_jsonl_value(&session_dir.join("updates.jsonl"), |_, value| {
+        if let Some(id) = value
+            .pointer("/params/update/child_session_id")
+            .and_then(Value::as_str)
+        {
+            if !ids.iter().any(|known| known == id) {
+                ids.push(id.to_string());
+            }
+        }
+        Ok(())
+    });
+    ids
+}
+
+/// 会话 id 只由字母、数字和 `-` 组成（grok-build 用 UUID），拼路径前检查。
+fn is_safe_session_id(id: &str) -> bool {
+    !id.is_empty() && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+}
+
+/// 在 `root` 的各个项目目录下找子代理会话的目录：子代理的 cwd 可能和父会话不同，
+/// 不一定在同一个项目目录里。只认 summary 里 id 相同、`session_kind` 是 subagent 的。
+fn find_subagent_dir(root: &Path, id: &str) -> Option<PathBuf> {
+    std::fs::read_dir(root).ok()?.flatten().find_map(|project| {
+        let dir = project.path().join(id);
+        let summary = read_summary(&dir.join("summary.json")).ok()?;
+        let is_subagent = summary
+            .session_kind
+            .as_deref()
+            .is_some_and(|kind| kind.starts_with("subagent"));
+        (summary.info.id == id && is_subagent).then_some(dir)
+    })
+}
+
+/// 删掉 `session_dir` 记下的子代理会话，子代理自己的子代理也一起删。删不掉的只记日志：
+/// 不影响删除父会话。
+fn delete_subagent_sessions(root: &Path, session_dir: &Path) {
+    let mut pending = child_session_ids(session_dir);
+    let mut seen: Vec<String> = Vec::new();
+    while let Some(id) = pending.pop() {
+        if seen.contains(&id) || !is_safe_session_id(&id) {
+            continue;
+        }
+        seen.push(id.clone());
+        let Some(dir) = find_subagent_dir(root, &id) else {
+            continue;
+        };
+        pending.extend(child_session_ids(&dir));
+        if let Err(e) = std::fs::remove_dir_all(&dir) {
+            log::warn!(
+                "Failed to delete Grok Build subagent session {}: {e}",
+                dir.display()
+            );
+        }
+    }
 }
 
 fn read_summary(path: &Path) -> Result<GrokSessionSummary, String> {
@@ -451,6 +523,54 @@ mod tests {
         assert!(deleted);
         assert!(!session_dir.exists());
         assert!(sibling_dir.exists());
+    }
+
+    #[test]
+    fn delete_session_also_deletes_its_subagent_sessions() {
+        let temp = tempdir().expect("tempdir");
+        let root = temp.path().join("sessions");
+        let session = |project: &str, id: &str, kind: Option<&str>, children: &[&str]| {
+            let dir = root.join(project).join(id);
+            std::fs::create_dir_all(&dir).expect("create session dir");
+            let kind = kind
+                .map(|k| format!(r#","session_kind":"{k}""#))
+                .unwrap_or_default();
+            std::fs::write(
+                dir.join("summary.json"),
+                format!(r#"{{"info":{{"id":"{id}"}}{kind}}}"#),
+            )
+            .expect("write summary");
+            let updates: String = children
+                .iter()
+                .map(|c| {
+                    format!("{{\"params\":{{\"update\":{{\"child_session_id\":\"{c}\"}}}}}}\n")
+                })
+                .collect();
+            std::fs::write(dir.join("updates.jsonl"), updates).expect("write updates");
+            dir
+        };
+        let parent = session("p1", "parent", None, &["child-a", "child-b", "../p1"]);
+        // 子代理在另一个项目目录，还有自己的子代理
+        let child_a = session("p1", "child-a", Some("subagent"), &[]);
+        let child_b = session("p2", "child-b", Some("subagent"), &["grandchild"]);
+        let grandchild = session("p2", "grandchild", Some("subagent"), &[]);
+        // 被列为子会话但不是子代理的会话不删
+        let unrelated = session("p1", "other", None, &[]);
+        std::fs::write(
+            parent.join("updates.jsonl"),
+            std::fs::read_to_string(parent.join("updates.jsonl")).unwrap()
+                + "{\"params\":{\"update\":{\"child_session_id\":\"other\"}}}\n",
+        )
+        .unwrap();
+
+        delete_session(&root, &parent.join("summary.json"), "parent").expect("delete");
+
+        assert!(!parent.exists());
+        assert!(!child_a.exists());
+        assert!(!child_b.exists());
+        assert!(!grandchild.exists());
+        assert!(unrelated.exists());
+        assert!(root.join("p1").exists());
     }
 
     #[test]

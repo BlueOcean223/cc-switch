@@ -63,18 +63,64 @@ fn strip_gateway_metadata(text: &str) -> String {
     if !text.to_ascii_lowercase().contains("[message_id:") {
         return text.to_string();
     }
-    let mut in_fence = false;
-    text.replace("\r\n", "\n")
-        .split('\n')
-        .filter(|line| {
-            let trimmed = line.trim_start();
-            if trimmed.starts_with("```") || trimmed.starts_with("~~~") {
-                in_fence = !in_fence;
-            }
-            in_fence || !MESSAGE_ID_LINE_RE.is_match(line)
+    // 每行连同自己的换行符（`\n` 或 `\r\n`）一起处理，原样保留换行
+    let lines: Vec<(&str, &str)> = text
+        .split_inclusive('\n')
+        .map(|piece| {
+            let content = piece.trim_end_matches(['\r', '\n']);
+            (content, &piece[content.len()..])
         })
-        .collect::<Vec<_>>()
-        .join("\n")
+        .collect();
+    let tail_ending = lines.last().map_or("", |(_, ending)| *ending);
+    let mut open_fence: Option<(u8, usize)> = None;
+    let kept: Vec<(&str, &str)> = lines
+        .into_iter()
+        .filter(|(line, _)| match open_fence {
+            Some((ch, len)) => {
+                if fence_of(line)
+                    .is_some_and(|(c, n, info)| c == ch && n >= len && info.trim().is_empty())
+                {
+                    open_fence = None;
+                }
+                true
+            }
+            None => {
+                if let Some((ch, len, _)) = fence_of(line) {
+                    open_fence = Some((ch, len));
+                    return true;
+                }
+                !MESSAGE_ID_LINE_RE.is_match(line)
+            }
+        })
+        .collect();
+    // 删掉的是最后几行时，结尾换行跟原文一致
+    let mut out = String::with_capacity(text.len());
+    for (i, (line, ending)) in kept.iter().enumerate() {
+        out.push_str(line);
+        out.push_str(if i + 1 == kept.len() {
+            tail_ending
+        } else {
+            ending
+        });
+    }
+    out
+}
+
+/// 代码块围栏（CommonMark）：最多缩进 3 个空格，3 个以上的 ` 或 ~，返回字符、长度和
+/// 后面的信息串。反引号围栏的信息串里不能再有反引号。结束围栏要用同一种字符、不短于
+/// 开头的，后面只能有空白。
+fn fence_of(line: &str) -> Option<(u8, usize, &str)> {
+    let rest = line.trim_start_matches(' ');
+    if line.len() - rest.len() > 3 {
+        return None;
+    }
+    let ch = *rest
+        .as_bytes()
+        .first()
+        .filter(|b| matches!(b, b'`' | b'~'))?;
+    let len = rest.bytes().take_while(|b| *b == ch).count();
+    let info = &rest[len..];
+    (len >= 3 && !(ch == b'`' && info.contains('`'))).then_some((ch, len, info))
 }
 
 pub fn scan_sessions() -> Vec<SessionMeta> {
@@ -406,6 +452,23 @@ mod tests {
         );
         let fenced = "```\n[message_id: literal]\n```";
         assert_eq!(strip_gateway_metadata(fenced), fenced);
+        // 长围栏里的短围栏不算结束；信息串不同的同长围栏也不算
+        let nested = "````md\n```\n[message_id: literal]\n```\n[message_id: still inside]\n````\n[message_id: x]";
+        assert_eq!(
+            strip_gateway_metadata(nested),
+            "````md\n```\n[message_id: literal]\n```\n[message_id: still inside]\n````"
+        );
+        let tilde = "~~~\n```\n[message_id: literal]\n~~~ not a close\n~~~";
+        assert_eq!(strip_gateway_metadata(tilde), tilde);
+        // CRLF 原样保留，结尾换行跟原文一致
+        assert_eq!(
+            strip_gateway_metadata("a\r\n[message_id: x]\r\nb\r\n"),
+            "a\r\nb\r\n"
+        );
+        assert_eq!(
+            strip_gateway_metadata("a\r\nb\r\n[message_id: x]"),
+            "a\r\nb"
+        );
     }
 
     #[test]

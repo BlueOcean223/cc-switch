@@ -212,6 +212,15 @@ pub fn resolve_content_ref(
                     return Ok(text);
                 }
             }
+            if source.provider_id == "grokbuild"
+                && pointer == super::providers::grokbuild::WEB_SEARCH_SOURCES_POINTER
+            {
+                if let Some(sources) = value.pointer(pointer) {
+                    return Ok(super::providers::grokbuild::web_search_sources_text(
+                        sources,
+                    ));
+                }
+            }
             extract_text(&value, pointer)
         }
         ContentRef::Sqlite {
@@ -815,7 +824,7 @@ mod tests {
         ];
         std::fs::write(
             dir.join(GROK_CHAT_HISTORY),
-            lines.map(|l| format!("{l}\n")).concat(),
+            lines.iter().map(|l| format!("{l}\n")).collect::<String>(),
         )
         .unwrap();
 
@@ -831,6 +840,39 @@ mod tests {
         let mut source = file_source(root.path(), &summary);
         source.provider_id = "grokbuild".into();
         assert_eq!(resolve_content_ref(&source, &full).unwrap(), output);
+
+        // web_search 的来源展开后是网址列表，不是 JSON
+        let urls: Vec<String> = (0..30)
+            .map(|i| format!("https://example.com/{i}"))
+            .collect();
+        let search = json!({ "type": "backend_tool_call", "kind": {
+            "tool_type": "web_search", "id": "ws", "status": "completed",
+            "action": { "type": "search", "query": "q",
+                "sources": urls.iter().map(|u| json!({ "type": "url", "url": u })).collect::<Vec<_>>() }
+        }});
+        std::fs::write(
+            dir.join(GROK_CHAT_HISTORY),
+            lines
+                .iter()
+                .chain([&search])
+                .map(|l| format!("{l}\n"))
+                .collect::<String>(),
+        )
+        .unwrap();
+        let sources_ref = grokbuild::load_messages(&summary)
+            .unwrap()
+            .iter()
+            .flat_map(|m| &m.blocks)
+            .filter_map(|b| match b {
+                SessionBlock::ToolResult { call_id, full, .. } if call_id == "ws" => full.clone(),
+                _ => None,
+            })
+            .next()
+            .expect("长来源列表应带引用");
+        assert_eq!(
+            resolve_content_ref(&source, &sources_ref).unwrap(),
+            urls.join("\n")
+        );
 
         // 源不是 summary.json 时不改读别的文件
         let mut other = file_source(root.path(), &dir.join(GROK_CHAT_HISTORY));
