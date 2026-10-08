@@ -452,8 +452,9 @@ mod tests {
         assert_eq!(record.upstream_user_version, Some(19));
 
         let data = &fx.paths.data_dir;
-        let conn = Connection::open(data.join(DB_FILE_NAME)).unwrap();
-        let name: String = conn
+        // 查完就关闭连接：Windows 上打开着的文件删不掉，后面要删数据库
+        let name: String = Connection::open(data.join(DB_FILE_NAME))
+            .unwrap()
             .query_row("SELECT name FROM providers", [], |row| row.get(0))
             .unwrap();
         assert_eq!(name, "Upstream Provider");
