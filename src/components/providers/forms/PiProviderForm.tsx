@@ -45,6 +45,7 @@ import { StructuredOptionsEditor } from "./StructuredOptionsEditor";
 import { ApiKeySection, EndpointField, ModelDropdown } from "./shared";
 import { normalizeRequestHeaders } from "./helpers/requestHeaders";
 import {
+  piConfiguredBaseUrl,
   piProviderPresets,
   type PiApiFormat,
   type PiProviderPreset,
@@ -503,7 +504,7 @@ export function PiProviderForm({
   );
   const initialPreset = useMemo(() => {
     if (!providerId) return null;
-    if (isEdit && !optionalText(initialConfig.baseUrl)) {
+    if (isEdit && !piConfiguredBaseUrl(initialConfig)) {
       const builtInPreset = piProviderPresets.find(
         (candidate) => candidate.piBuiltIn?.provider === providerId,
       );
@@ -520,7 +521,7 @@ export function PiProviderForm({
       optionalText(initialConfig.api) === preset.settingsConfig.api
       ? preset
       : null;
-  }, [initialConfig.api, initialConfig.baseUrl, isEdit, providerId]);
+  }, [initialConfig, isEdit, providerId]);
   const [selectedPreset, setSelectedPreset] = useState<PiProviderPreset | null>(
     initialPreset,
   );

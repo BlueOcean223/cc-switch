@@ -237,7 +237,7 @@ export const openclawProviderPresets: OpenClawProviderPreset[] = [
     planKey: "coding",
     regionKey: "cn",
     websiteUrl: "https://www.kimi.com/code/",
-    apiKeyUrl: "https://platform.kimi.com/console/api-keys",
+    apiKeyUrl: "https://www.kimi.com/code/console",
     settingsConfig: {
       baseUrl: "https://api.kimi.com/coding/v1",
       apiKey: "",
@@ -598,7 +598,7 @@ export const openclawProviderPresets: OpenClawProviderPreset[] = [
     family: "siliconflow",
     regionKey: "intl",
     websiteUrl: "https://siliconflow.com",
-    apiKeyUrl: "https://cloud.siliconflow.cn/account/ak",
+    apiKeyUrl: "https://cloud.siliconflow.com/account/ak",
     settingsConfig: {
       baseUrl: "https://api.siliconflow.com/v1",
       apiKey: "",
@@ -2090,16 +2090,19 @@ export const openclawProviderPresets: OpenClawProviderPreset[] = [
     websiteUrl: "https://console.streamlake.ai",
     apiKeyUrl: "https://console.streamlake.ai/console/api-key",
     settingsConfig: {
-      baseUrl:
-        "https://vanchin.streamlake.ai/api/gateway/v1/endpoints/${ENDPOINT_ID}/openai",
+      baseUrl: "https://vanchin.streamlake.ai/api/gateway/v1/endpoints",
       apiKey: "",
       api: "openai-completions",
+      // 按量付费的 OpenAI 协议地址，模型 ID 写在请求里；上下文 256K、输出 80K 见
+      // https://www.streamlake.ai/document/DOC/mg6k6nlp8j6qxicx4c9 (2026-07-13)
+      // https://www.streamlake.ai/document/DOC/mh1gbfvrdn6hpbzxixv
+      // 价格页没有 V2.5，不写 cost
       models: [
         {
-          id: "KAT-Coder-Pro",
-          name: "KAT-Coder Pro",
-          contextWindow: 128000,
-          cost: { input: 0.3, output: 1.2, cacheRead: 0.06 },
+          id: "kat-coder-pro-v2.5",
+          name: "KAT-Coder Pro V2.5",
+          contextWindow: 256000,
+          maxTokens: 80000,
         },
       ],
     },
@@ -2108,15 +2111,8 @@ export const openclawProviderPresets: OpenClawProviderPreset[] = [
     templateValues: {
       baseUrl: {
         label: "Base URL",
-        placeholder:
-          "https://vanchin.streamlake.ai/api/gateway/v1/endpoints/${ENDPOINT_ID}/openai",
-        defaultValue:
-          "https://vanchin.streamlake.ai/api/gateway/v1/endpoints/${ENDPOINT_ID}/openai",
-        editorValue: "",
-      },
-      ENDPOINT_ID: {
-        label: "Endpoint ID",
-        placeholder: "",
+        placeholder: "https://vanchin.streamlake.ai/api/gateway/v1/endpoints",
+        defaultValue: "https://vanchin.streamlake.ai/api/gateway/v1/endpoints",
         editorValue: "",
       },
       apiKey: {
@@ -2126,8 +2122,8 @@ export const openclawProviderPresets: OpenClawProviderPreset[] = [
       },
     },
     suggestedDefaults: {
-      model: { primary: "katcoder/KAT-Coder-Pro" },
-      modelCatalog: { "katcoder/KAT-Coder-Pro": { alias: "KAT-Coder" } },
+      model: { primary: "katcoder/kat-coder-pro-v2.5" },
+      modelCatalog: { "katcoder/kat-coder-pro-v2.5": { alias: "KAT-Coder" } },
     },
   },
   {

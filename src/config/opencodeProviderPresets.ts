@@ -408,7 +408,7 @@ export const opencodeProviderPresets: OpenCodeProviderPreset[] = [
     planKey: "coding",
     regionKey: "cn",
     websiteUrl: "https://www.kimi.com/code/",
-    apiKeyUrl: "https://platform.kimi.com/console/api-keys",
+    apiKeyUrl: "https://www.kimi.com/code/console",
     settingsConfig: {
       npm: "@ai-sdk/anthropic",
       name: "Kimi For Coding",
@@ -1586,29 +1586,22 @@ export const opencodeProviderPresets: OpenCodeProviderPreset[] = [
       npm: "@ai-sdk/openai-compatible",
       name: "KAT-Coder",
       options: {
-        baseURL:
-          "https://vanchin.streamlake.ai/api/gateway/v1/endpoints/${ENDPOINT_ID}/openai",
+        baseURL: "https://vanchin.streamlake.ai/api/gateway/v1/endpoints",
         apiKey: "",
         setCacheKey: true,
       },
+      // 按量付费的 OpenAI 协议地址，模型 ID 写在请求里
+      // https://www.streamlake.ai/document/DOC/mg6k6nlp8j6qxicx4c9 (2026-07-13)
       models: {
-        "KAT-Coder-Pro": { name: "KAT-Coder Pro" },
+        "kat-coder-pro-v2.5": { name: "KAT-Coder Pro V2.5" },
       },
     },
     category: "cn_official",
     templateValues: {
       baseURL: {
         label: "Base URL",
-        placeholder:
-          "https://vanchin.streamlake.ai/api/gateway/v1/endpoints/${ENDPOINT_ID}/openai",
-        defaultValue:
-          "https://vanchin.streamlake.ai/api/gateway/v1/endpoints/${ENDPOINT_ID}/openai",
-        editorValue: "",
-      },
-      ENDPOINT_ID: {
-        label: "Vanchin Endpoint ID",
-        placeholder: "ep-xxx-xxx",
-        defaultValue: "",
+        placeholder: "https://vanchin.streamlake.ai/api/gateway/v1/endpoints",
+        defaultValue: "https://vanchin.streamlake.ai/api/gateway/v1/endpoints",
         editorValue: "",
       },
       apiKey: {

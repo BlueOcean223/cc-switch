@@ -197,7 +197,7 @@ const piProviderPresetDefinitions: PiProviderPreset[] = [
       baseUrl: "https://api.kimi.com/coding",
     },
     websiteUrl: "https://www.kimi.com/code/",
-    apiKeyUrl: "https://platform.kimi.com/console/api-keys",
+    apiKeyUrl: "https://www.kimi.com/code/console",
     settingsConfig: {
       name: "Kimi For Coding",
       baseUrl: "https://api.kimi.com/coding",
@@ -701,13 +701,14 @@ const piProviderPresetDefinitions: PiProviderPreset[] = [
     apiKeyUrl: "https://console.streamlake.ai/console/api-key",
     settingsConfig: {
       name: "KAT-Coder",
-      baseUrl:
-        "https://vanchin.streamlake.ai/api/gateway/v1/endpoints/${ENDPOINT_ID}/openai",
+      baseUrl: "https://vanchin.streamlake.ai/api/gateway/v1/endpoints",
       api: "openai-completions",
       apiKey: "",
+      // 按量付费的 OpenAI 协议地址，模型 ID 写在请求里
+      // https://www.streamlake.ai/document/DOC/mg6k6nlp8j6qxicx4c9 (2026-07-13)
       models: [
-        piModel("streamlake/kat-coder-pro", {
-          id: "KAT-Coder-Pro",
+        piModel("streamlake/kat-coder-pro-v2.5", {
+          id: "kat-coder-pro-v2.5",
         }),
       ],
     },
@@ -1631,4 +1632,36 @@ export function piBuiltInBaseUrl(providerKey: string): string | undefined {
   return piProviderPresets.find(
     (preset) => preset.piBuiltIn?.provider === providerKey,
   )?.piBuiltIn?.baseUrl;
+}
+
+const nonEmptyString = (value: unknown): string | undefined =>
+  typeof value === "string" && value !== "" ? value : undefined;
+
+/** 条目自己写的地址：供应商级 `baseUrl`，否则第一个写了 `baseUrl` 的模型；空串跳过。 */
+export function piConfiguredBaseUrl(config: unknown): string | undefined {
+  if (!config || typeof config !== "object") return undefined;
+  const { baseUrl, models } = config as { baseUrl?: unknown; models?: unknown };
+  return (
+    nonEmptyString(baseUrl) ??
+    (Array.isArray(models)
+      ? models
+          .map((model) => nonEmptyString(model?.baseUrl))
+          .find((url) => url !== undefined)
+      : undefined)
+  );
+}
+
+/**
+ * Pi 供应商的请求地址，顺序与后端 `pi_config::provider_base_url` 相同：条目自己写的
+ * 地址（见 {@link piConfiguredBaseUrl}），都没有时按内置供应商 ID 查。两边共用
+ * `tests/fixtures/pi-base-url-vectors.json` 里的测试向量。
+ */
+export function piProviderBaseUrl(
+  providerKey: string | undefined,
+  config: unknown,
+): string | undefined {
+  return (
+    piConfiguredBaseUrl(config) ??
+    (providerKey ? piBuiltInBaseUrl(providerKey) : undefined)
+  );
 }

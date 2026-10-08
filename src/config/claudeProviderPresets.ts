@@ -307,7 +307,7 @@ export const providerPresets: ProviderPreset[] = [
     family: "siliconflow",
     regionKey: "intl",
     websiteUrl: "https://siliconflow.com",
-    apiKeyUrl: "https://cloud.siliconflow.cn/account/ak",
+    apiKeyUrl: "https://cloud.siliconflow.com/account/ak",
     settingsConfig: {
       env: {
         ANTHROPIC_BASE_URL: "https://api.siliconflow.com",

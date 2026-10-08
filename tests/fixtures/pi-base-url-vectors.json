@@ -1,0 +1,174 @@
+{
+  "_comment": "Pi provider base URL lookup. Read by src-tauri/src/pi_config/mod.rs and tests/config/piBaseUrl.test.ts; both must give the same result.",
+  "vectors": [
+    {
+      "name": "provider baseUrl first",
+      "providerKey": "deepseek",
+      "config": {
+        "baseUrl": "https://relay.example.com/v1",
+        "models": [
+          {
+            "id": "m",
+            "baseUrl": "https://model.example.com"
+          }
+        ]
+      },
+      "expected": "https://relay.example.com/v1"
+    },
+    {
+      "name": "empty provider baseUrl falls through to a model",
+      "providerKey": "deepseek",
+      "config": {
+        "baseUrl": "",
+        "models": [
+          {
+            "id": "a"
+          },
+          {
+            "id": "b",
+            "baseUrl": ""
+          },
+          {
+            "id": "c",
+            "baseUrl": "https://model.example.com"
+          }
+        ]
+      },
+      "expected": "https://model.example.com"
+    },
+    {
+      "name": "no baseUrl anywhere uses the built-in table",
+      "providerKey": "deepseek",
+      "config": {
+        "apiKey": "k",
+        "models": [
+          {
+            "id": "a",
+            "baseUrl": ""
+          }
+        ]
+      },
+      "expected": "https://api.deepseek.com"
+    },
+    {
+      "name": "unknown provider without baseUrl",
+      "providerKey": "cc-switch-example",
+      "config": {
+        "apiKey": "k"
+      },
+      "expected": null
+    },
+    {
+      "name": "built-in ant-ling",
+      "providerKey": "ant-ling",
+      "config": {
+        "apiKey": "k"
+      },
+      "expected": "https://api.ant-ling.com/v1"
+    },
+    {
+      "name": "built-in deepseek",
+      "providerKey": "deepseek",
+      "config": {
+        "apiKey": "k"
+      },
+      "expected": "https://api.deepseek.com"
+    },
+    {
+      "name": "built-in kimi-coding",
+      "providerKey": "kimi-coding",
+      "config": {
+        "apiKey": "k"
+      },
+      "expected": "https://api.kimi.com/coding"
+    },
+    {
+      "name": "built-in minimax",
+      "providerKey": "minimax",
+      "config": {
+        "apiKey": "k"
+      },
+      "expected": "https://api.minimax.io/anthropic"
+    },
+    {
+      "name": "built-in minimax-cn",
+      "providerKey": "minimax-cn",
+      "config": {
+        "apiKey": "k"
+      },
+      "expected": "https://api.minimaxi.com/anthropic"
+    },
+    {
+      "name": "built-in moonshotai",
+      "providerKey": "moonshotai",
+      "config": {
+        "apiKey": "k"
+      },
+      "expected": "https://api.moonshot.ai/v1"
+    },
+    {
+      "name": "built-in moonshotai-cn",
+      "providerKey": "moonshotai-cn",
+      "config": {
+        "apiKey": "k"
+      },
+      "expected": "https://api.moonshot.cn/v1"
+    },
+    {
+      "name": "built-in nvidia",
+      "providerKey": "nvidia",
+      "config": {
+        "apiKey": "k"
+      },
+      "expected": "https://integrate.api.nvidia.com/v1"
+    },
+    {
+      "name": "built-in opencode-go",
+      "providerKey": "opencode-go",
+      "config": {
+        "apiKey": "k"
+      },
+      "expected": "https://opencode.ai/zen/go/v1"
+    },
+    {
+      "name": "built-in openrouter",
+      "providerKey": "openrouter",
+      "config": {
+        "apiKey": "k"
+      },
+      "expected": "https://openrouter.ai/api/v1"
+    },
+    {
+      "name": "built-in xiaomi",
+      "providerKey": "xiaomi",
+      "config": {
+        "apiKey": "k"
+      },
+      "expected": "https://api.xiaomimimo.com/v1"
+    },
+    {
+      "name": "built-in xiaomi-token-plan-cn",
+      "providerKey": "xiaomi-token-plan-cn",
+      "config": {
+        "apiKey": "k"
+      },
+      "expected": "https://token-plan-cn.xiaomimimo.com/v1"
+    },
+    {
+      "name": "built-in zai",
+      "providerKey": "zai",
+      "config": {
+        "apiKey": "k"
+      },
+      "expected": "https://api.z.ai/api/coding/paas/v4"
+    },
+    {
+      "name": "built-in zai-coding-cn",
+      "providerKey": "zai-coding-cn",
+      "config": {
+        "apiKey": "k"
+      },
+      "expected": "https://open.bigmodel.cn/api/coding/paas/v4"
+    }
+  ]
+}

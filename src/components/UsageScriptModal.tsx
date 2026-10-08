@@ -15,7 +15,7 @@ import {
   extractCodexExperimentalBearerToken,
 } from "@/utils/providerConfigUtils";
 import { parseGrokBuildConfig } from "@/utils/grokBuildConfig";
-import { piBuiltInBaseUrl } from "@/config/piProviderPresets";
+import { piProviderBaseUrl } from "@/config/piProviderPresets";
 import JsonEditor from "./JsonEditor";
 import * as prettier from "prettier/standalone";
 import * as parserBabel from "prettier/parser-babel";
@@ -285,18 +285,11 @@ const UsageScriptModal: React.FC<UsageScriptModalProps> = ({
             baseUrl: (config as any).base_url,
           };
         } else if (appId === "pi") {
-          // Pi: provider values are camelCase; a model may override baseUrl.
-          // Key-only entries for Pi's built-in providers have no baseUrl.
-          const root = config as any;
-          const firstModel = Array.isArray(root.models)
-            ? root.models[0]
-            : undefined;
+          // Pi: provider values are camelCase; key-only entries for Pi's
+          // built-in providers have no baseUrl.
           return {
-            apiKey: root.apiKey,
-            baseUrl:
-              firstModel?.baseUrl ||
-              root.baseUrl ||
-              piBuiltInBaseUrl(provider.id),
+            apiKey: (config as any).apiKey,
+            baseUrl: piProviderBaseUrl(provider.id, config),
           };
         } else if (appId === "openclaw") {
           // OpenClaw: settingsConfig 顶层扁平（camelCase，对应 openclaw.json）

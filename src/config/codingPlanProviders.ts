@@ -10,7 +10,7 @@
 import { createUsageScript } from "@/types";
 import { TEMPLATE_TYPES } from "@/config/constants";
 import { extractCodexBaseUrl } from "@/utils/providerConfigUtils";
-import { piBuiltInBaseUrl } from "@/config/piProviderPresets";
+import { piProviderBaseUrl } from "@/config/piProviderPresets";
 
 export interface CodingPlanProviderEntry {
   /** 与后端 QuotaTier 的 `codingPlanProvider` 取值对齐 */
@@ -143,9 +143,7 @@ export function extractBaseUrlForUsageDetection(
       break;
     case "pi":
       // Pi 内置供应商的条目只写 key，地址按供应商 ID 找
-      raw =
-        settingsConfig.baseUrl ??
-        (providerKey ? piBuiltInBaseUrl(providerKey) : undefined);
+      raw = piProviderBaseUrl(providerKey, settingsConfig);
       break;
     default:
       return null;

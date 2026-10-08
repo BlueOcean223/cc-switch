@@ -225,7 +225,7 @@ export const codexProviderPresets: CodexProviderPreset[] = [
     planKey: "coding",
     regionKey: "cn",
     websiteUrl: "https://www.kimi.com/code/",
-    apiKeyUrl: "https://www.kimi.com/code/",
+    apiKeyUrl: "https://www.kimi.com/code/console",
     auth: generateThirdPartyAuth(""),
     config: generateThirdPartyConfig(
       "kimi_coding",

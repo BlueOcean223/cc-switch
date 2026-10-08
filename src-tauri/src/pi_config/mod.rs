@@ -597,6 +597,36 @@ mod tests {
         assert!(provider_base_url("cc-switch-example", &key_only).is_err());
     }
 
+    /// 前端 `piProviderBaseUrl`（tests/config/piBaseUrl.test.ts）用同一份向量。
+    #[test]
+    fn provider_base_url_matches_the_shared_vectors() {
+        let fixture: Value = serde_json::from_str(include_str!(
+            "../../../tests/fixtures/pi-base-url-vectors.json"
+        ))
+        .unwrap();
+        let vectors = fixture["vectors"].as_array().unwrap();
+        assert!(!vectors.is_empty());
+        for vector in vectors {
+            let key = vector["providerKey"].as_str().unwrap();
+            let actual = provider_base_url(key, &vector["config"]).ok();
+            assert_eq!(
+                actual.as_deref(),
+                vector["expected"].as_str(),
+                "{}",
+                vector["name"]
+            );
+        }
+        // 向量覆盖整张内置表
+        for (id, _) in PI_BUILTIN_BASE_URLS {
+            assert!(
+                vectors.iter().any(|v| v["providerKey"] == *id
+                    && v["config"].get("baseUrl").is_none()
+                    && v["config"].get("models").is_none()),
+                "missing vector for {id}"
+            );
+        }
+    }
+
     #[test]
     fn relative_agent_directory_is_rejected() {
         let error = resolve_pi_agent_dir(
