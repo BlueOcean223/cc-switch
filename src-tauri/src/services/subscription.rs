@@ -4,8 +4,6 @@
 //! 第一层：仅读取凭据，不实现登录/刷新。
 
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
-use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use std::collections::{HashMap, HashSet};
@@ -154,6 +152,7 @@ fn read_claude_credentials() -> (Option<String>, CredentialStatus, Option<String
     read_claude_credentials_from_file()
 }
 
+#[cfg(any(target_os = "macos", test))]
 const CLAUDE_KEYCHAIN_SERVICE: &str = "Claude Code-credentials";
 
 /// Claude Code 存 OAuth 凭据的 Keychain 服务名候选，按优先级排列。
@@ -163,10 +162,14 @@ const CLAUDE_KEYCHAIN_SERVICE: &str = "Claude Code-credentials";
 /// Claude 进程的环境变量，只能按覆盖目录推：shell 展开 `~` 后的路径，以及带末尾
 /// `/` 的写法；覆盖目录就是默认的 `~/.claude` 时环境变量多半没设，再试无后缀的名字。
 /// 没设覆盖目录时反过来，先试无后缀，再试显式设成默认目录的情况。
-fn claude_keychain_services(override_dir: Option<&Path>, default_dir: &Path) -> Vec<String> {
+#[cfg(any(target_os = "macos", test))]
+fn claude_keychain_services(
+    override_dir: Option<&std::path::Path>,
+    default_dir: &std::path::Path,
+) -> Vec<String> {
     let hashed = |dir: &str| {
-        let digest = format!("{:x}", Sha256::digest(dir.as_bytes()));
-        format!("{CLAUDE_KEYCHAIN_SERVICE}-{}", &digest[..8])
+        let hex = crate::live::engine::sha256_hex(dir.as_bytes());
+        format!("{CLAUDE_KEYCHAIN_SERVICE}-{}", &hex[..8])
     };
     let default = default_dir.to_string_lossy();
     match override_dir {
@@ -1770,7 +1773,7 @@ mod tests {
     #[test]
     fn claude_keychain_service_follows_config_dir_hash() {
         // 期望值按 Claude Code 的 sha256(dir).hex[..8] 用 Python 独立算出
-        let default = Path::new("/Users/x/.claude");
+        let default = std::path::Path::new("/Users/x/.claude");
         assert_eq!(
             claude_keychain_services(None, default),
             vec![
@@ -1779,7 +1782,7 @@ mod tests {
             ]
         );
         assert_eq!(
-            claude_keychain_services(Some(Path::new("/Users/x/claude-work")), default),
+            claude_keychain_services(Some(std::path::Path::new("/Users/x/claude-work")), default),
             vec![
                 "Claude Code-credentials-8e8c5344",
                 "Claude Code-credentials-8ac017c5"
