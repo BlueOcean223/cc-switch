@@ -10,6 +10,12 @@ use rust_decimal::Decimal;
 #[cfg(test)]
 use std::str::FromStr;
 
+/// 计价规则的版本，参与定价指纹。改了这里的算法（档位、倍率、缓存写入、调价前单价的
+/// 选用），或者入库 token 换算成计价桶的口径（`usage_stats::fresh_input_tokens`）时加一：
+/// 已入库的成本是按旧规则算的，下次启动发现指纹变了会按新规则全部重算。调价记录
+/// （`price_history`）和定价表的变化不用改它，指纹里已经包含。
+pub const PRICING_RULES_VERSION: u32 = 1;
+
 /// 成本明细。各项已经乘过档位倍率，相加等于 `total_cost`。
 #[derive(Debug, Clone, PartialEq)]
 pub struct CostBreakdown {

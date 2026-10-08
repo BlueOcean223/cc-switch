@@ -75,9 +75,16 @@ const ratio = (tierPrice: number | undefined, base: number | undefined) =>
 /**
  * 把 models.dev 的 `cost.tiers` 换成用量统计用的超长上下文倍率，按阈值从低到高。
  *
- * 每档输入侧只存一个倍率，缓存读写的倍率与输入不一致时这一档表示不了；少了中间
- * 一档会算错，所以有一档表示不了就整个模型都不导入（主流厂商都一致，不一致的多是
- * 聚合商的个别条目）。
+ * 返回值：
+ * - `[]`：models.dev 没有会改变价格的档位，清掉之前同步来的档位；
+ * - 档位数组；
+ * - `undefined`：表示不了，保留现有档位。每档输入侧只存一个倍率，缓存读写的倍率
+ *   与输入不一致时这一档表示不了；少了中间一档会算错，所以这时整个模型都不改
+ *   （主流厂商都一致，不一致的多是聚合商的个别条目）。有档位但一档都算不出倍率
+ *   （例如基础输入价是 0）时同样保留。
+ *
+ * 同一阈值出现多次时只取第一个（后端拒收重复阈值，一个模型会挡住整批更新）；
+ * 单档缺输入价时只丢这一档。缓存写入缺价按输入价算，和 [`flattenModels`] 一致。
  */
 export function longContextTiers(
   cost: ModelsDevCost | undefined,
@@ -92,13 +99,17 @@ export function longContextTiers(
         : [],
     )
     .sort((a, b) => a.size - b.size);
+  const baseCacheWrite = cost?.cache_write ?? cost?.input;
+  const seenThresholds = new Set<number>();
   for (const tier of candidates) {
+    if (seenThresholds.has(tier.size)) continue;
     const input = ratio(tier.input, cost?.input);
-    if (input === undefined) return undefined;
+    if (input === undefined) continue;
+    seenThresholds.add(tier.size);
     const output = ratio(tier.output, cost?.output) ?? 1;
     for (const cacheRatio of [
       ratio(tier.cache_read, cost?.cache_read),
-      ratio(tier.cache_write, cost?.cache_write),
+      ratio(tier.cache_write ?? tier.input, baseCacheWrite),
     ]) {
       if (cacheRatio !== undefined && Math.abs(cacheRatio - input) > 1e-6) {
         return undefined;
@@ -110,10 +121,11 @@ export function longContextTiers(
       outputMultiplier: formatPrice(output),
     });
   }
+  if (candidates.length > 0 && tiers.length === 0) return undefined;
   const changesPrice = tiers.some(
     (tier) => tier.inputMultiplier !== "1" || tier.outputMultiplier !== "1",
   );
-  return changesPrice ? tiers : undefined;
+  return changesPrice ? tiers : [];
 }
 
 export function flattenModels(data: ModelsDevResponse): ModelsDevEntry[] {
@@ -141,8 +153,12 @@ export function flattenModels(data: ModelsDevResponse): ModelsDevEntry[] {
         input: input ?? 0,
         output: output ?? 0,
         cacheRead: typeof cost?.cache_read === "number" ? cost.cache_read : 0,
+        // models.dev 没给缓存写入价（例如 xAI 的条目）时按输入价算：缓存写入从输入里
+        // 拆出来单独计价，记 0 会让这部分 token 不收费
         cacheWrite:
-          typeof cost?.cache_write === "number" ? cost.cache_write : 0,
+          typeof cost?.cache_write === "number"
+            ? cost.cache_write
+            : (input ?? 0),
         longContextTiers: longContextTiers(cost),
       });
     }

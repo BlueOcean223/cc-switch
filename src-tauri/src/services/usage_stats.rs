@@ -405,8 +405,19 @@ pub(crate) struct LogCountCache {
     total: u32,
 }
 
-/// `settings` 表里上次全量重算成本时 `model_pricing` 的指纹，启动时据此判断定价变了没有。
+/// `settings` 表里上次全量重算成本时的定价指纹（`model_pricing` 和计价规则），启动时
+/// 据此判断定价变了没有。
 pub(crate) const USAGE_PRICING_FINGERPRINT_KEY: &str = "usage_pricing_fingerprint";
+
+/// 定价表之外也决定成本的规则：计价规则版本和调价记录。发新版只改了它们时，启动时
+/// 也会按新规则重算已入库的成本。
+fn pricing_rules_text() -> String {
+    format!(
+        "rules={};history={}",
+        crate::token_usage::calculator::PRICING_RULES_VERSION,
+        crate::token_usage::price_history::fingerprint_text()
+    )
+}
 
 const LOG_COUNT_CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(60);
 
@@ -1723,7 +1734,7 @@ impl Database {
         Self::reprice_usage_costs_on_conn(&conn, Some(model_id), None)
     }
 
-    /// 定价和上次全量重算时不同才重算（启动时用）。返回 `None` 表示定价没变。
+    /// 定价或计价规则和上次全量重算时不同才重算（启动时用）。返回 `None` 表示都没变。
     pub(crate) fn reprice_usage_costs_if_pricing_changed(&self) -> Result<Option<u64>, AppError> {
         let conn = lock_conn!(self.conn);
         let current = Self::pricing_fingerprint(&conn)?;
@@ -1756,11 +1767,17 @@ impl Database {
         Ok(())
     }
 
-    /// `model_pricing` 全表按 model_id 排序后所有列的 SHA-256。
+    /// 定价的指纹：计价规则（见 [`pricing_rules_text`]）加上 `model_pricing` 全表按
+    /// model_id 排序后所有列，取 SHA-256。
     fn pricing_fingerprint(conn: &Connection) -> Result<String, AppError> {
+        Self::pricing_fingerprint_with(conn, &pricing_rules_text())
+    }
+
+    fn pricing_fingerprint_with(conn: &Connection, rules: &str) -> Result<String, AppError> {
         let mut stmt = conn.prepare("SELECT * FROM model_pricing ORDER BY model_id")?;
         let columns = stmt.column_count();
-        let mut text = String::new();
+        let mut text = String::from(rules);
+        text.push('\u{1d}');
         let mut rows = stmt.query([])?;
         while let Some(row) = rows.next()? {
             for index in 0..columns {
@@ -2727,6 +2744,42 @@ mod tests {
         assert_eq!(db.reprice_usage_costs_if_pricing_changed()?, None);
         add_pricing(&db, "brand-new-model", "1", "2")?;
         assert_eq!(db.reprice_usage_costs_if_pricing_changed()?, Some(0));
+        assert_eq!(db.reprice_usage_costs_if_pricing_changed()?, None);
+        Ok(())
+    }
+
+    /// 定价表没变、计价规则或调价记录变了（发了新版）也要重算。
+    #[test]
+    fn startup_reprice_runs_after_the_pricing_rules_change() -> Result<(), AppError> {
+        let db = Database::memory()?;
+        insert_row(
+            &db,
+            RowSpec {
+                request_id: "zero",
+                input: 1000,
+                output: 1000,
+                ..Default::default()
+            },
+        )?;
+        assert!(db.reprice_usage_costs_if_pricing_changed()?.is_some());
+        assert_eq!(db.reprice_usage_costs_if_pricing_changed()?, None);
+
+        {
+            let conn = lock_conn!(db.conn);
+            let rules = pricing_rules_text();
+            assert_eq!(
+                Database::pricing_fingerprint(&conn)?,
+                Database::pricing_fingerprint_with(&conn, &rules)?
+            );
+            assert_ne!(
+                Database::pricing_fingerprint_with(&conn, "rules=0;history=")?,
+                Database::pricing_fingerprint(&conn)?
+            );
+            // 上一版按别的规则算出的指纹
+            let previous = Database::pricing_fingerprint_with(&conn, "rules=0;history=")?;
+            Database::write_pricing_fingerprint(&conn, &previous)?;
+        }
+        assert!(db.reprice_usage_costs_if_pricing_changed()?.is_some());
         assert_eq!(db.reprice_usage_costs_if_pricing_changed()?, None);
         Ok(())
     }

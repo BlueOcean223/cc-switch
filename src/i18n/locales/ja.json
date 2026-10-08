@@ -3285,5 +3285,9 @@
   "upstreamImport": {
     "imported": "CC Switch からデータをインポートしました",
     "notImported": "CC Switch のデータはインポートされませんでした。ccs-lite は新規インストールとして起動しました"
+  },
+  "pricingExport": {
+    "title": "データベースで編集された組み込みモデルの価格を保持しました",
+    "description": "次のモデルの価格は既知の組み込み価格のどれとも一致しないため、ユーザーが設定した価格としてデータディレクトリの model-pricing.json に保存しました: {{models}}。設定した覚えがない場合は、model-pricing.json の models から削除して再起動すると組み込み価格に戻ります。"
   }
 }

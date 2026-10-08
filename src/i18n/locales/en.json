@@ -3285,5 +3285,9 @@
   "upstreamImport": {
     "imported": "Imported data from CC Switch",
     "notImported": "CC Switch data was not imported; ccs-lite started as a fresh install"
+  },
+  "pricingExport": {
+    "title": "Kept built-in model prices edited in the database",
+    "description": "These models had prices that match no known built-in price, so they were saved as your own prices in model-pricing.json in the data directory: {{models}}. If you did not set them, remove them from \"models\" in model-pricing.json and restart to get the built-in prices back."
   }
 }

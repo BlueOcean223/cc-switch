@@ -36,8 +36,9 @@ pub struct ModelPricingInfo {
     pub output_cost_per_million: String,
     pub cache_read_cost_per_million: String,
     pub cache_creation_cost_per_million: String,
-    /// 超长上下文档位，来自 models.dev 的 `cost.tiers`，按阈值从低到高排列。没有时
-    /// 不改库里已有的档位（内置模型的档位由代码写入，手动编辑价格也不会清掉它）。
+    /// 超长上下文档位，来自 models.dev 的 `cost.tiers`，按阈值从低到高排列。`None`
+    /// 不改库里已有的档位（内置模型的档位由代码写入，手动编辑价格也不会清掉它）；
+    /// `Some([])` 清掉同步来的档位，有内置档位的模型按 `None` 处理。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub long_context_tiers: Option<Vec<LongContextTier>>,
 }
@@ -369,7 +370,68 @@ fn apply_file_to_database(
     Ok((upserted, deleted))
 }
 
-/// Load user-maintained overrides from `~/.cc-switch/model-pricing.json`.
+/// seed 内置价时要跳过的模型，见 [`seed_exclusions`]。
+#[derive(Debug, Default)]
+pub(crate) struct SeedExclusions {
+    /// 覆盖文件里有价格或已删除的模型：内置价不写
+    pub prices: BTreeSet<String>,
+    /// 覆盖文件里带超长上下文档位的模型：内置档位不写
+    pub tiers: BTreeSet<String>,
+}
+
+/// 覆盖文件随后会写入这些模型，先写内置值再写回覆盖值会让每次 seed 都算作改了价、
+/// 触发全量重算。文件不存在时返回空集合，不创建文件。
+pub(crate) fn seed_exclusions() -> Result<SeedExclusions, AppError> {
+    let _file_guard = file_lock()
+        .lock()
+        .map_err(|error| AppError::Config(format!("模型定价文件锁失败: {error}")))?;
+    let Some(file) = read_file_unlocked()? else {
+        return Ok(SeedExclusions::default());
+    };
+    let mut exclusions = SeedExclusions::default();
+    for entry in &file.models {
+        exclusions.prices.insert(entry.model_id.clone());
+        if entry.long_context_tiers.is_some() {
+            exclusions.tiers.insert(entry.model_id.clone());
+        }
+    }
+    exclusions
+        .prices
+        .extend(file.deleted_model_ids.iter().cloned());
+    Ok(exclusions)
+}
+
+/// 把条目加进覆盖文件；文件里已有这个模型或已删除的跳过。返回加进去的模型。
+pub(crate) fn add_missing_overrides(
+    entries: Vec<ModelPricingInfo>,
+) -> Result<Vec<String>, AppError> {
+    let _file_guard = file_lock()
+        .lock()
+        .map_err(|error| AppError::Config(format!("模型定价文件锁失败: {error}")))?;
+    let mut file = load_or_create_file_unlocked()?;
+    let present: BTreeSet<String> = file
+        .models
+        .iter()
+        .map(|entry| entry.model_id.clone())
+        .chain(file.deleted_model_ids.iter().cloned())
+        .collect();
+    let mut added = Vec::new();
+    for entry in entries {
+        if present.contains(&entry.model_id) {
+            continue;
+        }
+        let entry = normalize_pricing(entry)?;
+        added.push(entry.model_id.clone());
+        file.models.push(entry);
+    }
+    if !added.is_empty() {
+        file.models.sort_by(|a, b| a.model_id.cmp(&b.model_id));
+        write_file_unlocked(&file)?;
+    }
+    Ok(added)
+}
+
+/// Load user-maintained overrides from `~/.ccs-lite/model-pricing.json`.
 /// Built-in rows remain database-owned so application updates can repair them;
 /// the file contains only explicit overrides and deletion tombstones.
 pub fn sync_local_model_pricing(db: &Database) -> Result<usize, AppError> {
@@ -447,8 +509,17 @@ fn update_model_pricing_batch_inner(
         return Ok(0);
     }
     let mut normalized = BTreeMap::new();
+    // 内置档位按厂商定价页写入；models.dev 没有档位（`[]`）可能只是没收录，
+    // 这些模型改为不带档位，用内置的那一份
+    let mut builtin_tiers = BTreeSet::new();
     for entry in entries {
-        let entry = normalize_pricing(entry)?;
+        let mut entry = normalize_pricing(entry)?;
+        if entry.long_context_tiers.as_ref().is_some_and(Vec::is_empty)
+            && crate::database::has_builtin_long_context(&entry.model_id)
+        {
+            entry.long_context_tiers = None;
+            builtin_tiers.insert(entry.model_id.clone());
+        }
         normalized.insert(entry.model_id.clone(), entry);
     }
     let entries = normalized.into_values().collect::<Vec<_>>();
@@ -475,7 +546,7 @@ fn update_model_pricing_batch_inner(
         for entry in &entries {
             let mut entry = entry.clone();
             // 手动编辑不带档位，沿用文件里同步来的那一份
-            if entry.long_context_tiers.is_none() {
+            if entry.long_context_tiers.is_none() && !builtin_tiers.contains(&entry.model_id) {
                 entry.long_context_tiers = file_models
                     .get(&entry.model_id)
                     .and_then(|existing| existing.long_context_tiers.clone());
@@ -619,6 +690,116 @@ mod tests {
 
             let state = get_models_dev_sync_state(db).expect("sync state");
             assert!(!state.config.auto_sync_enabled);
+        });
+    }
+
+    fn stored_prices(db: &Database, model_id: &str) -> (String, String, String, String) {
+        let conn = db.conn.lock().expect("lock test database");
+        conn.query_row(
+            "SELECT input_cost_per_million, output_cost_per_million,
+                    cache_read_cost_per_million, cache_creation_cost_per_million
+             FROM model_pricing WHERE model_id = ?1",
+            [model_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )
+        .expect("query pricing")
+    }
+
+    #[test]
+    #[serial]
+    fn v21_migration_keeps_prices_edited_only_in_the_database() {
+        with_test_home(|db, path| {
+            {
+                let conn = db.conn.lock().expect("lock test database");
+                conn.execute_batch(
+                    // 手改过的价格，和上游写入过的旧内置价（Sonnet 5 早先的 list 价）
+                    "UPDATE model_pricing SET input_cost_per_million = '1',
+                         output_cost_per_million = '5'
+                     WHERE model_id = 'claude-opus-4-8';
+                     UPDATE model_pricing SET input_cost_per_million = '3',
+                         output_cost_per_million = '15', cache_read_cost_per_million = '0.3',
+                         cache_creation_cost_per_million = '3.75'
+                     WHERE model_id = 'claude-sonnet-5';",
+                )
+                .expect("simulate upstream rows");
+                crate::database::builtin_pricing_export::export_hand_edited_builtin_prices(&conn)
+                    .expect("export");
+            }
+            let content = fs::read_to_string(path).expect("read override file");
+            let file: ModelPricingFile = serde_json::from_str(&content).expect("parse file");
+            let ids: Vec<&str> = file.models.iter().map(|m| m.model_id.as_str()).collect();
+            assert_eq!(ids, vec!["claude-opus-4-8"]);
+            // 导出的模型留给前端提示一次
+            let notice = crate::init_status::take_exported_builtin_prices();
+            assert!(
+                notice.contains(&"claude-opus-4-8".to_string()),
+                "{notice:?}"
+            );
+
+            db.ensure_model_pricing_seeded().expect("seed");
+            sync_local_model_pricing(db).expect("apply overrides");
+            assert_eq!(stored_prices(db, "claude-opus-4-8").0, "1");
+            assert_eq!(stored_prices(db, "claude-opus-4-8").1, "5");
+            // 等于旧内置价的行换成现在的内置价
+            assert_eq!(stored_prices(db, "claude-sonnet-5").0, "2");
+        });
+    }
+
+    fn stored_tiers(db: &Database, model_id: &str) -> String {
+        let conn = db.conn.lock().expect("lock test database");
+        conn.query_row(
+            "SELECT long_context_tiers FROM model_pricing WHERE model_id = ?1",
+            [model_id],
+            |row| row.get(0),
+        )
+        .expect("query tiers")
+    }
+
+    #[test]
+    #[serial]
+    fn empty_synced_tiers_clear_tiers_except_built_in_ones() {
+        with_test_home(|db, _| {
+            let tier = LongContextTier {
+                threshold_tokens: 200_000,
+                input_multiplier: "2".to_string(),
+                output_multiplier: "1.5".to_string(),
+            };
+            let mut custom = sample_pricing();
+            custom.long_context_tiers = Some(vec![tier]);
+            update_model_pricing_batch(db, vec![custom.clone()]).expect("sync tiers");
+            assert_ne!(stored_tiers(db, "custom-model"), "[]");
+
+            custom.long_context_tiers = Some(Vec::new());
+            update_model_pricing_batch(db, vec![custom]).expect("sync without tiers");
+            assert_eq!(stored_tiers(db, "custom-model"), "[]");
+
+            // 内置档位按厂商定价页写入，models.dev 没收录档位时保留
+            let builtin_tiers = stored_tiers(db, "gpt-5.5");
+            assert_ne!(builtin_tiers, "[]");
+            let mut builtin = sample_pricing();
+            builtin.model_id = "gpt-5.5".to_string();
+            builtin.long_context_tiers = Some(Vec::new());
+            update_model_pricing_batch(db, vec![builtin]).expect("sync built-in model");
+            assert_eq!(stored_tiers(db, "gpt-5.5"), builtin_tiers);
+            db.ensure_model_pricing_seeded().expect("seed");
+            sync_local_model_pricing(db).expect("apply overrides");
+            assert_eq!(stored_tiers(db, "gpt-5.5"), builtin_tiers);
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn seeding_with_an_override_writes_nothing_the_second_time() {
+        with_test_home(|db, _| {
+            let mut entry = sample_pricing();
+            entry.model_id = "claude-opus-4-8".to_string();
+            update_model_pricing(db, entry).expect("override a built-in model");
+
+            db.ensure_model_pricing_seeded().expect("seed");
+            assert_eq!(sync_local_model_pricing(db).expect("apply"), 0);
+            assert_eq!(db.ensure_model_pricing_seeded().expect("seed again"), 0);
+            assert_eq!(sync_local_model_pricing(db).expect("apply again"), 0);
+            assert_eq!(stored_prices(db, "claude-opus-4-8").0, "1.25");
         });
     }
 
@@ -857,9 +1038,13 @@ mod tests {
             }
 
             delete_model_pricing(db, "claude-sonnet-5").expect("create tombstone");
-            db.ensure_model_pricing_seeded()
-                .expect("reseed built-in pricing");
-            assert_eq!(sync_local_model_pricing(db).expect("apply tombstone"), 1);
+            // seed 跳过已删除的内置模型，不再插回去再删一遍
+            assert_eq!(
+                db.ensure_model_pricing_seeded()
+                    .expect("reseed built-in pricing"),
+                0
+            );
+            assert_eq!(sync_local_model_pricing(db).expect("apply tombstone"), 0);
 
             let conn = db.conn.lock().expect("lock test database");
             let deleted_count: i64 = conn

@@ -24,6 +24,7 @@
 //! ```
 
 pub(crate) mod backup;
+pub(crate) mod builtin_pricing_export;
 pub(crate) mod dao;
 pub(crate) mod lineage;
 mod migration;
@@ -67,6 +68,7 @@ macro_rules! lock_conn {
 
 // 导出宏供子模块使用
 pub(crate) use lock_conn;
+pub(crate) use schema::has_builtin_long_context;
 
 /// 数据库连接封装
 ///
@@ -210,8 +212,8 @@ impl Database {
         {
             let conn = lock_conn!(db.conn);
             lineage::mark_fork(&conn)?;
+            Self::seed_builtin_model_pricing_on_conn(&conn)?;
         }
-        db.ensure_model_pricing_seeded()?;
 
         Ok(db)
     }

@@ -74,6 +74,22 @@ pub fn earlier_prices(model_id: &str) -> Vec<EarlierPrices> {
     earlier
 }
 
+/// 全部调价记录的文本，参与定价指纹：加了或改了调价记录，下次启动按新的历史价重算。
+pub fn fingerprint_text() -> String {
+    PRICE_CHANGES
+        .iter()
+        .map(|change| {
+            format!(
+                "{}@{}={}",
+                change.model_ids.join(","),
+                change.until,
+                change.prices.join(",")
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(";")
+}
+
 /// 给查到的当前定价挂上调价前的单价。
 pub fn with_price_history(model_id: &str, pricing: ModelPricing) -> ModelPricing {
     ModelPricing {
@@ -92,6 +108,15 @@ mod tests {
             for id in change.model_ids {
                 assert!(!earlier_prices(id).is_empty(), "{id}");
             }
+        }
+    }
+
+    #[test]
+    fn fingerprint_text_lists_every_change() {
+        let text = fingerprint_text();
+        for change in PRICE_CHANGES {
+            assert!(text.contains(&change.until.to_string()), "{text}");
+            assert!(text.contains(&change.prices.join(",")), "{text}");
         }
     }
 

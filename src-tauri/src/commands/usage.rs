@@ -168,9 +168,7 @@ pub async fn get_request_detail(
 /// 获取模型定价列表
 #[tauri::command]
 pub fn get_model_pricing(state: State<'_, AppState>) -> Result<Vec<ModelPricingInfo>, AppError> {
-    log::info!("获取模型定价列表");
-    state.db.ensure_model_pricing_seeded()?;
-    crate::services::model_pricing::sync_local_model_pricing(&state.db)?;
+    // 只读：内置价在启动、恢复备份时写入，覆盖文件在启动和编辑价格时应用
 
     let db = state.db.clone();
     let conn = crate::database::lock_conn!(db.conn);

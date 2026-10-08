@@ -137,6 +137,9 @@ describe("flattenModels", () => {
     expect(newModel.cacheRead).toBe(0.3);
     expect(newModel.cacheWrite).toBe(3.75);
 
+    // 没给缓存写入价时按输入价算
+    expect(entries[2].cacheWrite).toBe(1);
+
     // 没有 name 的 provider 用 id 兜底；缺失的成本字段补 0
     const bareModel = entries[1];
     expect(bareModel.providerName).toBe("bare");
@@ -375,8 +378,85 @@ describe("longContextTiers", () => {
     ]);
   });
 
+  it("returns an empty list when models.dev has no price-changing tier", () => {
+    expect(longContextTiers({ input: 1, output: 2 })).toEqual([]);
+    expect(
+      longContextTiers({
+        input: 1,
+        output: 2,
+        tiers: [
+          { input: 1, output: 2, tier: { type: "context", size: 200000 } },
+        ],
+      }),
+    ).toEqual([]);
+  });
+
+  it("keeps the first tier of a repeated threshold", () => {
+    expect(
+      longContextTiers({
+        input: 1,
+        output: 2,
+        tiers: [
+          { input: 2, output: 3, tier: { type: "context", size: 200000 } },
+          { input: 4, output: 6, tier: { type: "context", size: 200000 } },
+        ],
+      }),
+    ).toEqual([
+      {
+        thresholdTokens: 200000,
+        inputMultiplier: "2",
+        outputMultiplier: "1.5",
+      },
+    ]);
+  });
+
+  it("drops only the tier that has no input price", () => {
+    expect(
+      longContextTiers({
+        input: 1,
+        output: 2,
+        tiers: [
+          { output: 3, tier: { type: "context", size: 128000 } },
+          { input: 2, output: 4, tier: { type: "context", size: 200000 } },
+        ],
+      }),
+    ).toEqual([
+      { thresholdTokens: 200000, inputMultiplier: "2", outputMultiplier: "2" },
+    ]);
+    // 基础输入价是 0：一档都算不出倍率，保留现有档位
+    expect(
+      longContextTiers({
+        input: 0,
+        output: 2,
+        tiers: [
+          { input: 0, output: 4, tier: { type: "context", size: 200000 } },
+        ],
+      }),
+    ).toBeUndefined();
+  });
+
+  it("prices a missing tier cache write like the tier input", () => {
+    // xAI on models.dev: no cache_write at either level
+    expect(
+      longContextTiers({
+        input: 2,
+        output: 6,
+        cache_read: 0.3,
+        tiers: [
+          {
+            input: 4,
+            output: 12,
+            cache_read: 0.6,
+            tier: { type: "context", size: 200000 },
+          },
+        ],
+      }),
+    ).toEqual([
+      { thresholdTokens: 200000, inputMultiplier: "2", outputMultiplier: "2" },
+    ]);
+  });
+
   it("skips models with a tier one input-side multiplier cannot express", () => {
-    expect(longContextTiers({ input: 1, output: 2 })).toBeUndefined();
     // a missing middle tier would misprice prompts above it
     expect(
       longContextTiers({

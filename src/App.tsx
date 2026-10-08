@@ -481,6 +481,27 @@ function App() {
     checkUpstreamImport();
   }, [t]);
 
+  // 升级时只能对照已知的内置价判断"改过"，导出了哪些要让用户看到
+  useEffect(() => {
+    const checkExportedPrices = async () => {
+      try {
+        const models = await invoke<string[]>("get_exported_builtin_prices");
+        if (models.length === 0) return;
+        toast.info(t("pricingExport.title"), {
+          description: t("pricingExport.description", {
+            models: models.join(", "),
+          }),
+          closeButton: true,
+          duration: 30000,
+        });
+      } catch (error) {
+        console.error("[App] Failed to check exported built-in prices:", error);
+      }
+    };
+
+    checkExportedPrices();
+  }, [t]);
+
   useEffect(() => {
     const checkSkillsMigration = async () => {
       try {

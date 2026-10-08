@@ -1280,7 +1280,7 @@ pub fn run() {
                                 };
                                 // 重建只重导日志还在的行，其余本地计价的行在这里按新定价重算
                                 match db.reprice_usage_costs_if_pricing_changed() {
-                                    Ok(Some(repriced)) => log::info!("Pricing changed, repriced {repriced} usage row(s)"),
+                                    Ok(Some(repriced)) => log::info!("Pricing or pricing rules changed, repriced {repriced} usage row(s)"),
                                     Ok(None) => {}
                                     Err(error) => log::warn!("Usage cost startup reprice failed: {error}"),
                                 }
@@ -1421,6 +1421,7 @@ pub fn run() {
             commands::get_init_error,
             commands::get_migration_result,
             commands::get_upstream_import_result,
+            commands::get_exported_builtin_prices,
             commands::get_skills_migration_result,
             commands::get_app_config_path,
             commands::open_app_config_folder,

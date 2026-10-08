@@ -125,6 +125,32 @@ pub fn take_upstream_import() -> Option<crate::upstream_import::ImportRecord> {
     upstream_import_cell().write().ok()?.take()
 }
 
+// ============================================================
+// 升级时当作手改价导出到 model-pricing.json 的内置模型
+// ============================================================
+
+static EXPORTED_BUILTIN_PRICES: OnceLock<RwLock<Vec<String>>> = OnceLock::new();
+
+fn exported_builtin_prices_cell() -> &'static RwLock<Vec<String>> {
+    EXPORTED_BUILTIN_PRICES.get_or_init(|| RwLock::new(Vec::new()))
+}
+
+/// 记下 v21 迁移导出的模型，前端提示一次：判断是否手改过只能对照已知的内置价，
+/// 用户要能看到导出了哪些，不是自己改的可以删掉。
+pub fn add_exported_builtin_prices(model_ids: &[String]) {
+    if let Ok(mut guard) = exported_builtin_prices_cell().write() {
+        guard.extend(model_ids.iter().cloned());
+    }
+}
+
+/// 取走记下的模型（之后返回空）
+pub fn take_exported_builtin_prices() -> Vec<String> {
+    exported_builtin_prices_cell()
+        .write()
+        .map(|mut guard| std::mem::take(&mut *guard))
+        .unwrap_or_default()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -142,5 +168,16 @@ mod tests {
         let got = get_init_error().expect("should get payload back");
         assert_eq!(got.path, payload.path);
         assert_eq!(got.error, payload.error);
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn exported_builtin_prices_are_taken_once() {
+        add_exported_builtin_prices(&["claude-opus-4-8".to_string()]);
+        add_exported_builtin_prices(&["glm-5".to_string()]);
+        let taken = take_exported_builtin_prices();
+        assert!(taken.contains(&"claude-opus-4-8".to_string()), "{taken:?}");
+        assert!(taken.contains(&"glm-5".to_string()), "{taken:?}");
+        assert!(take_exported_builtin_prices().is_empty());
     }
 }

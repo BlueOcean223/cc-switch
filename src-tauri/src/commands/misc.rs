@@ -115,6 +115,13 @@ pub async fn get_upstream_import_result(
         .filter(|record| record.result != crate::upstream_import::ImportResult::NoUpstream))
 }
 
+/// 升级时当作手改价导出到 `model-pricing.json` 的内置模型。只返回一次，用于前端提示；
+/// 没有导出时返回空数组。
+#[tauri::command]
+pub async fn get_exported_builtin_prices() -> Result<Vec<String>, String> {
+    Ok(crate::init_status::take_exported_builtin_prices())
+}
+
 /// 获取 Skills 自动导入（SSOT）迁移结果（若有）。
 /// 只返回一次 Some({count})，之后返回 None，用于前端显示一次性 Toast 通知。
 #[tauri::command]

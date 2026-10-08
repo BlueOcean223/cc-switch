@@ -3285,5 +3285,9 @@
   "upstreamImport": {
     "imported": "已从 CC Switch 导入数据",
     "notImported": "没有导入 CC Switch 的数据，ccs-lite 按全新安装启动"
+  },
+  "pricingExport": {
+    "title": "升级时保留了数据库里改过的内置模型价格",
+    "description": "这些模型的价格和已知的内置价都不同，已当作你改过的价格存进数据目录的 model-pricing.json：{{models}}。如果不是你改的，把它们从 model-pricing.json 的 models 里删掉，重启后恢复内置价。"
   }
 }
