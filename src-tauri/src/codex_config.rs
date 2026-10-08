@@ -2251,6 +2251,11 @@ fn build_simplified_catalog_from_texts(config_text: &str, catalog_text: &str) ->
         else {
             continue;
         };
+        // 上游 Stack 模式的行（`ccs-<key>/<model>`）不属于当前供应商，不能进它的编辑表单、
+        // 再被保存回库里；共存时上游还可能往 live 里写这些行。
+        if crate::live::legacy_routing::is_codex_stack_model(model) {
+            continue;
+        }
         // 照搬官方的行只还原模型名，不能把官方值当成用户填的存回库里。通用模板生成的行
         // 没有 `model_messages`；有它的行还要逐项比对，对不上的照旧还原。
         if entry
@@ -4232,6 +4237,25 @@ wire_api = "responses"
             );
         }
         assert!(normalize_codex_native_rows(Vec::new()).is_none());
+    }
+
+    #[test]
+    fn build_simplified_catalog_skips_upstream_stack_rows() {
+        let catalog = r#"{
+            "models": [
+                { "slug": "kimi-k2.7-code" },
+                { "slug": "ccs-deepseek/deepseek-v4-pro" },
+                { "slug": "ccs-/broken" }
+            ]
+        }"#;
+        let result = build_simplified_catalog_from_texts("", catalog).expect("entries");
+        let models: Vec<&str> = result["models"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|entry| entry["model"].as_str().unwrap())
+            .collect();
+        assert_eq!(models, ["kimi-k2.7-code"]);
     }
 
     #[test]

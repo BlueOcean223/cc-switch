@@ -122,7 +122,15 @@
     "editProviderNamed": "{{name}} を編集",
     "editCurrentNoticeFile": "使用中のプロバイダーです。保存するとすぐに",
     "editCurrentNoticeFileEnd": " に書き込まれ、次のリクエストから反映されます。",
-    "editCurrentNotice": "使用中のプロバイダーです。保存するとすぐに反映され、次のリクエストから新しい設定が使われます。"
+    "editCurrentNotice": "使用中のプロバイダーです。保存するとすぐに反映され、次のリクエストから新しい設定が使われます。",
+    "liveRouting": {
+      "reapplied": "現在のプロバイダーを設定ファイルに書き戻しました",
+      "reapplyFailed": "再書き込みに失敗しました：{{error}}",
+      "repaired": "{{app}} の設定が上流 CC Switch のローカルルーティングのままだったため、現在のプロバイダーを書き戻しました",
+      "upstreamActive": "上流 CC Switch が {{app}} を引き継いでいます。ccs-lite で切り替えや再書き込みをすると上書きされます",
+      "noCurrentProvider": "{{app}} の設定が上流 CC Switch のローカルルーティングのままですが、現在のプロバイダーがありません。プロバイダーを選んで切り替えてください",
+      "repairFailed": "{{app}} の設定が上流 CC Switch のローカルルーティングのままで、書き戻しに失敗しました：{{error}}"
+    }
   },
   "codex": {
     "followCodexLoginDescription": "Codex CLI で現在ログイン中のアカウントに追従します",
@@ -1839,7 +1847,8 @@
     "fieldExtra": "• extra: String。自由記述の追加テキスト",
     "tip1": "• 変数 {{apiKey}} と {{baseUrl}} は自動で置換されます",
     "tip2": "• 抽出関数はサンドボックスで実行され、ES2020+ の構文を使えます",
-    "tip3": "• 全体を () で囲み、オブジェクトリテラル式にしてください"
+    "tip3": "• 全体を () で囲み、オブジェクトリテラル式にしてください",
+    "templateUnsupported": "この使用量テンプレートはサポートされなくなりました（上流 CC Switch にのみあります）。別のテンプレートを選んでください。"
   },
   "dbUpgrade": {
     "title": "データベースのバージョンが新しすぎます",
@@ -2808,17 +2817,24 @@
       "enable": "有効にする",
       "disable": "無効にする",
       "edit": "{{name}} を編集",
-      "more": "{{name}} のその他の操作"
+      "more": "{{name}} のその他の操作",
+      "reapply": "再書き込み"
     },
     "chip": {
       "official": "公式",
       "hermesManaged": "Hermes 管理",
-      "defaultModel": "既定モデル {{model}}"
+      "defaultModel": "既定モデル {{model}}",
+      "routingResidue": "上流のルーティングのまま",
+      "upstreamRouting": "上流が引き継ぎ中",
+      "needsRouting": "ローカルルーティングが必要（ccs-lite 非対応）"
     },
     "reason": {
       "defaultCannotRemove": "既定のプロバイダーは削除できません。先にほかを既定にしてください。",
       "currentCannotRemove": "使用中のプロバイダーは削除できません。先にほかを有効にしてください。",
-      "inUseCannotDelete": "使用中のプロバイダーは削除できません。先にほかへ切り替えてください。"
+      "inUseCannotDelete": "使用中のプロバイダーは削除できません。先にほかへ切り替えてください。",
+      "routingResidue": "設定ファイルに上流 CC Switch のローカルルーティングのアドレスとプレースホルダーキーが残っており（上流は動いていません）、クライアントは接続できません。「再書き込み」でこのプロバイダーを書き戻します。",
+      "upstreamRouting": "上流 CC Switch がローカルルーティングでこのアプリを引き継いでいます。「再書き込み」を押すと上流の引き継ぎを上書きします。上流のルーティングを使い続ける場合は押さないでください。",
+      "needsRouting": "このプロバイダーは上流 CC Switch のローカルルーティング（管理されたサインイン、API 形式の変換、完全な URL）に依存しています。ccs-lite にはローカルルーティングがないため、切り替えてもツールは使えません。削除するか、ツール自身の API を使うプロバイダーを新しく追加してください。"
     },
     "section": {
       "added": "追加済み · {{count}}",

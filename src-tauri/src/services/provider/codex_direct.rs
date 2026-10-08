@@ -30,6 +30,7 @@ use crate::config::sorted_json_bytes;
 use crate::database::Database;
 use crate::error::AppError;
 use crate::live::engine::{digest, read_current, DeviceStore, LiveFile};
+use crate::live::legacy_routing::PROXY_PLACEHOLDER;
 use crate::live::patch::toml::{TomlDocPatch, TomlSteps};
 use crate::live::patch::{Guarded, LivePatch, WholeFile};
 use crate::live::project::codex::{
@@ -206,7 +207,8 @@ struct RowFacts {
 fn row_facts(db: &Database) -> Result<RowFacts, AppError> {
     let mut facts = RowFacts {
         retired: Vec::new(),
-        third_party_keys: Vec::new(),
+        // 上游本地路由写进 `auth.json` 的占位 Key 同样是残留，不能当成登录暂存。
+        third_party_keys: vec![PROXY_PLACEHOLDER.to_string()],
         official_logins: Vec::new(),
     };
     for provider in db.get_all_providers(app())?.values() {
@@ -633,6 +635,31 @@ pub(crate) fn write_direct(
     let prepared = prepare(manager, owner, &target)?;
     let planned = plan(db, owner, &target, &prepared)?;
     run(db, op, planned, &prepared, pending)
+}
+
+/// 把当前供应商 `target` 重新写进 live，并删掉 `all` 里任一供应商带进来的独有字段：
+/// 修复上游本地路由留下的配置。不改指针。
+pub(crate) fn reapply_clearing(
+    db: &Database,
+    manager: &Arc<CodexOAuthManager>,
+    all: &[&Provider],
+    target: &Provider,
+) -> Result<OperationReport, AppError> {
+    let owner = Some(target);
+    let goal = Target(Some(target));
+    let prepared = prepare(manager, owner, &goal)?;
+    let mut planned = plan(db, owner, &goal, &prepared)?;
+    planned.config.outgoing.extend(
+        all.iter()
+            .flat_map(|provider| outgoing_exclusive(Some(provider))),
+    );
+    run(
+        db,
+        crate::mode::state::op::APPLY,
+        planned,
+        &prepared,
+        PendingTarget::default(),
+    )
 }
 
 /// 只校验，不写：切换前用它挡住会被拒绝的目标（行有问题时指针不能先动）。

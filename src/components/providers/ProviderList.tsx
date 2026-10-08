@@ -114,6 +114,36 @@ export function ProviderList({
     appId === "openclaw",
   );
   const isOpenCode = appId === "opencode";
+  const queryClient = useQueryClient();
+  // 上游 CC Switch 只接管这四个应用：它们的配置可能停在上游的路由状态
+  const checksLiveRouting =
+    appId === "claude" ||
+    appId === "codex" ||
+    appId === "gemini" ||
+    appId === "grokbuild";
+  const { data: liveRouting } = useQuery({
+    queryKey: ["liveRoutingState", appId],
+    queryFn: () => providersApi.getLiveRoutingState(appId),
+    enabled: checksLiveRouting && Boolean(currentProviderId),
+  });
+  const { mutate: reapplyCurrent } = useMutation({
+    mutationFn: () => providersApi.reapplyCurrent(appId),
+    onSuccess: async (reapplied) => {
+      await queryClient.invalidateQueries({
+        queryKey: ["liveRoutingState", appId],
+      });
+      if (reapplied) {
+        toast.success(t("provider.liveRouting.reapplied"));
+      }
+    },
+    onError: (error: unknown) => {
+      toast.error(
+        t("provider.liveRouting.reapplyFailed", {
+          error: extractErrorMessage(error),
+        }),
+      );
+    },
+  });
   const { data: currentOmoId } = useCurrentOmoProviderId(isOpenCode);
   const { data: currentOmoSlimId } = useCurrentOmoSlimProviderId(isOpenCode);
   const {
@@ -170,7 +200,6 @@ export function ProviderList({
     [checkProvider],
   );
 
-  const queryClient = useQueryClient();
   const importMutation = useMutation({
     mutationFn: async (): Promise<boolean> => {
       if (appId === "opencode") {
@@ -258,6 +287,8 @@ export function ProviderList({
         providers: filteredProviders,
         currentId: currentProviderId,
         onSwitch,
+        liveRouting: checksLiveRouting ? liveRouting : null,
+        onReapply: () => reapplyCurrent(),
       });
     }
     const defaultPrimary = openclawDefaultModel?.primary ?? "";
@@ -306,6 +337,9 @@ export function ProviderList({
     filteredProviders,
     currentProviderId,
     onSwitch,
+    checksLiveRouting,
+    liveRouting,
+    reapplyCurrent,
     openclawDefaultModel?.primary,
     isInConfig,
     currentOmoId,

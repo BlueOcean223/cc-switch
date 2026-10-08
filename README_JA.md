@@ -209,6 +209,15 @@ Codex では、CC Switch 内の「ChatGPT でログイン」から複数の Chat
 </details>
 
 <details>
+<summary><strong>設定ファイルのアドレスが 127.0.0.1:15721、キーが PROXY_MANAGED になっているのはなぜですか？</strong></summary>
+
+上流の CC Switch のローカルルーティングが書き込んだ値です。上流はローカルルーティングが有効な間、ツールの設定ファイルをローカルプロキシ（`http://127.0.0.1:15721`）に向け、キーをプレースホルダーの `PROXY_MANAGED` にし、終了時に元に戻します。上流がクラッシュしたり、強制終了されたり、元に戻す前にシャットダウンされたりすると、これらの値が残り、ツールは接続できなくなります。
+
+ccs-lite にはローカルルーティングがありません。起動時に Claude Code、Codex、Gemini CLI、Grok Build の設定ファイルを確認し、これらの残りがあって上流のローカルプロキシが動いていない場合は、現在のプロバイダーを自動で書き戻します。上流がまだ動いていてツールを引き継いでいる場合、ccs-lite はファイルを変更せず、現在のプロバイダーのカードに通知を表示します。ccs-lite のプロバイダーを使いたい場合は、上流でローカルルーティングをオフにするか上流を終了してから、カードの「再書き込み」をクリックしてください（トレイで現在のプロバイダーをクリックしても同じです）。
+
+</details>
+
+<details>
 <summary><strong>Claude Code で OpenAI 互換 API やローカルモデルを使えますか？</strong></summary>
 
 サービスがツールに必要な形式のエンドポイントを提供している場合に限り使えます。CC Switch は設定ファイルを書き込むだけで、API 形式は変換しません。Claude Code には Anthropic Messages、Codex と Grok Build には OpenAI Responses、Gemini CLI には Gemini API のエンドポイントが必要です。多くのプロバイダ（DeepSeek、Kimi、Zhipu GLM、MiniMax など）は Anthropic 互換のエンドポイントを提供しており、対応するプリセットはすでにそれを使っています。Chat Completions しか提供していないサービスを使う場合は、形式を変換するプロキシを自分で動かし、そのアドレスをプロバイダのリクエスト先に入力してください。

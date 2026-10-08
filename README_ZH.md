@@ -209,6 +209,15 @@ Codex 还可以在 CC Switch 里用“使用 ChatGPT 登录”登录多个 ChatG
 </details>
 
 <details>
+<summary><strong>配置文件里的地址为什么是 127.0.0.1:15721，Key 是 PROXY_MANAGED？</strong></summary>
+
+这是上游 CC Switch 的本地路由写进去的。上游开着本地路由时会把工具的配置文件改成指向本地代理（`http://127.0.0.1:15721`），Key 写成占位符 `PROXY_MANAGED`，退出时再改回来；上游崩溃、被强制结束或关机前来不及还原时，这些值会留在配置文件里，工具就连不上了。
+
+ccs-lite 没有本地路由。启动时它会检查 Claude Code、Codex、Gemini CLI、Grok Build 的配置文件：发现这些残留、而上游的本地代理又没在运行时，自动把当前供应商重新写进去。如果上游还在运行并接管着这个工具，ccs-lite 不会改动，只在当前供应商卡片上提示；想改用 ccs-lite 的供应商，先在上游关闭本地路由或退出上游，再点卡片上的“重新写入”（托盘里点当前供应商也可以）。
+
+</details>
+
+<details>
 <summary><strong>能在 Claude Code 里使用 OpenAI 兼容接口或本地模型吗？</strong></summary>
 
 要看服务有没有提供工具需要的接口格式。CC Switch 只写配置文件，不转换接口格式：Claude Code 需要 Anthropic Messages 接口，Codex 和 Grok Build 需要 OpenAI Responses 接口，Gemini CLI 需要 Gemini API。很多供应商（DeepSeek、Kimi、智谱 GLM、MiniMax 等）都提供 Anthropic 兼容接口，对应的预设已经填好。只提供 Chat Completions 接口的服务，需要你自己运行一个格式转换代理，再把它的地址填为供应商的请求地址。

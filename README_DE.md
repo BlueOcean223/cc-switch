@@ -209,6 +209,15 @@ Codex kann sich in CC Switch außerdem über „Sign in with ChatGPT“ bei mehr
 </details>
 
 <details>
+<summary><strong>Warum zeigt meine Konfigurationsdatei auf 127.0.0.1:15721 mit dem Schlüssel PROXY_MANAGED?</strong></summary>
+
+Diese Werte hat das lokale Routing des Upstream-CC-Switch geschrieben. Solange das lokale Routing aktiv ist, lässt Upstream die Konfigurationsdatei des Werkzeugs auf seinen lokalen Proxy (`http://127.0.0.1:15721`) zeigen, mit dem Platzhalterschlüssel `PROXY_MANAGED`, und stellt die Datei beim Beenden wieder her. Stürzt Upstream ab, wird es beendet oder fährt der Rechner herunter, bevor die Datei wiederhergestellt ist, bleiben die Werte stehen und das Werkzeug kann keine Verbindung aufbauen.
+
+ccs-lite hat kein lokales Routing. Beim Start prüft es die Konfigurationsdateien von Claude Code, Codex, Gemini CLI und Grok Build: Findet es diese Reste und läuft der lokale Proxy von Upstream nicht, schreibt es den aktuellen Anbieter automatisch zurück. Läuft Upstream noch und routet das Werkzeug, lässt ccs-lite die Datei unverändert und zeigt einen Hinweis auf der Karte des aktuellen Anbieters. Um stattdessen den Anbieter aus ccs-lite zu verwenden, schalten Sie das lokale Routing in Upstream aus oder beenden Upstream und klicken dann auf der Karte auf „Neu schreiben“ (oder klicken Sie im Tray auf den aktuellen Anbieter).
+
+</details>
+
+<details>
 <summary><strong>Kann ich in Claude Code OpenAI-kompatible Schnittstellen oder lokale Modelle verwenden?</strong></summary>
 
 Nur wenn der Dienst einen Endpunkt in dem Format anbietet, das das Werkzeug erwartet. CC Switch schreibt nur Konfigurationsdateien und konvertiert keine Schnittstellenformate: Claude Code braucht einen Anthropic-Messages-Endpunkt, Codex und Grok Build einen OpenAI-Responses-Endpunkt und Gemini CLI die Gemini-API. Viele Anbieter (DeepSeek, Kimi, Zhipu GLM, MiniMax u. a.) bieten einen Anthropic-kompatiblen Endpunkt an, und ihre Presets verwenden ihn bereits. Für einen Dienst, der nur Chat Completions anbietet, betreiben Sie selbst einen Proxy zur Formatkonvertierung und tragen dessen Adresse als Endpunkt des Anbieters ein.

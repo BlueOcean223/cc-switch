@@ -138,11 +138,50 @@ fn build_client(proxy_url: Option<&str>) -> Result<Client, String> {
     } else {
         // 未设置全局代理时，让 reqwest 自动检测系统代理（环境变量）
         log::debug!("[GlobalProxy] Following system proxy (no explicit proxy configured)");
+        if let Some(name) = env_proxy_on_upstream_routing_port(|name| std::env::var(name).ok()) {
+            log::warn!(
+                "[GlobalProxy] 环境变量 {name} 指向上游 CC Switch 的路由端口 {}（那是 API 代理，不是 HTTP 代理），ccs-lite 的网络请求可能失败",
+                crate::live::legacy_routing::DEFAULT_PROXY_PORT
+            );
+        }
     }
 
     builder
         .build()
         .map_err(|e| format!("Failed to build HTTP client: {e}"))
+}
+
+/// 第一个指向本机上游 CC Switch 路由端口的代理环境变量名。不绕过它，只用来记日志。
+fn env_proxy_on_upstream_routing_port(
+    read: impl Fn(&str) -> Option<String>,
+) -> Option<&'static str> {
+    const NAMES: &[&str] = &[
+        "HTTPS_PROXY",
+        "https_proxy",
+        "HTTP_PROXY",
+        "http_proxy",
+        "ALL_PROXY",
+        "all_proxy",
+    ];
+    NAMES.iter().copied().find(|name| {
+        read(name).is_some_and(|value| {
+            let value = value.trim();
+            let with_scheme = if value.contains("://") {
+                value.to_string()
+            } else {
+                format!("http://{value}")
+            };
+            url::Url::parse(&with_scheme).is_ok_and(|url| {
+                let loopback = match url.host() {
+                    Some(url::Host::Ipv4(ip)) => ip.is_loopback(),
+                    Some(url::Host::Ipv6(ip)) => ip.is_loopback(),
+                    Some(url::Host::Domain(domain)) => domain.eq_ignore_ascii_case("localhost"),
+                    None => false,
+                };
+                loopback && url.port() == Some(crate::live::legacy_routing::DEFAULT_PROXY_PORT)
+            })
+        })
+    })
 }
 
 /// 读出响应体并按 JSON 解析，供额度、余额查询使用。
@@ -232,6 +271,34 @@ mod tests {
         assert!(bad.len() > 20 && !bad.is_char_boundary(20));
         let masked = mask_url(bad);
         assert!(masked.ends_with("..."));
+    }
+
+    #[test]
+    fn env_proxy_on_the_upstream_routing_port_is_noticed() {
+        let env = |pairs: &'static [(&'static str, &'static str)]| {
+            move |name: &str| {
+                pairs
+                    .iter()
+                    .find(|(key, _)| *key == name)
+                    .map(|(_, value)| value.to_string())
+            }
+        };
+        assert_eq!(
+            env_proxy_on_upstream_routing_port(env(&[("HTTPS_PROXY", "http://127.0.0.1:15721")])),
+            Some("HTTPS_PROXY")
+        );
+        assert_eq!(
+            env_proxy_on_upstream_routing_port(env(&[("all_proxy", "localhost:15721")])),
+            Some("all_proxy")
+        );
+        assert_eq!(
+            env_proxy_on_upstream_routing_port(env(&[("HTTP_PROXY", "http://127.0.0.1:7890")])),
+            None
+        );
+        assert_eq!(
+            env_proxy_on_upstream_routing_port(env(&[("HTTP_PROXY", "http://10.0.0.2:15721")])),
+            None
+        );
     }
 
     #[test]

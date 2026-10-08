@@ -122,7 +122,15 @@
     "editProviderNamed": "Edit {{name}}",
     "editCurrentNoticeFile": "This is the provider in use. Saving writes it to",
     "editCurrentNoticeFileEnd": " right away; the next request uses it.",
-    "editCurrentNotice": "This is the provider in use. Saving takes effect right away; the next request uses the new settings."
+    "editCurrentNotice": "This is the provider in use. Saving takes effect right away; the next request uses the new settings.",
+    "liveRouting": {
+      "reapplied": "The current provider was written back to the config file",
+      "reapplyFailed": "Rewrite failed: {{error}}",
+      "repaired": "{{app}} was left on the upstream CC Switch local routing; the current provider was written back",
+      "upstreamActive": "Upstream CC Switch is routing {{app}}; switching or rewriting in ccs-lite will replace it",
+      "noCurrentProvider": "{{app}} was left on the upstream CC Switch local routing, but there is no current provider. Switch to a provider to fix it",
+      "repairFailed": "{{app}} was left on the upstream CC Switch local routing, and writing the current provider back failed: {{error}}"
+    }
   },
   "codex": {
     "followCodexLoginDescription": "The account changes with the current Codex CLI login",
@@ -1839,7 +1847,8 @@
     "fieldExtra": "• extra: String, custom display text",
     "tip1": "• Variables {{apiKey}} and {{baseUrl}} are automatically replaced",
     "tip2": "• Extractor function runs in sandbox environment, supports ES2020+ syntax",
-    "tip3": "• Entire config must be wrapped in () to form object literal expression"
+    "tip3": "• Entire config must be wrapped in () to form object literal expression",
+    "templateUnsupported": "This usage template is no longer supported (it only exists in upstream CC Switch). Choose another template."
   },
   "dbUpgrade": {
     "title": "Database version is too new",
@@ -2808,17 +2817,24 @@
       "enable": "Enable",
       "disable": "Disable",
       "edit": "Edit {{name}}",
-      "more": "More actions for {{name}}"
+      "more": "More actions for {{name}}",
+      "reapply": "Rewrite"
     },
     "chip": {
       "official": "Official",
       "hermesManaged": "Managed by Hermes",
-      "defaultModel": "Default model {{model}}"
+      "defaultModel": "Default model {{model}}",
+      "routingResidue": "Left on upstream routing",
+      "upstreamRouting": "Upstream is routing",
+      "needsRouting": "Needs local routing (not in ccs-lite)"
     },
     "reason": {
       "defaultCannotRemove": "The default can't be removed. Make another provider the default first.",
       "currentCannotRemove": "The provider in use can't be removed. Enable another one first.",
-      "inUseCannotDelete": "The provider in use can't be deleted. Switch to another one first."
+      "inUseCannotDelete": "The provider in use can't be deleted. Switch to another one first.",
+      "routingResidue": "The config file still holds the upstream CC Switch local routing address and placeholder key, and upstream is not running, so the client cannot connect. Click \"Rewrite\" to write this provider back.",
+      "upstreamRouting": "Upstream CC Switch is routing this app through its local proxy. Clicking \"Rewrite\" replaces upstream's routing; leave it alone to keep using upstream.",
+      "needsRouting": "This provider depends on upstream CC Switch's local routing (managed sign-in, API format conversion or a full URL). ccs-lite has no local routing, so the tool cannot use it after a switch. Delete it, or add a provider that uses the tool's own API."
     },
     "section": {
       "added": "Added · {{count}}",

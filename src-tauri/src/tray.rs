@@ -793,6 +793,8 @@ struct ProviderEntry {
     name: String,
     /// 同名时补在名字后面的区分词（备注或网址）。
     hint: Option<String>,
+    /// 能切过去：依赖已移除的本地路由、或行里是路由占位 Key 的供应商置灰。
+    switchable: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -872,11 +874,12 @@ fn provider_hint(provider: &Provider) -> Option<String> {
     (!host.is_empty()).then(|| host.to_string())
 }
 
-fn provider_entry(provider: &Provider) -> ProviderEntry {
+fn provider_entry(app: &AppType, provider: &Provider) -> ProviderEntry {
     ProviderEntry {
         id: provider.id.clone(),
         name: provider.name.clone(),
         hint: provider_hint(provider),
+        switchable: crate::services::provider::ensure_usable_without_routing(app, provider).is_ok(),
     }
 }
 
@@ -890,7 +893,7 @@ fn collect_app_snapshot(
     let rows = app_state.db.get_all_providers(app.as_str())?;
     let providers: Vec<ProviderEntry> = sort_providers(&rows)
         .into_iter()
-        .map(|(_, provider)| provider_entry(provider))
+        .map(|(_, provider)| provider_entry(app, provider))
         .collect();
     let current_id =
         crate::mode::current::provider_id(&app_state.db, app)?.filter(|id| rows.contains_key(id));
@@ -1204,7 +1207,7 @@ fn provider_rows(snapshot: &AppSnapshot) -> Vec<TrayEntry> {
             TrayEntry::check(
                 provider_id_for(app, &p.id),
                 name,
-                true,
+                p.switchable,
                 current == Some(p.id.as_str()),
             )
         })
@@ -1919,7 +1922,7 @@ enum ClickOutcome {
 }
 
 /// 点一家供应商：切换走 `ProviderService::switch`（里面先拿切换锁）；点已勾着的那家不再写
-/// 一次客户端文件。
+/// 一次客户端文件，除非客户端配置停在上游 CC Switch 的路由状态，这时重新写入它。
 fn handle_provider_click(
     app: &tauri::AppHandle,
     app_type: &AppType,
@@ -1931,7 +1934,21 @@ fn handle_provider_click(
     let state = app_state.inner();
     let current = crate::mode::current::provider_id(&state.db, app_type)?;
     if current.as_deref() == Some(provider_id) {
-        return Ok(ClickOutcome::Unchanged);
+        if crate::live::legacy_routing::live_routing_state(app_type).is_none() {
+            return Ok(ClickOutcome::Unchanged);
+        }
+        let Some(provider) = state
+            .db
+            .get_provider_by_id(provider_id, app_type.as_str())?
+        else {
+            return Ok(ClickOutcome::Unchanged);
+        };
+        if !crate::services::ProviderService::reapply_current(state, app_type)? {
+            return Ok(ClickOutcome::Unchanged);
+        }
+        return Ok(ClickOutcome::Switched {
+            name: provider.name,
+        });
     }
     let provider = state
         .db
@@ -2733,6 +2750,7 @@ mod tests {
             id: id.to_string(),
             name: name.to_string(),
             hint: None,
+            switchable: true,
         }
     }
 
@@ -2829,6 +2847,29 @@ mod tests {
             TrayEntry::Check { id, checked: false, enabled: true, .. } if id == "prov:claude:ds"
         ));
         assert!(matches!(&children[3], TrayEntry::Item { id, .. } if id == "nav:app:claude"));
+    }
+
+    #[test]
+    fn providers_that_need_the_removed_routing_are_greyed_out() {
+        let mut copilot = Provider::with_id(
+            "copilot".to_string(),
+            "GitHub Copilot".to_string(),
+            serde_json::json!({ "env": {} }),
+            None,
+        );
+        copilot.meta = Some(crate::provider::ProviderMeta {
+            provider_type: Some("github_copilot".to_string()),
+            ..Default::default()
+        });
+        let blocked = provider_entry(&AppType::Claude, &copilot);
+        assert!(!blocked.switchable);
+
+        let app = snapshot(AppType::Claude, vec![entry("kimi", "Kimi"), blocked]);
+        let children = children_of(&model(&[], &[app]), &AppType::Claude);
+        assert!(matches!(
+            &children[1],
+            TrayEntry::Check { id, enabled: false, .. } if id == "prov:claude:copilot"
+        ));
     }
 
     #[test]

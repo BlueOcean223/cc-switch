@@ -504,7 +504,7 @@ fn stale_reserved_tables_never_reach_live() {
             vec![codex(
                 "stale",
                 Some("sk-stale"),
-                "model_provider = \"openai\"\nmodel = \"gpt-5\"\n\n[model_providers.openai]\nname = \"Stale\"\nbase_url = \"https://stale.example/v1\"\nwire_api = \"chat\"\n",
+                "model_provider = \"openai\"\nmodel = \"gpt-5\"\n\n[model_providers.openai]\nname = \"Stale\"\nbase_url = \"https://stale.example/v1\"\nwire_api = \"responses\"\n",
             )],
             true,
         );

@@ -10,7 +10,7 @@ use crate::database::Database;
 use crate::error::AppError;
 use crate::live::engine::LiveFile;
 use crate::live::patch::json::JsonPatch;
-use crate::live::project::claude::{direct_patch, ClaudeProjection};
+use crate::live::project::claude::{clearing_patch, direct_patch, ClaudeProjection};
 use crate::mode::operation::{AppWrite, FileChange, OperationReport};
 use crate::mode::state::{op, PendingTarget};
 use crate::provider::Provider;
@@ -43,6 +43,21 @@ pub(crate) fn reapply(
     target: &Provider,
 ) -> Result<OperationReport, AppError> {
     write(db, prev, target, None)
+}
+
+/// 把当前供应商 `target` 重新写进 live，并删掉 `all` 里任一供应商带进来的独有字段：
+/// 修复上游本地路由留下的配置。不改指针。
+pub(crate) fn reapply_clearing(
+    db: &Database,
+    all: &[&Provider],
+    target: &Provider,
+) -> Result<OperationReport, AppError> {
+    let all: Vec<ClaudeProjection> = all
+        .iter()
+        .map(|provider| ClaudeProjection::of(&provider.settings_config))
+        .collect();
+    let patch = clearing_patch(&all, &ClaudeProjection::of(&target.settings_config));
+    run(db, op::APPLY, Some(&patch), PendingTarget::default())
 }
 
 fn write(

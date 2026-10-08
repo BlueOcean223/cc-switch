@@ -209,6 +209,15 @@ For Codex, you can also sign in to multiple ChatGPT accounts inside CC Switch vi
 </details>
 
 <details>
+<summary><strong>Why does my config file point to 127.0.0.1:15721 with the key PROXY_MANAGED?</strong></summary>
+
+Upstream CC Switch's local routing wrote these values. While its local routing is on, upstream points the tool's config file at its local proxy (`http://127.0.0.1:15721`) with the placeholder key `PROXY_MANAGED`, and restores the file when it exits. If upstream crashes, is killed, or the computer shuts down before it restores the file, the values stay behind and the tool cannot connect.
+
+ccs-lite has no local routing. On startup it checks the config files of Claude Code, Codex, Gemini CLI, and Grok Build: if it finds these leftovers and upstream's local proxy is not running, it writes the current provider back automatically. If upstream is still running and routing the tool, ccs-lite leaves the file alone and shows a notice on the current provider card. To use the ccs-lite provider instead, turn off local routing in upstream or quit upstream, then click "Rewrite" on the card (or click the current provider in the tray).
+
+</details>
+
+<details>
 <summary><strong>Can I use OpenAI-compatible APIs or local models in Claude Code?</strong></summary>
 
 Only if the service offers an endpoint in the format the tool expects. CC Switch only writes config files and doesn't convert API formats: Claude Code needs an Anthropic Messages endpoint, Codex and Grok Build need an OpenAI Responses endpoint, and Gemini CLI needs the Gemini API. Many providers (DeepSeek, Kimi, Zhipu GLM, MiniMax, and others) offer an Anthropic-compatible endpoint, and their presets already use it. For a service that only offers Chat Completions, run a format-conversion proxy yourself and enter its address as the provider's endpoint.

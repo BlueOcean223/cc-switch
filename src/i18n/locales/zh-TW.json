@@ -122,7 +122,15 @@
     "editProviderNamed": "編輯 {{name}}",
     "editCurrentNoticeFile": "這是正在使用的供應商。儲存後會立即寫進",
     "editCurrentNoticeFileEnd": "，下一次請求生效。",
-    "editCurrentNotice": "這是正在使用的供應商。儲存後立即生效，下一次請求就用新的設定。"
+    "editCurrentNotice": "這是正在使用的供應商。儲存後立即生效，下一次請求就用新的設定。",
+    "liveRouting": {
+      "reapplied": "已把目前供應商重新寫入設定檔",
+      "reapplyFailed": "重新寫入失敗：{{error}}",
+      "repaired": "{{app}} 的設定停在上游 CC Switch 的本機路由狀態，已重新寫入目前供應商",
+      "upstreamActive": "上游 CC Switch 正在接管 {{app}}；在 ccs-lite 裡切換或重新寫入會覆蓋它",
+      "noCurrentProvider": "{{app}} 的設定停在上游 CC Switch 的本機路由狀態，但沒有目前供應商，請選一個供應商切換過去",
+      "repairFailed": "{{app}} 的設定停在上游 CC Switch 的本機路由狀態，重新寫入失敗：{{error}}"
+    }
   },
   "codex": {
     "followCodexLoginDescription": "帳號會隨 Codex CLI 目前登入而變更",
@@ -1839,7 +1847,8 @@
     "fieldExtra": "• extra: 字串，擴充欄位，可自由補充需要展示的文字",
     "tip1": "• 變數 {{apiKey}} 和 {{baseUrl}} 會自動替換",
     "tip2": "• extractor 函式在沙盒環境中執行，支援 ES2020+ 語法",
-    "tip3": "• 整個設定必須用 () 包覆，形成物件實字運算式"
+    "tip3": "• 整個設定必須用 () 包覆，形成物件實字運算式",
+    "templateUnsupported": "這個用量模板已不再支援（它只在上游 CC Switch 裡有），請改選其他模板。"
   },
   "dbUpgrade": {
     "title": "資料庫版本過新",
@@ -2808,17 +2817,24 @@
       "enable": "啟用",
       "disable": "停用",
       "edit": "編輯 {{name}}",
-      "more": "{{name}} 的更多操作"
+      "more": "{{name}} 的更多操作",
+      "reapply": "重新寫入"
     },
     "chip": {
       "official": "官方",
       "hermesManaged": "Hermes 託管",
-      "defaultModel": "預設模型 {{model}}"
+      "defaultModel": "預設模型 {{model}}",
+      "routingResidue": "停在上游路由",
+      "upstreamRouting": "上游正在接管",
+      "needsRouting": "需要本機路由（ccs-lite 不支援）"
     },
     "reason": {
       "defaultCannotRemove": "預設那家不能移除，先把別家設為預設。",
       "currentCannotRemove": "正在用的這家不能移除，先啟用別家。",
-      "inUseCannotDelete": "正在用的這家不能刪除，先切到別家。"
+      "inUseCannotDelete": "正在用的這家不能刪除，先切到別家。",
+      "routingResidue": "設定檔裡還是上游 CC Switch 本機路由的位址和佔位 Key（上游沒在執行），用戶端會連不上。點「重新寫入」把這個供應商寫回去。",
+      "upstreamRouting": "上游 CC Switch 正在用本機路由接管這個應用。點「重新寫入」會覆蓋上游的接管；想繼續用上游的路由就不要點。",
+      "needsRouting": "這個供應商依賴上游 CC Switch 的本機路由（託管登入、介面格式轉換或完整 URL），ccs-lite 沒有本機路由，切換過去用戶端無法使用。請刪除它，或者新建一個使用工具自身介面的供應商。"
     },
     "section": {
       "added": "已加入 · {{count}}",

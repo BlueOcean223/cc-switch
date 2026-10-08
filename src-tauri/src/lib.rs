@@ -1194,6 +1194,39 @@ pub fn run() {
             tauri::async_runtime::spawn(async move {
                 let state = app_handle.state::<AppState>();
 
+                // 上游 CC Switch 的本地路由留下的客户端配置：上游代理不在监听时重新写入
+                // 当前供应商（不然客户端连不上），其余情况只通知前端。排在会话同步之前。
+                {
+                    let handle = app_handle.clone();
+                    let task = tauri::async_runtime::spawn_blocking(move || {
+                        let state = handle.state::<AppState>();
+                        for app_type in [
+                            crate::app_config::AppType::Claude,
+                            crate::app_config::AppType::Codex,
+                            crate::app_config::AppType::Gemini,
+                            crate::app_config::AppType::GrokBuild,
+                        ] {
+                            let Some(repair) =
+                                crate::services::provider::ProviderService::repair_legacy_routing(
+                                    &state, &app_type,
+                                )
+                            else {
+                                continue;
+                            };
+                            let payload = serde_json::json!({
+                                "app": app_type.as_str(),
+                                "repair": repair,
+                            });
+                            if let Err(e) = handle.emit("legacy-routing-detected", payload) {
+                                log::warn!("发送路由残留事件失败: {e}");
+                            }
+                        }
+                    });
+                    if let Err(e) = task.await {
+                        log::warn!("检查上游路由残留的任务异常退出: {e}");
+                    }
+                }
+
                 // 必须排在 auto-extract 之前：先把历史泄漏进 Gemini 共享片段的凭据
                 // 清干净，否则紧接着的提取会基于被污染的 live 再写一遍。
                 if let Err(e) =
@@ -1409,6 +1442,8 @@ pub fn run() {
             commands::remove_provider_from_live_config,
             commands::switch_provider,
             commands::import_default_config,
+            commands::get_live_routing_state,
+            commands::reapply_current_provider,
             commands::ensure_codex_official_provider,
             commands::ensure_grokbuild_official_provider,
             commands::get_claude_config_status,
@@ -1894,6 +1929,14 @@ fn initialize_common_config_snippets(state: &store::AppState) {
             Ok(s) => s,
             Err(_) => continue,
         };
+        // 停在上游 CC Switch 路由状态的配置里是占位 Key 和本地代理地址，不从它提取。
+        if crate::live::legacy_routing::detect(&app_type, &settings).is_some() {
+            log::debug!(
+                "○ Live config for {} is on upstream routing; snippet extraction skipped",
+                app_type.as_str()
+            );
+            continue;
+        }
 
         match crate::services::provider::ProviderService::extract_common_config_snippet_from_settings(
             app_type.clone(),
@@ -2163,6 +2206,44 @@ mod tests {
         classify_exit_request, error_for_log, redact_url_for_log, redact_url_for_log_with_secrets,
         runtime_log_level_allows, ExitRequestAction,
     };
+
+    /// live 停在上游路由状态时不从它提取通用配置片段，等 live 恢复后再提取。
+    #[test]
+    #[serial_test::serial]
+    fn snippets_are_not_extracted_from_a_routed_live() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let saved: Vec<_> = ["HOME", "USERPROFILE", "CC_SWITCH_TEST_HOME"]
+            .into_iter()
+            .map(|key| {
+                let old = std::env::var_os(key);
+                std::env::set_var(key, dir.path());
+                (key, old)
+            })
+            .collect();
+        crate::settings::reload_settings().unwrap();
+
+        let config = crate::codex_config::get_codex_config_path();
+        std::fs::create_dir_all(config.parent().unwrap()).unwrap();
+        std::fs::write(
+            &config,
+            "model_provider = \"cc-switch-official\"\napproval_policy = \"never\"\n\n[model_providers.cc-switch-official]\nname = \"OpenAI\"\nbase_url = \"http://127.0.0.1:15721/v1\"\nrequires_openai_auth = true\n",
+        )
+        .unwrap();
+        let state = crate::store::AppState::new(std::sync::Arc::new(
+            crate::database::Database::memory().unwrap(),
+        ));
+        super::initialize_common_config_snippets(&state);
+        let snippet = state.db.get_config_snippet("codex").unwrap();
+
+        for (key, old) in saved {
+            match old {
+                Some(value) => std::env::set_var(key, value),
+                None => std::env::remove_var(key),
+            }
+        }
+        let _ = crate::settings::reload_settings();
+        assert_eq!(snippet, None);
+    }
 
     #[test]
     fn log_error_drops_toml_source_lines_but_keeps_position() {

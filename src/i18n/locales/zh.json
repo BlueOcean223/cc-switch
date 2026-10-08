@@ -122,7 +122,15 @@
     "editProviderNamed": "编辑 {{name}}",
     "editCurrentNoticeFile": "这是正在使用的供应商。保存后会立即写进",
     "editCurrentNoticeFileEnd": "，下一次请求生效。",
-    "editCurrentNotice": "这是正在使用的供应商。保存后立即生效，下一次请求就用新的设置。"
+    "editCurrentNotice": "这是正在使用的供应商。保存后立即生效，下一次请求就用新的设置。",
+    "liveRouting": {
+      "reapplied": "已把当前供应商重新写入配置文件",
+      "reapplyFailed": "重新写入失败：{{error}}",
+      "repaired": "{{app}} 的配置停在上游 CC Switch 的本地路由状态，已重新写入当前供应商",
+      "upstreamActive": "上游 CC Switch 正在接管 {{app}}；在 ccs-lite 里切换或重新写入会覆盖它",
+      "noCurrentProvider": "{{app}} 的配置停在上游 CC Switch 的本地路由状态，但没有当前供应商，请选一个供应商切换过去",
+      "repairFailed": "{{app}} 的配置停在上游 CC Switch 的本地路由状态，重新写入失败：{{error}}"
+    }
   },
   "codex": {
     "followCodexLoginDescription": "账号会随 Codex CLI 当前登录变化",
@@ -1839,7 +1847,8 @@
     "fieldExtra": "• extra: 字符串，扩展字段，可自由补充需要展示的文本",
     "tip1": "• 变量 {{apiKey}} 和 {{baseUrl}} 会自动替换",
     "tip2": "• extractor 函数在沙箱环境中执行，支持 ES2020+ 语法",
-    "tip3": "• 整个配置必须用 () 包裹，形成对象字面量表达式"
+    "tip3": "• 整个配置必须用 () 包裹，形成对象字面量表达式",
+    "templateUnsupported": "这个用量模板已不再支持（它只在上游 CC Switch 里有），请改选其他模板。"
   },
   "dbUpgrade": {
     "title": "数据库版本过新",
@@ -2808,17 +2817,24 @@
       "enable": "启用",
       "disable": "停用",
       "edit": "编辑 {{name}}",
-      "more": "{{name}} 的更多操作"
+      "more": "{{name}} 的更多操作",
+      "reapply": "重新写入"
     },
     "chip": {
       "official": "官方",
       "hermesManaged": "Hermes 托管",
-      "defaultModel": "默认模型 {{model}}"
+      "defaultModel": "默认模型 {{model}}",
+      "routingResidue": "停在上游路由",
+      "upstreamRouting": "上游正在接管",
+      "needsRouting": "需要本地路由（ccs-lite 不支持）"
     },
     "reason": {
       "defaultCannotRemove": "默认那家不能移除，先把别家设为默认。",
       "currentCannotRemove": "正在用的这家不能移除，先启用别家。",
-      "inUseCannotDelete": "正在用的这家不能删除，先切到别家。"
+      "inUseCannotDelete": "正在用的这家不能删除，先切到别家。",
+      "routingResidue": "配置文件里还是上游 CC Switch 本地路由的地址和占位 Key（上游没在运行），客户端会连不上。点「重新写入」把这个供应商写回去。",
+      "upstreamRouting": "上游 CC Switch 正在用本地路由接管这个应用。点「重新写入」会覆盖上游的接管；想继续用上游的路由就不要点。",
+      "needsRouting": "这个供应商依赖上游 CC Switch 的本地路由（托管登录、接口格式转换或完整 URL），ccs-lite 没有本地路由，切换过去客户端用不了。请删除它，或者新建一个使用工具自身接口的供应商。"
     },
     "section": {
       "added": "已添加 · {{count}}",

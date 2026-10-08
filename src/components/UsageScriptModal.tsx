@@ -501,7 +501,15 @@ const UsageScriptModal: React.FC<UsageScriptModalProps> = ({
     setScript({ ...script, enabled: true });
   };
 
+  // 上游 CC Switch 才有的模板（如 GitHub Copilot）：ccs-lite 没有对应的查询，要求改选
+  const isUnsupportedTemplate =
+    selectedTemplate !== null && !(selectedTemplate in PRESET_TEMPLATES);
+
   const handleSave = () => {
+    if (script.enabled && isUnsupportedTemplate) {
+      toast.error(t("usageScript.templateUnsupported"));
+      return;
+    }
     // 专用模板不需要脚本验证
     if (!NATIVE_USAGE_TEMPLATES.has(selectedTemplate || "")) {
       if (script.enabled && !script.code.trim()) {
@@ -903,6 +911,12 @@ const UsageScriptModal: React.FC<UsageScriptModalProps> = ({
                   );
                 })}
             </div>
+
+            {isUnsupportedTemplate && (
+              <p className="text-sm text-warning-text">
+                {t("usageScript.templateUnsupported")}
+              </p>
+            )}
 
             {/* 自定义模式：变量提示和具体值 */}
             {selectedTemplate === TEMPLATE_TYPES.CUSTOM && (

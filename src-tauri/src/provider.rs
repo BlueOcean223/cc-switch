@@ -368,6 +368,10 @@ pub struct ProviderMeta {
     /// - "codex_oauth": 绑定了 ChatGPT 账号的 Codex 官方卡
     #[serde(rename = "providerType", skip_serializing_if = "Option::is_none")]
     pub provider_type: Option<String>,
+    /// 这里没有声明的字段（上游 CC Switch 的 `apiFormat`、`isFullUrl` 等）原样保留：保存
+    /// 供应商时不丢，判断供应商是否依赖已移除的本地路由也要读它们。
+    #[serde(flatten)]
+    pub extra: serde_json::Map<String, serde_json::Value>,
 }
 
 impl ProviderMeta {

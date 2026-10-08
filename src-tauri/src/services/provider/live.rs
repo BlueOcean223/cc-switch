@@ -939,6 +939,16 @@ pub fn import_default_config(state: &AppState, app_type: AppType) -> Result<bool
         return Ok(false);
     }
 
+    // live 停在上游 CC Switch 的本地路由状态时，里面只有占位 Key 和本地代理地址，不是用户
+    // 的真实配置。导入的话它会成为当前供应商，之后每次写回都是失效的代理地址。
+    if crate::live::legacy_routing::live_routing_state(&app_type).is_some() {
+        return Err(AppError::localized(
+            "provider.import.live_taken_over",
+            "配置文件停在上游 CC Switch 的本地路由状态（Key 是占位符），不能导入为供应商。请先在上游关闭本地路由或退出上游，确认配置文件恢复后再导入，或者直接添加供应商。",
+            "The config file is still on upstream CC Switch's local routing (the key is a placeholder) and cannot be imported as a provider. Turn off local routing in upstream or quit upstream and check that the file is restored, then import again, or add a provider directly.",
+        ));
+    }
+
     let settings_config = match app_type {
         AppType::Codex => crate::codex_config::read_codex_live_settings()?,
         AppType::GrokBuild => {

@@ -15,6 +15,7 @@ use toml_edit::{DocumentMut, InlineTable, Item, Table, TableLike, Value as TomlV
 
 use crate::error::AppError;
 use crate::live::floor;
+use crate::live::legacy_routing::{OFFICIAL_PROXY_ROUTE_ID, PROXY_PLACEHOLDER};
 use crate::live::patch::toml::{same_value, shape_error, TomlDocPatch};
 use crate::live::patch::LiveWriteError;
 
@@ -341,8 +342,8 @@ pub fn is_keyless_fallback(error: &AppError) -> bool {
 fn keyless_fallback_error() -> AppError {
     AppError::localized(
         KEYLESS_FALLBACK_ERROR,
-        "该 Codex 配置没有可用的 API 密钥，而 requires_openai_auth = true（或顶层 openai_base_url）会让 Codex 回退使用 auth.json 里的登录凭据访问第三方地址。请为供应商填写 API 密钥，或移除该回退指令",
-        "This Codex config has no usable API key, and requires_openai_auth = true (or a top-level openai_base_url) would make Codex fall back to whatever login auth.json holds for a third-party route. Add an API key to the provider or remove the fallback directive",
+        "该 Codex 配置没有可用的 API 密钥，而 requires_openai_auth = true（或顶层 openai_base_url）会让 Codex 回退使用 auth.json 里的登录凭据访问第三方地址。上游 CC Switch 靠本地路由给这类配置补凭据，ccs-lite 没有本地路由。请为供应商填写 API 密钥，或移除该回退指令",
+        "This Codex config has no usable API key, and requires_openai_auth = true (or a top-level openai_base_url) would make Codex fall back to whatever login auth.json holds for a third-party route. Upstream CC Switch supplied the credentials for such configs through its local routing, which ccs-lite does not have. Add an API key to the provider or remove the fallback directive",
     )
 }
 
@@ -460,10 +461,31 @@ fn official_mirror_table() -> Table {
     table
 }
 
-/// 休眠形态 custom 表的占位地址：上面不需要有服务在监听。
-pub(crate) const DORMANT_BASE_URL: &str = "http://127.0.0.1:15721/v1";
+/// 休眠形态 custom 表的占位地址。`.invalid` 是保留域名，解析不到任何主机：仍选着
+/// `custom` 的 profile 或会话发请求会直接失败，不会发到别人的服务上。
+pub(crate) const DORMANT_BASE_URL: &str = "https://dormant.invalid/v1";
 /// 休眠形态 custom 表的占位 Key。
-pub(crate) const DORMANT_BEARER_TOKEN: &str = "PROXY_MANAGED";
+pub(crate) const DORMANT_BEARER_TOKEN: &str = "CCS_LITE_DORMANT";
+/// 旧版休眠表指向上游 CC Switch 的路由端口：共存时上游的代理可能正在那里监听，
+/// 请求会被它转发给上游当前的供应商。认出来以后换成新形态。
+const LEGACY_DORMANT_BASE_URL: &str = "http://127.0.0.1:15721/v1";
+const LEGACY_DORMANT_BEARER_TOKEN: &str = "PROXY_MANAGED";
+
+/// custom 表是不是休眠形态（新旧两种都认）。
+fn is_dormant_table(item: &Item) -> bool {
+    let Some(table) = item.as_table_like() else {
+        return false;
+    };
+    let base_url = table.get("base_url").and_then(Item::as_str);
+    let token = table
+        .get("experimental_bearer_token")
+        .and_then(Item::as_str);
+    matches!(base_url, Some(DORMANT_BASE_URL | LEGACY_DORMANT_BASE_URL))
+        && matches!(
+            token,
+            None | Some(DORMANT_BEARER_TOKEN | LEGACY_DORMANT_BEARER_TOKEN)
+        )
+}
 
 /// 官方直连时 custom 表的休眠形态：占位地址加占位 Key。
 fn dormant_route_table() -> Table {
@@ -672,20 +694,23 @@ impl CodexConfigPatch {
                 continue;
             }
             let item = providers.remove(id).expect("present");
-            if self.is_retired(id, &item) {
+            if self.is_retired(id, &item) || holds_placeholder(&item) {
                 continue;
             }
             let renamed = first_free_id(providers, LEGACY_REROUTE_ID);
             providers.insert(&renamed, item);
         }
 
-        // 旧版按别的 id 写进去、能证明是 CC Switch 写的表。被 profile 引用的不动。
+        // 旧版按别的 id 写进去、能证明是 CC Switch 写的表，以及上游本地路由留下的表
+        // （官方代理路由表、Key 是占位符的表）。被 profile 引用的不动。
         let doomed: Vec<String> = providers
             .iter()
             .filter(|(id, item)| {
                 *id != ROUTE_ID
                     && !referenced.iter().any(|name| name == id)
-                    && self.is_retired(id, item)
+                    && (*id == OFFICIAL_PROXY_ROUTE_ID
+                        || holds_placeholder(item)
+                        || self.is_retired(id, item))
             })
             .map(|(id, _)| id.to_string())
             .collect();
@@ -701,8 +726,10 @@ impl CodexConfigPatch {
             }
             RouteWrite::Default | RouteWrite::BuiltIn { table: None, .. } => {
                 // custom 表是 CC Switch 的，没人选它了也留着（改成不带真实 Key 的休眠形态
-                // 由切回官方负责）：这里保持原样，只保证不留真实 Key。
-                if let Some(item) = providers.get_mut(ROUTE_ID) {
+                // 由切回官方负责）：这里保持原样，只保证不留真实 Key。旧版休眠表换成新形态
+                if providers.get(ROUTE_ID).is_some_and(is_dormant_table) {
+                    put_table(providers, ROUTE_ID, dormant_route_table(), container_inline);
+                } else if let Some(item) = providers.get_mut(ROUTE_ID) {
                     if let Some(table) = item.as_table_like_mut() {
                         table.remove("experimental_bearer_token");
                     }
@@ -754,6 +781,14 @@ impl CodexConfigPatch {
             .iter()
             .any(|known| known.id == id && base_url.as_deref() == Some(known.base_url.as_str()))
     }
+}
+
+/// 上游本地路由写的表：`experimental_bearer_token` 是占位符。
+fn holds_placeholder(item: &Item) -> bool {
+    item.as_table_like()
+        .and_then(|table| table.get("experimental_bearer_token"))
+        .and_then(Item::as_str)
+        == Some(PROXY_PLACEHOLDER)
 }
 
 fn first_free_id(providers: &dyn TableLike, base: &str) -> String {
@@ -976,6 +1011,38 @@ mod tests {
             .apply_to(Path::new("config.toml"), &mut doc)
             .expect("apply");
         doc
+    }
+
+    #[test]
+    fn legacy_dormant_table_is_replaced_by_the_unreachable_form() {
+        // 旧版休眠表指向上游 CC Switch 的路由端口，下一次写入换成新形态
+        let live = "model = \"gpt-5.5\"\n\n[model_providers.custom]\nname = \"custom\"\nbase_url = \"http://127.0.0.1:15721/v1\"\nwire_api = \"responses\"\nexperimental_bearer_token = \"PROXY_MANAGED\"\n";
+        for route in [RouteWrite::Default, RouteWrite::Official] {
+            let doc = apply(route, live);
+            let dormant = doc["model_providers"][ROUTE_ID].as_table().unwrap();
+            assert_eq!(dormant["base_url"].as_str(), Some(DORMANT_BASE_URL));
+            assert_eq!(
+                dormant["experimental_bearer_token"].as_str(),
+                Some(DORMANT_BEARER_TOKEN)
+            );
+        }
+
+        // 用户自己的 custom 表只去掉 Key
+        let own = "model = \"gpt-5.5\"\n\n[model_providers.custom]\nname = \"custom\"\nbase_url = \"http://127.0.0.1:4000/v1\"\nexperimental_bearer_token = \"sk-own\"\n";
+        let doc = apply(RouteWrite::Default, own);
+        let table = doc["model_providers"][ROUTE_ID].as_table().unwrap();
+        assert_eq!(table["base_url"].as_str(), Some("http://127.0.0.1:4000/v1"));
+        assert!(table.get("experimental_bearer_token").is_none());
+    }
+
+    #[test]
+    fn upstream_proxy_tables_are_removed_unless_a_profile_uses_them() {
+        let live = "model_provider = \"cc-switch-official\"\nmodel = \"gpt-5.5\"\n\n[profiles.p]\nmodel_provider = \"kept\"\n\n[model_providers.cc-switch-official]\nname = \"OpenAI\"\nbase_url = \"http://127.0.0.1:15721/v1\"\nrequires_openai_auth = true\n\n[model_providers.routed]\nbase_url = \"http://127.0.0.1:15721/v1\"\nexperimental_bearer_token = \"PROXY_MANAGED\"\n\n[model_providers.openai]\nbase_url = \"http://127.0.0.1:15721/v1\"\nexperimental_bearer_token = \"PROXY_MANAGED\"\n\n[model_providers.kept]\nbase_url = \"http://127.0.0.1:15721/v1\"\nexperimental_bearer_token = \"PROXY_MANAGED\"\n\n[model_providers.mine]\nbase_url = \"http://127.0.0.1:4000/v1\"\n";
+        let doc = apply(RouteWrite::Official, live);
+        assert!(doc.get("model_provider").is_none(), "{doc}");
+        let providers = doc["model_providers"].as_table().unwrap();
+        let ids: Vec<&str> = providers.iter().map(|(id, _)| id).collect();
+        assert_eq!(ids, ["kept", "mine"], "{doc}");
     }
 
     #[test]

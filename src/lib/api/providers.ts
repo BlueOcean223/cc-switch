@@ -42,6 +42,13 @@ export interface ProviderEditorInactiveField {
   value: unknown;
 }
 
+/** 客户端配置停在上游 CC Switch 的本地路由状态（Key 是 `PROXY_MANAGED` 等）。 */
+export interface LiveRoutingState {
+  baseUrl?: string | null;
+  /** 上游代理还在监听：上游正在接管，在 ccs-lite 里重新写入会覆盖它 */
+  upstreamActive: boolean;
+}
+
 /** 编辑器底部 JSON 的显示内容：切到这个供应商之后配置文件会是什么样。 */
 export interface ProviderEditorView {
   settings: Record<string, unknown>;
@@ -114,6 +121,16 @@ export const providersApi = {
 
   async switch(id: string, appId: AppId): Promise<SwitchResult> {
     return await invoke("switch_provider", { id, app: appId });
+  },
+
+  /** live 停在上游路由状态时返回状态，否则返回 null */
+  async getLiveRoutingState(appId: AppId): Promise<LiveRoutingState | null> {
+    return await invoke("get_live_routing_state", { app: appId });
+  },
+
+  /** 把当前供应商重新写进 live；没有当前供应商时返回 false */
+  async reapplyCurrent(appId: AppId): Promise<boolean> {
+    return await invoke("reapply_current_provider", { app: appId });
   },
 
   async importDefault(appId: AppId): Promise<boolean> {

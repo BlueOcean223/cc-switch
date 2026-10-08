@@ -118,6 +118,14 @@ interface SyncStatusUpdatedPayload {
   error?: string;
 }
 
+/** 后端 `legacy-routing-detected` 事件（`RoutingRepair`） */
+interface LegacyRoutingEvent {
+  app: AppId;
+  repair:
+    | { outcome: "repaired" | "upstreamActive" | "noCurrentProvider" }
+    | { outcome: "failed"; message: string };
+}
+
 type OpenClawConfigTab = "env" | "tools" | "agents";
 
 const getInitialApp = (): AppId => {
@@ -325,6 +333,9 @@ function App() {
             if (event.appType === activeApp) {
               await refetch();
             }
+            await queryClient.invalidateQueries({
+              queryKey: ["liveRoutingState", event.appType],
+            });
             if (event.appType === "pi") {
               await invalidatePiProviderCaches(queryClient);
             }
@@ -346,6 +357,37 @@ function App() {
       unsubscribe?.();
     };
   }, [activeApp, queryClient, refetch]);
+
+  // 启动时发现客户端配置停在上游 CC Switch 的路由状态（见后端 repair_legacy_routing）
+  useTauriEvent<LegacyRoutingEvent | null | undefined>(
+    "legacy-routing-detected",
+    async (payload) => {
+      if (!payload) return;
+      await queryClient.invalidateQueries({
+        queryKey: ["liveRoutingState", payload.app],
+      });
+      const app = t(`apps.${payload.app}`, { defaultValue: payload.app });
+      switch (payload.repair.outcome) {
+        case "repaired":
+          toast.success(t("provider.liveRouting.repaired", { app }));
+          break;
+        case "upstreamActive":
+          toast.warning(t("provider.liveRouting.upstreamActive", { app }));
+          break;
+        case "noCurrentProvider":
+          toast.warning(t("provider.liveRouting.noCurrentProvider", { app }));
+          break;
+        case "failed":
+          toast.error(
+            t("provider.liveRouting.repairFailed", {
+              app,
+              error: payload.repair.message,
+            }),
+          );
+          break;
+      }
+    },
+  );
 
   useTauriEvent("universal-provider-synced", async () => {
     await queryClient.invalidateQueries({ queryKey: ["providers"] });

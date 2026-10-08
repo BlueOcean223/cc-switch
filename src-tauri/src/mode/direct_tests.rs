@@ -2146,3 +2146,270 @@ async fn codex_adding_a_keyless_first_provider_is_refused() {
     assert!(state.db.get_provider_by_id("c", "codex").unwrap().is_none());
     assert_eq!(codex_text(), before);
 }
+
+// ===== 上游 CC Switch 的路由残留 =====
+
+/// 一个没人监听的回环端口。
+fn unused_port() -> u16 {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.local_addr().unwrap().port()
+}
+
+fn claude_routed_live(port: u16) -> String {
+    json!({
+        "hooks": { "Stop": [] },
+        "env": {
+            "ANTHROPIC_BASE_URL": format!("http://127.0.0.1:{port}"),
+            "ANTHROPIC_AUTH_TOKEN": "PROXY_MANAGED",
+            "ANTHROPIC_MODEL": "claude-sonnet-4-6",
+            "CLAUDE_CODE_DISABLE_1M_CONTEXT": "1",
+            "DISABLE_TELEMETRY": "1"
+        }
+    })
+    .to_string()
+}
+
+fn claude_rows() -> [Provider; 2] {
+    [
+        claude(
+            "a",
+            "https://a.example",
+            json!({ "CLAUDE_CODE_MAX_OUTPUT_TOKENS": "32000" }),
+        ),
+        claude(
+            "b",
+            "https://b.example",
+            json!({ "CLAUDE_CODE_DISABLE_1M_CONTEXT": "1" }),
+        ),
+    ]
+}
+
+/// 上游路由的是 b，指针还是 a：重新写入 a，并删掉 b 带进来的独有字段。
+#[tokio::test]
+#[serial]
+async fn routing_residue_is_repaired_with_the_current_provider() {
+    let _home = Home::new();
+    seed_settings(&claude_routed_live(unused_port()));
+    let state = state_with(AppType::Claude, &claude_rows(), "a").await;
+
+    assert_eq!(
+        ProviderService::repair_legacy_routing(&state, &AppType::Claude),
+        Some(crate::services::provider::routing_repair::RoutingRepair::Repaired)
+    );
+    assert_eq!(
+        settings(),
+        json!({
+            "hooks": { "Stop": [] },
+            "env": {
+                "ANTHROPIC_BASE_URL": "https://a.example",
+                "ANTHROPIC_AUTH_TOKEN": "sk-a",
+                "ANTHROPIC_MODEL": "claude-sonnet-4-6",
+                "DISABLE_TELEMETRY": "1",
+                "CLAUDE_CODE_MAX_OUTPUT_TOKENS": "32000"
+            }
+        })
+    );
+    assert_eq!(current_id(&state, &AppType::Claude).as_deref(), Some("a"));
+    assert_eq!(
+        ProviderService::repair_legacy_routing(&state, &AppType::Claude),
+        None
+    );
+}
+
+#[tokio::test]
+#[serial]
+async fn routing_residue_is_left_alone_while_upstream_listens() {
+    let _home = Home::new();
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let live = claude_routed_live(listener.local_addr().unwrap().port());
+    seed_settings(&live);
+    let state = state_with(AppType::Claude, &claude_rows(), "a").await;
+
+    assert_eq!(
+        ProviderService::repair_legacy_routing(&state, &AppType::Claude),
+        Some(crate::services::provider::routing_repair::RoutingRepair::UpstreamActive)
+    );
+    assert_eq!(fs::read_to_string(settings_path()).unwrap(), live);
+}
+
+#[tokio::test]
+#[serial]
+async fn routing_residue_without_a_current_provider_is_not_written() {
+    let _home = Home::new();
+    let live = claude_routed_live(unused_port());
+    seed_settings(&live);
+    let db = Arc::new(Database::memory().expect("memory db"));
+    for row in claude_rows() {
+        db.save_provider(AppType::Claude.as_str(), &row).unwrap();
+    }
+    let state = AppState::new(db);
+
+    assert_eq!(
+        ProviderService::repair_legacy_routing(&state, &AppType::Claude),
+        Some(crate::services::provider::routing_repair::RoutingRepair::NoCurrentProvider)
+    );
+    assert_eq!(fs::read_to_string(settings_path()).unwrap(), live);
+}
+
+/// 当前供应商的行里也是占位 Key：照写回去客户端还是连不上，报错、不写。
+#[tokio::test]
+#[serial]
+async fn a_current_row_holding_the_placeholder_is_not_reapplied() {
+    let _home = Home::new();
+    let live = claude_routed_live(unused_port());
+    seed_settings(&live);
+    let mut rows = claude_rows();
+    rows[0].settings_config["env"]["ANTHROPIC_AUTH_TOKEN"] = json!("PROXY_MANAGED");
+    let state = state_with(AppType::Claude, &rows, "a").await;
+
+    let repair = ProviderService::repair_legacy_routing(&state, &AppType::Claude);
+    assert!(
+        matches!(
+            repair,
+            Some(crate::services::provider::routing_repair::RoutingRepair::Failed { .. })
+        ),
+        "{repair:?}"
+    );
+    assert_eq!(fs::read_to_string(settings_path()).unwrap(), live);
+}
+
+#[tokio::test]
+#[serial]
+async fn codex_routing_residue_drops_proxy_tables_and_the_placeholder_login() {
+    let _home = Home::new();
+    set_preservation(true);
+    let port = unused_port();
+    seed_codex(
+        &format!(
+            "model_provider = \"custom\"\nmodel = \"gpt-5.5\"\n\n[model_providers.custom]\nname = \"custom\"\nbase_url = \"http://127.0.0.1:{port}/v1\"\nwire_api = \"responses\"\nexperimental_bearer_token = \"PROXY_MANAGED\"\n\n[model_providers.cc-switch-official]\nname = \"OpenAI\"\nbase_url = \"http://127.0.0.1:{port}/v1\"\nrequires_openai_auth = true\n\n[mcp_servers.fs]\ncommand = \"fs\"\n"
+        ),
+        Some(&json!({ "OPENAI_API_KEY": "PROXY_MANAGED" })),
+    );
+    let rows = [codex_row("a", "https://a.example/v1", ""), codex_official()];
+    let state = state_with(AppType::Codex, &rows, "a").await;
+
+    // 编辑器按切换的补丁显示：上游留下的表不当成用户自己的设置显示。
+    let view = ProviderService::editor_view(&state, AppType::Codex, &rows[0].settings_config, None)
+        .expect("view");
+    let shown = view.settings["config"].as_str().unwrap();
+    assert!(!shown.contains("cc-switch-official"), "{shown}");
+    assert!(!shown.contains("PROXY_MANAGED"), "{shown}");
+
+    assert_eq!(
+        ProviderService::repair_legacy_routing(&state, &AppType::Codex),
+        Some(crate::services::provider::routing_repair::RoutingRepair::Repaired)
+    );
+    let doc = codex_doc();
+    let providers = doc["model_providers"].as_table().unwrap();
+    assert_eq!(
+        providers.keys().collect::<Vec<_>>(),
+        ["custom"],
+        "{}",
+        codex_text()
+    );
+    assert_eq!(
+        providers["custom"]["base_url"].as_str(),
+        Some("https://a.example/v1")
+    );
+    assert!(doc.contains_key("mcp_servers"), "{}", codex_text());
+    assert!(!codex_text().contains("PROXY_MANAGED"), "{}", codex_text());
+    let auth = fs::read_to_string(codex_auth_path()).unwrap_or_default();
+    assert!(!auth.contains("PROXY_MANAGED"), "{auth}");
+    assert_eq!(
+        ProviderService::repair_legacy_routing(&state, &AppType::Codex),
+        None
+    );
+}
+
+#[tokio::test]
+#[serial]
+async fn gemini_and_grok_routing_residue_are_repaired() {
+    let _home = Home::new();
+    let port = unused_port();
+    seed_gemini(
+        &format!("DEBUG=1\nGEMINI_API_KEY=PROXY_MANAGED\nGOOGLE_GEMINI_BASE_URL=http://127.0.0.1:{port}/gemini\n"),
+        "{}",
+    );
+    let state = state_with(AppType::Gemini, &gemini_a_vertex(), "a").await;
+    assert_eq!(
+        ProviderService::repair_legacy_routing(&state, &AppType::Gemini),
+        Some(crate::services::provider::routing_repair::RoutingRepair::Repaired)
+    );
+    let env = gemini_env();
+    assert!(env.contains("GEMINI_API_KEY=key-a"), "{env}");
+    assert!(env.contains("DEBUG=1"), "{env}");
+    assert!(!env.contains("PROXY_MANAGED"), "{env}");
+
+    seed_grok(&format!(
+        "{GROK_USER_LIVE}\n[models]\ndefault = \"routed\"\n\n[model.routed]\nmodel = \"m\"\nbase_url = \"http://127.0.0.1:{port}/grokbuild/v1\"\napi_key = \"PROXY_MANAGED\"\n"
+    ));
+    let rows = [grok_row("a", "a-table", ""), grok_official()];
+    let state = state_with(AppType::GrokBuild, &rows, "a").await;
+    assert_eq!(
+        ProviderService::repair_legacy_routing(&state, &AppType::GrokBuild),
+        Some(crate::services::provider::routing_repair::RoutingRepair::Repaired)
+    );
+    assert_eq!(grok_tables(), ["a-table", "mine"], "{}", grok_text());
+    assert_eq!(grok_doc()["models"]["default"].as_str(), Some("a-table"));
+}
+
+/// 空库、live 停在上游路由状态：不把占位 Key 导入成 default 供应商。
+#[tokio::test]
+#[serial]
+async fn routed_live_is_not_imported_as_the_default_provider() {
+    let _home = Home::new();
+    seed_settings(&claude_routed_live(unused_port()));
+    let state = AppState::new(Arc::new(Database::memory().expect("memory db")));
+
+    let err = ProviderService::import_default_config(&state, AppType::Claude)
+        .expect_err("a routed live must not be imported");
+    assert!(err.to_string().contains("本地路由"), "{err}");
+    assert!(state
+        .db
+        .get_all_providers(AppType::Claude.as_str())
+        .unwrap()
+        .is_empty());
+    assert_eq!(current_id(&state, &AppType::Claude), None);
+
+    // 上游还原之后照常导入。
+    seed_settings(USER_SETTINGS);
+    assert!(ProviderService::import_default_config(&state, AppType::Claude).unwrap());
+}
+
+/// 依赖已移除的本地路由的供应商：切换报错，live 和指针都不动。
+#[tokio::test]
+#[serial]
+async fn switching_to_a_card_that_needs_the_removed_routing_is_refused() {
+    let _home = Home::new();
+    seed_settings(USER_SETTINGS);
+    let mut chat = claude("chat", "https://chat.example", json!({}));
+    chat.meta = Some(serde_json::from_value(json!({ "apiFormat": "openai_chat" })).unwrap());
+    let rows = [claude("a", "https://a.example", json!({})), chat];
+    let state = state_with(AppType::Claude, &rows, "a").await;
+
+    let err = ProviderService::switch(&state, AppType::Claude, "chat")
+        .expect_err("a routing-only card must not be written");
+    assert!(err.to_string().contains("本地路由"), "{err}");
+    assert_eq!(fs::read_to_string(settings_path()).unwrap(), USER_SETTINGS);
+    assert_eq!(current_id(&state, &AppType::Claude).as_deref(), Some("a"));
+}
+
+/// 上游写进 meta 的字段（`apiFormat` 等）保存后还在。
+#[tokio::test]
+#[serial]
+async fn unknown_meta_fields_survive_a_save() {
+    let _home = Home::new();
+    let mut row = claude("a", "https://a.example", json!({}));
+    row.meta = Some(
+        serde_json::from_value(
+            json!({ "apiFormat": "openai_chat", "isFullUrl": true, "costMultiplier": "1.5" }),
+        )
+        .unwrap(),
+    );
+    let state = state_with(AppType::Claude, &[row], "a").await;
+    let saved = state.db.get_provider_by_id("a", "claude").unwrap().unwrap();
+    let meta = serde_json::to_value(saved.meta.unwrap()).unwrap();
+    assert_eq!(meta["apiFormat"], json!("openai_chat"));
+    assert_eq!(meta["isFullUrl"], json!(true));
+    assert_eq!(meta["costMultiplier"], json!("1.5"));
+}

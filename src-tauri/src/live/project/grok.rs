@@ -16,6 +16,7 @@ use serde_json::Value;
 use toml_edit::{ArrayOfTables, DocumentMut, Item, Table, TableLike};
 
 use crate::error::AppError;
+use crate::live::legacy_routing::PROXY_PLACEHOLDER;
 use crate::live::patch::toml::TomlDocPatch;
 use crate::live::patch::{KeyPath, LiveWriteError};
 
@@ -175,7 +176,8 @@ fn copy_table(source: &dyn TableLike) -> Table {
 #[derive(Debug, Clone, Default)]
 pub struct GrokConfigPatch {
     pub target: Option<(String, Table)>,
-    /// 上次写入记录里的表。目标自己的表不删，由整表替换覆盖。
+    /// 上次写入记录里的表。目标自己的表不删，由整表替换覆盖。另外 `api_key` 是上游本地
+    /// 路由占位符的表一律删（目标自己的表除外）。
     pub retired: Vec<String>,
 }
 
@@ -215,8 +217,10 @@ impl GrokConfigPatch {
         if let Some(tables) = table_mut(path, root, "model", false)? {
             let doomed: Vec<String> = tables
                 .iter()
-                .filter(|(name, _)| {
-                    Some(*name) != target_name && self.retired.iter().any(|retired| retired == name)
+                .filter(|(name, item)| {
+                    Some(*name) != target_name
+                        && (self.retired.iter().any(|retired| retired == name)
+                            || holds_placeholder(item))
                 })
                 .map(|(name, _)| name.to_string())
                 .collect();
@@ -256,6 +260,14 @@ impl GrokConfigPatch {
         }
         Ok(())
     }
+}
+
+/// 上游本地路由写的表：`api_key` 是占位符。
+fn holds_placeholder(item: &Item) -> bool {
+    item.as_table_like()
+        .and_then(|table| table.get("api_key"))
+        .and_then(Item::as_str)
+        == Some(PROXY_PLACEHOLDER)
 }
 
 impl TomlDocPatch for GrokConfigPatch {
@@ -390,6 +402,22 @@ context_window = 200000
             .collect();
         assert_eq!(names, vec!["grok-4.6"]);
         assert_eq!(doc["models"]["default"].as_str(), Some("grok-4.6"));
+    }
+
+    #[test]
+    fn stale_proxy_tables_are_removed_and_user_keys_in_models_stay() {
+        let live = r#"[models]
+default = "grok-4.5"
+web_search = "grok-4.6"
+
+[model."grok-4.5"]
+model = "a"
+base_url = "http://127.0.0.1:15721/grokbuild/v1"
+api_key = "PROXY_MANAGED"
+"#;
+        let official = GrokProjection::of(&row(""), true).unwrap();
+        let out = apply(&GrokConfigPatch::direct(&official, Vec::new()), live);
+        assert_eq!(out, "[models]\nweb_search = \"grok-4.6\"\n");
     }
 
     #[test]

@@ -132,6 +132,12 @@ export interface ProviderMeta {
   opencodeConfigFormat?: "v1" | "v2";
   // 供应商类型（用于识别特殊供应商）
   providerType?: string;
+  // 上游 CC Switch 的字段：接口格式、完整 URL。ccs-lite 只读，用来认出依赖已移除的本地
+  // 路由的供应商
+  apiFormat?: string;
+  isFullUrl?: boolean;
+  // 后端原样保留的其他未知字段
+  [key: string]: unknown;
 }
 
 // Skill 同步方式

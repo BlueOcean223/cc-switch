@@ -94,6 +94,19 @@ pub fn direct_patch(prev: Option<&ClaudeProjection>, target: &ClaudeProjection) 
     }
 }
 
+/// 把 `target` 重新写进 live，并删掉 `all` 里任一供应商带进来的独有字段（值相同才删）。
+/// 修复上游本地路由留下的配置时用：不知道上游路由的是哪一家，只能按所有供应商清理。
+pub fn clearing_patch(all: &[ClaudeProjection], target: &ClaudeProjection) -> JsonPatch {
+    let mut patch = direct_patch(None, target);
+    let env = KeyPath::new(&["env"]);
+    patch.remove_if.extend(
+        all.iter()
+            .flat_map(|projection| &projection.exclusive)
+            .map(|(key, value)| (env.child(key), vec![value.clone()])),
+    );
+    patch
+}
+
 /// 在内存里算出「切到 `target` 之后 `settings.json` 会是什么样」，不写盘。
 /// 编辑器显示和切换用的是同一个补丁。
 pub fn project_onto(

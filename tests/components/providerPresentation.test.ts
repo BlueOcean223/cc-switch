@@ -62,6 +62,62 @@ describe("buildSwitchSections", () => {
     expect(onSwitch).toHaveBeenCalledWith(backup);
   });
 
+  it("disables switching to cards that need the removed local routing", () => {
+    const copilot = provider("copilot", {
+      meta: { providerType: "github_copilot" },
+    });
+    const sections = buildSwitchSections({
+      app: "claude",
+      t,
+      providers: [relay, copilot],
+      currentId: "relay",
+      onSwitch: vi.fn(),
+    });
+    expect(item(sections, "copilot").chips).toEqual([
+      expect.objectContaining({
+        key: "needsRouting",
+        label: "providerCard.chip.needsRouting",
+        tone: "warning",
+      }),
+    ]);
+    expect(button(sections, "copilot", "switch").disabledReason).toBe(
+      "providerCard.reason.needsRouting",
+    );
+    expect(item(sections, "relay").chips).toEqual([]);
+  });
+
+  it("offers a rewrite on the current card when live is left on upstream routing", () => {
+    const onReapply = vi.fn();
+    const build = (upstreamActive: boolean) =>
+      buildSwitchSections({
+        app: "claude",
+        t,
+        providers: [relay, backup],
+        currentId: "relay",
+        onSwitch: vi.fn(),
+        liveRouting: { baseUrl: "http://127.0.0.1:15721", upstreamActive },
+        onReapply,
+      });
+
+    const residue = item(build(false), "relay");
+    expect(residue.status).toBeUndefined();
+    expect(residue.chips).toEqual([
+      expect.objectContaining({
+        key: "liveRouting",
+        label: "providerCard.chip.routingResidue",
+        tone: "warning",
+      }),
+    ]);
+    button(build(false), "relay", "reapply").onClick();
+    expect(onReapply).toHaveBeenCalledTimes(1);
+
+    expect(item(build(true), "relay").chips[0].label).toBe(
+      "providerCard.chip.upstreamRouting",
+    );
+    // 其他卡不受影响
+    expect(button(build(false), "backup", "switch")).toBeDefined();
+  });
+
   it("tags official accounts, including legacy Codex cards without a category", () => {
     const legacyManaged = provider("legacy-managed", {
       settingsConfig: { auth: {}, config: null },

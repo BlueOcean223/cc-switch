@@ -171,6 +171,34 @@ pub async fn switch_provider(
     .map_err(|e| format!("供应商切换任务执行失败: {e}"))?
 }
 
+/// live 是否停在上游 CC Switch 的路由状态（`None`：不在）。
+#[tauri::command]
+pub async fn get_live_routing_state(
+    app: String,
+) -> Result<Option<crate::services::provider::LiveRoutingState>, String> {
+    let app_type = AppType::from_str(&app).map_err(|e| e.to_string())?;
+    tauri::async_runtime::spawn_blocking(move || ProviderService::live_routing_state(&app_type))
+        .await
+        .map_err(|e| format!("读取路由状态失败: {e}"))
+}
+
+/// 把当前供应商重新写进 live（修复上游路由留下的配置）。没有当前供应商时返回 `false`。
+#[tauri::command]
+pub async fn reapply_current_provider(
+    app_handle: tauri::AppHandle,
+    app: String,
+) -> Result<bool, String> {
+    let app_type = AppType::from_str(&app).map_err(|e| e.to_string())?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app_handle
+            .try_state::<AppState>()
+            .ok_or_else(|| "应用状态不可用".to_string())?;
+        ProviderService::reapply_current(state.inner(), &app_type).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| format!("重新写入任务执行失败: {e}"))?
+}
+
 fn import_default_config_internal(state: &AppState, app_type: AppType) -> Result<bool, AppError> {
     if matches!(app_type, AppType::GrokBuild) {
         // 官方登录态（live 语法合法且无自定义模型表）+ 用户手动导入：
@@ -506,6 +534,17 @@ async fn query_provider_usage_inner(
         });
     }
 
+    // 上游 CC Switch 才有的模板（如 github_copilot）：没有对应的查询，不能当成脚本跑。
+    if !matches!(template_type, "" | "custom" | "general" | "newapi") {
+        return Ok(crate::provider::UsageResult {
+            success: false,
+            data: None,
+            error: Some(format!(
+                "Usage template \"{template_type}\" is no longer supported; choose another template in the usage settings"
+            )),
+        });
+    }
+
     // ── 通用 JS 脚本路径 ──
     ProviderService::query_usage(state, app_type, provider_id)
         .await
@@ -796,5 +835,38 @@ mod native_query_credentials_tests {
         let (_, api_key) =
             resolve_coding_plan_credentials(&AppType::Claude, Some(&provider), Some(&script));
         assert!(api_key.is_empty());
+    }
+
+    #[tokio::test]
+    async fn removed_templates_report_unsupported_instead_of_running_a_script() {
+        let db = std::sync::Arc::new(crate::database::Database::memory().unwrap());
+        let mut provider = Provider::with_id(
+            "copilot".to_string(),
+            "GitHub Copilot".to_string(),
+            json!({ "env": { "ANTHROPIC_BASE_URL": "https://api.githubcopilot.com" } }),
+            None,
+        );
+        let mut script = usage_script(None, None, None);
+        script.template_type = Some("github_copilot".to_string());
+        provider.meta = Some(crate::provider::ProviderMeta {
+            usage_script: Some(script),
+            ..Default::default()
+        });
+        db.save_provider("claude", &provider).unwrap();
+        let state = crate::store::AppState::new(db);
+
+        let result = super::query_provider_usage_inner(&state, AppType::Claude, "copilot")
+            .await
+            .unwrap();
+        assert!(!result.success);
+        assert!(
+            result
+                .error
+                .as_deref()
+                .unwrap()
+                .contains("no longer supported"),
+            "{:?}",
+            result.error
+        );
     }
 }

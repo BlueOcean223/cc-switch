@@ -18,6 +18,7 @@ mod live;
 #[cfg(test)]
 mod opencode_tests;
 mod pi;
+pub(crate) mod routing_repair;
 mod usage;
 
 use indexmap::IndexMap;
@@ -38,6 +39,7 @@ pub use live::{
     import_opencode_providers_from_live, read_live_settings,
     should_import_default_config_on_startup, sync_current_to_live,
 };
+pub use routing_repair::LiveRoutingState;
 
 pub fn import_pi_providers_from_live(state: &AppState) -> Result<usize, AppError> {
     pi::import_from_live(state)
@@ -75,6 +77,42 @@ pub fn reapply_current_codex_official_live(state: &AppState) -> Result<bool, App
     }
     write_live_for_state(state, &AppType::Codex, provider, None)?;
     Ok(true)
+}
+
+/// 依赖上游 CC Switch 本地路由的供应商（托管登录、格式转换、完整 URL），以及行里还是
+/// 路由占位 Key 的供应商，写进客户端配置也用不了：切换前拒绝，什么都不写。
+pub(crate) fn ensure_usable_without_routing(
+    app_type: &AppType,
+    provider: &Provider,
+) -> Result<(), AppError> {
+    use crate::live::legacy_routing;
+    if legacy_routing::requires_removed_routing(app_type, provider) {
+        return Err(AppError::localized(
+            "provider.switch.requiresRemovedRouting",
+            format!(
+                "供应商「{}」依赖上游 CC Switch 的本地路由（托管登录、接口格式转换或完整 URL），ccs-lite 没有本地路由，写进配置文件也用不了。请删除它，或者新建一个使用工具自身接口的供应商。",
+                provider.name
+            ),
+            format!(
+                "Provider \"{}\" depends on upstream CC Switch's local routing (managed sign-in, API format conversion or a full URL). ccs-lite has no local routing, so the tool cannot use it. Delete it, or add a provider that uses the tool's own API.",
+                provider.name
+            ),
+        ));
+    }
+    if legacy_routing::config_has_proxy_placeholder(app_type, &provider.settings_config) {
+        return Err(AppError::localized(
+            "provider.reapply.rowHasPlaceholder",
+            format!(
+                "供应商「{}」的配置里是上游 CC Switch 的路由占位 Key，请先编辑它填入真实 Key",
+                provider.name
+            ),
+            format!(
+                "Provider \"{}\" holds the upstream CC Switch routing placeholder key. Edit it and enter the real key first.",
+                provider.name
+            ),
+        ));
+    }
+    Ok(())
 }
 
 /// 新版不再读通用配置片段，但旧设备经云同步拿到新建的行时仍按这个标记合并片段；不写的
@@ -242,7 +280,7 @@ mod tests {
                  [model_providers.custom]\n\
                  name = \"custom\"\n\
                  base_url = \"{base_url}\"\n\
-                 wire_api = \"chat\"\n"
+                 wire_api = \"responses\"\n"
             )
         })
     }
@@ -5251,6 +5289,7 @@ impl ProviderService {
         let _provider = providers
             .get(id)
             .ok_or_else(|| AppError::Message(format!("供应商 {id} 不存在")))?;
+        ensure_usable_without_routing(&app_type, _provider)?;
 
         // OMO providers are switched through their own exclusive path.
         if matches!(app_type, AppType::OpenCode) && _provider.category.as_deref() == Some("omo") {

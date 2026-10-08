@@ -1,7 +1,11 @@
 import type { TFunction } from "i18next";
 import type { Provider } from "@/types";
 import type { AppId } from "@/lib/api";
-import { isOfficialAccount } from "@/utils/providerCapabilities";
+import type { LiveRoutingState } from "@/lib/api/providers";
+import {
+  isOfficialAccount,
+  requiresRemovedRouting,
+} from "@/utils/providerCapabilities";
 
 /**
  * 供应商卡片怎么画（v7）：当前那张的强调色、状态文字或按钮、徽标。由列表按应用算好交给卡片。
@@ -64,6 +68,9 @@ interface SwitchInput {
   providers: Provider[];
   currentId: string;
   onSwitch: (provider: Provider) => void;
+  /** 客户端配置停在上游 CC Switch 的路由状态：当前卡给出「重新写入」 */
+  liveRouting?: LiveRoutingState | null;
+  onReapply?: () => void;
 }
 
 export function buildSwitchSections({
@@ -72,6 +79,8 @@ export function buildSwitchSections({
   providers,
   currentId,
   onSwitch,
+  liveRouting,
+  onReapply,
 }: SwitchInput): ProviderSection[] {
   return [
     {
@@ -87,17 +96,55 @@ export function buildSwitchSections({
               },
             ]
           : [];
+        const needsRouting = requiresRemovedRouting(app, p);
+        if (needsRouting) {
+          chips.push({
+            key: "needsRouting",
+            label: t("providerCard.chip.needsRouting"),
+            tone: "warning",
+            title: t("providerCard.reason.needsRouting"),
+          });
+        }
         if (p.id === currentId) {
+          const routed = liveRouting && onReapply;
           return {
             provider: p,
             presentation: {
               tone: "direct",
-              status: {
-                label: t("providerCard.status.inUse"),
-                dot: "direct",
-              },
-              chips,
-              buttons: [],
+              status: routed
+                ? undefined
+                : {
+                    label: t("providerCard.status.inUse"),
+                    dot: "direct",
+                  },
+              chips: routed
+                ? [
+                    ...chips,
+                    {
+                      key: "liveRouting",
+                      label: t(
+                        liveRouting.upstreamActive
+                          ? "providerCard.chip.upstreamRouting"
+                          : "providerCard.chip.routingResidue",
+                      ),
+                      tone: "warning",
+                      title: t(
+                        liveRouting.upstreamActive
+                          ? "providerCard.reason.upstreamRouting"
+                          : "providerCard.reason.routingResidue",
+                      ),
+                    },
+                  ]
+                : chips,
+              buttons: routed
+                ? [
+                    {
+                      key: "reapply",
+                      label: t("providerCard.action.reapply"),
+                      onClick: onReapply,
+                    },
+                  ]
+                : [],
               // 后端不让删正在使用的那家
               deleteDisabledReason: t("providerCard.reason.inUseCannotDelete"),
             },
@@ -112,6 +159,9 @@ export function buildSwitchSections({
                 key: "switch",
                 label: t("providerCard.action.switch"),
                 onClick: () => onSwitch(p),
+                disabledReason: needsRouting
+                  ? t("providerCard.reason.needsRouting")
+                  : undefined,
               },
             ],
           },
