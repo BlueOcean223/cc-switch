@@ -436,7 +436,6 @@
         "path": "远端路径",
         "dbCompat": "数据库兼容层",
         "artifacts": "包含内容",
-        "legacyNotice": "检测到旧版云端路径。恢复完成后，下次上传将写入新路径 v2/db-v6。",
         "warning": "恢复将覆盖本地所有数据和技能配置",
         "confirm": "确认恢复"
       },
@@ -452,7 +451,6 @@
         "path": "远端路径",
         "dbCompat": "数据库兼容层",
         "warning": "将覆盖云端已有的同步数据",
-        "legacyNotice": "检测到旧版云端路径数据。本次上传将写入新路径 v2/db-v6，不会覆盖旧路径。",
         "confirm": "确认上传"
       }
     },
@@ -713,6 +711,12 @@
     },
     "data": {
       "location": "存储位置"
+    },
+    "deeplinkPaste": {
+      "title": "从链接导入",
+      "description": "系统只把 ccslite:// 链接交给 ccs-lite。供应商网站上的一键导入链接（ccswitch://）会被系统交给 CC Switch；复制链接后粘贴到这里即可导入。",
+      "hint": "粘贴 ccslite:// 或 ccswitch:// 一键导入链接。",
+      "import": "导入"
     }
   },
   "apps": {
@@ -1839,13 +1843,13 @@
   },
   "dbUpgrade": {
     "title": "数据库版本过新",
-    "description": "当前数据库由更新版本的 CC Switch 创建，需要升级应用后才能继续使用。升级不会删除你的数据。",
+    "description": "当前数据库由更新版本的 ccs-lite 创建，需要升级应用后才能继续使用。升级不会删除你的数据。",
     "versionInfo": "数据库版本 v{{db}} · 应用支持 v{{supported}}",
     "dbPath": "数据库文件",
     "checking": "正在检查可用更新…",
     "updateAvailable": "发现新版本 v{{version}}，升级后即可继续使用。",
     "incompatibleTitle": "升级也无法解决",
-    "incompatibleDescription": "你已是最新版本，但数据库版本（v{{db}}）仍高于本应用支持的版本（v{{supported}}）。该数据库可能由第三方客户端或更高版本创建，升级当前官方应用也无法兼容。",
+    "incompatibleDescription": "你已是最新版本，但数据库版本（v{{db}}）仍高于本应用支持的版本（v{{supported}}）。该数据库可能由第三方客户端或更高版本创建，升级 ccs-lite 也无法兼容。",
     "preparing": "正在准备更新…",
     "downloading": "正在下载更新…",
     "upgradeNow": "升级应用",
@@ -3277,5 +3281,9 @@
       "refresh": "刷新额度",
       "refreshAria": "刷新 {{login}} 的额度"
     }
+  },
+  "upstreamImport": {
+    "imported": "已从 CC Switch 导入数据",
+    "notImported": "没有导入 CC Switch 的数据，ccs-lite 按全新安装启动"
   }
 }

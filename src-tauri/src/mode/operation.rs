@@ -213,6 +213,17 @@ pub fn recover(
     let Some(pending) = state::pending(store, guard.app())? else {
         return Ok(None);
     };
+    if !state::op::REPLAYABLE.contains(&pending.op.as_str()) {
+        // 不是 ccs-lite 写的操作（例如上游 CC Switch 的路由操作），不发布它的临时文件
+        log::warn!(
+            "[{}] 丢弃不认识的待执行操作 {}，客户端文件保持原样",
+            guard.app(),
+            pending.op
+        );
+        discard_pending_files(&pending);
+        state::set_pending(store, guard.app(), None)?;
+        return Ok(Some(RecoveryOutcome::Discarded));
+    }
 
     enum At {
         Pre,
@@ -384,6 +395,17 @@ pub fn recover_all(
     };
     apps.into_iter()
         .filter_map(|app| {
+            if app.parse::<crate::app_config::AppType>().is_err() {
+                // 例如上游的 claude-desktop：ccs-lite 不管理它，回放不了，也不会再有人清掉
+                log::warn!("[{app}] 丢弃不认识的应用的待执行操作");
+                if let Ok(Some(pending)) = state::pending(store, &app) {
+                    discard_pending_files(&pending);
+                }
+                return match state::set_pending(store, &app, None) {
+                    Ok(()) => None,
+                    Err(err) => Some((app, Err(err))),
+                };
+            }
             let guard = crate::live::engine::lock_app(&app);
             let commit = |target: &PendingTarget| commit_target(&app, target);
             match recover(store, &guard, &commit) {
@@ -685,6 +707,47 @@ mod tests {
         drop(guard);
         assert!(result.is_err(), "crash injected at {crash}");
         pointer
+    }
+
+    /// 上游 CC Switch 的操作（attach 等）和 ccs-lite 不管理的应用（claude-desktop）留下的
+    /// pending：恢复时丢掉，不发布临时文件，客户端文件不变。
+    #[test]
+    fn foreign_pending_operations_are_dropped_without_touching_files() {
+        let fx = Fixture::new();
+        let staged = fx.a.with_file_name("a.json.tmp.upstream");
+        fs::write(&staged, "{\"key\": \"PROXY_MANAGED\"}").unwrap();
+        let foreign = |op: &str| state::Pending {
+            op: op.to_string(),
+            files: vec![state::PendingFile {
+                path: fx.a.clone(),
+                pre: digest(Some(fs::read(&fx.a).unwrap().as_slice())),
+                planned: Some("planned-by-upstream".to_string()),
+                staged: Some(staged.clone()),
+            }],
+            target: PendingTarget::pointer(Some("upstream".into())),
+            published: true,
+        };
+
+        state::set_pending(&fx.store, &fx.app, Some(foreign("attach"))).unwrap();
+        let pointer = RefCell::new(None);
+        assert_eq!(recover_now(&fx, &pointer), Some(RecoveryOutcome::Discarded));
+        assert_old(&fx);
+        assert_eq!(*pointer.borrow(), None, "target must not be committed");
+        assert!(!staged.exists(), "upstream temp file is removed");
+        assert!(state::pending(&fx.store, &fx.app).unwrap().is_none());
+
+        fs::write(&staged, "{}").unwrap();
+        state::set_pending(
+            &fx.store,
+            "claude-desktop",
+            Some(foreign(state::op::SWITCH)),
+        )
+        .unwrap();
+        let outcomes = recover_all(&fx.store, &|_, _| panic!("nothing to commit"));
+        assert!(outcomes.is_empty(), "{outcomes:?}");
+        assert_old(&fx);
+        assert!(!staged.exists());
+        assert!(state::apps_with_pending(&fx.store).unwrap().is_empty());
     }
 
     #[test]

@@ -300,6 +300,7 @@ impl Database {
 
     /// 在指定连接上应用 Schema 迁移
     pub(crate) fn apply_schema_migrations_on_conn(conn: &Connection) -> Result<(), AppError> {
+        super::lineage::ensure_supported(conn)?;
         conn.execute("SAVEPOINT schema_migration;", [])
             .map_err(|e| AppError::Database(format!("开启迁移 savepoint 失败: {e}")))?;
 
@@ -445,7 +446,7 @@ impl Database {
                 }
                 version = Self::get_user_version(conn)?;
             }
-            Ok(())
+            super::lineage::mark_fork(conn)
         })();
 
         match result {
@@ -1087,6 +1088,7 @@ impl Database {
                 "BOOLEAN NOT NULL DEFAULT 0",
             )?;
         }
+        Self::export_proxy_live_backup(conn)?;
         conn.execute_batch(
             "DROP TABLE IF EXISTS proxy_config;
              DROP TABLE IF EXISTS provider_health;
@@ -1120,6 +1122,65 @@ impl Database {
                 [crate::services::usage_rebuild::USAGE_REBUILD_PENDING_KEY],
             )
             .map_err(|e| AppError::Database(format!("标记用量重建失败: {e}")))?;
+        }
+        Ok(())
+    }
+
+    /// 删 `proxy_live_backup` 之前把每一行写成文件。
+    ///
+    /// v3.x 接管期间崩溃的用户，真实客户端配置的唯一副本在这张表里（上游 4.x 启动时会
+    /// 转存并删除，所以只有从 v3.x 直接升上来的库才有行）。文件格式和上游 4.x 相同：
+    /// `<设备目录>/backups/proxy-live-backup/{app}-{UTC 时间}.json`。写不出来就让迁移失败，
+    /// 不能静默丢掉。
+    fn export_proxy_live_backup(conn: &Connection) -> Result<(), AppError> {
+        if !Self::table_exists(conn, "proxy_live_backup")? {
+            return Ok(());
+        }
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM proxy_live_backup", [], |row| {
+                row.get(0)
+            })
+            .map_err(|e| AppError::Database(format!("读取旧接管备份失败: {e}")))?;
+        if count == 0 {
+            return Ok(());
+        }
+        let rows: Vec<(String, String, String)> = {
+            let mut stmt = conn
+                .prepare("SELECT app_type, original_config, backed_up_at FROM proxy_live_backup")
+                .map_err(|e| AppError::Database(format!("读取旧接管备份失败: {e}")))?;
+            let rows = stmt
+                .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+                .map_err(|e| AppError::Database(format!("读取旧接管备份失败: {e}")))?;
+            rows.collect::<Result<_, _>>()
+                .map_err(|e| AppError::Database(format!("读取旧接管备份失败: {e}")))?
+        };
+        let dir = crate::config::get_device_dir()
+            .join("backups")
+            .join("proxy-live-backup");
+        std::fs::create_dir_all(&dir).map_err(|e| AppError::io(&dir, e))?;
+        let stamp = chrono::Utc::now().format("%Y%m%dT%H%M%SZ");
+        for (app, original_config, backed_up_at) in rows {
+            let original = serde_json::from_str::<serde_json::Value>(&original_config)
+                .unwrap_or(serde_json::Value::String(original_config));
+            let bytes = serde_json::to_vec_pretty(&serde_json::json!({
+                "app": app,
+                "backedUpAt": backed_up_at,
+                "originalConfig": original,
+            }))
+            .map_err(|e| AppError::JsonSerialize { source: e })?;
+            let safe_app: String = app
+                .chars()
+                .map(|c| {
+                    if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                        c
+                    } else {
+                        '_'
+                    }
+                })
+                .collect();
+            let path = dir.join(format!("{safe_app}-{stamp}.json"));
+            crate::config::atomic_write_private(&path, &bytes)?;
+            log::info!("旧接管备份 {app} 已转存到 {}", path.display());
         }
         Ok(())
     }
@@ -2713,6 +2774,59 @@ mod tests {
         )?;
         assert_eq!(log_default, 1);
 
+        Ok(())
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn migrate_v20_to_v21_exports_legacy_takeover_backups() -> Result<(), AppError> {
+        let home = tempfile::tempdir().expect("tempdir");
+        let saved = std::env::var_os("CC_SWITCH_TEST_HOME");
+        std::env::set_var("CC_SWITCH_TEST_HOME", home.path());
+        let result = (|| -> Result<Vec<serde_json::Value>, AppError> {
+            let conn = Connection::open_in_memory()?;
+            Database::create_tables_on_conn(&conn)?;
+            conn.execute_batch(
+                r#"CREATE TABLE proxy_live_backup (
+                       app_type TEXT PRIMARY KEY, original_config TEXT NOT NULL,
+                       backed_up_at TEXT NOT NULL);
+                   INSERT INTO proxy_live_backup VALUES
+                       ('claude', '{"env":{"ANTHROPIC_AUTH_TOKEN":"sk-real"}}', '2025-01-02T03:04:05Z'),
+                       ('codex', 'not json', '2025-01-03T00:00:00Z');"#,
+            )?;
+            Database::set_user_version(&conn, 20)?;
+
+            Database::apply_schema_migrations_on_conn(&conn)?;
+
+            assert!(!Database::table_exists(&conn, "proxy_live_backup")?);
+            let dir = home
+                .path()
+                .join(crate::config::APP_DIR_NAME)
+                .join("backups/proxy-live-backup");
+            let mut files: Vec<_> = std::fs::read_dir(&dir)
+                .map_err(|e| AppError::io(&dir, e))?
+                .map(|entry| entry.unwrap().path())
+                .collect();
+            files.sort();
+            Ok(files
+                .iter()
+                .map(|path| serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap())
+                .collect())
+        })();
+        match saved {
+            Some(value) => std::env::set_var("CC_SWITCH_TEST_HOME", value),
+            None => std::env::remove_var("CC_SWITCH_TEST_HOME"),
+        }
+        let files = result?;
+        assert_eq!(files.len(), 2);
+        assert_eq!(files[0]["app"], "claude");
+        assert_eq!(files[0]["backedUpAt"], "2025-01-02T03:04:05Z");
+        assert_eq!(
+            files[0]["originalConfig"]["env"]["ANTHROPIC_AUTH_TOKEN"],
+            "sk-real"
+        );
+        assert_eq!(files[1]["app"], "codex");
+        assert_eq!(files[1]["originalConfig"], "not json");
         Ok(())
     }
 

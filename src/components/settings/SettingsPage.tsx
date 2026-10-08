@@ -31,6 +31,7 @@ import type { SettingsSection } from "@/lib/navigation";
 import { AppPageHeader } from "@/components/shell/AppPageHeader";
 import { DirectoryInput } from "@/components/settings/DirectorySettings";
 import { ImportExportSection } from "@/components/settings/ImportExportSection";
+import { DeepLinkPasteSection } from "@/components/settings/DeepLinkPasteSection";
 import { BackupListSection } from "@/components/settings/BackupListSection";
 import { WebdavSyncSection } from "@/components/settings/WebdavSyncSection";
 import { AboutSection } from "@/components/settings/AboutSection";
@@ -313,6 +314,17 @@ export function SettingsPage({
                   onExport={exportConfig}
                   onClear={clearSelection}
                 />
+              </div>
+            </SettingsBlock>
+            <SettingsBlock
+              title={t("settings.deeplinkPaste.title")}
+              help={{
+                title: t("settings.deeplinkPaste.title"),
+                body: t("settings.deeplinkPaste.description"),
+              }}
+            >
+              <div className="rounded-panel border border-border bg-surface p-5">
+                <DeepLinkPasteSection />
               </div>
             </SettingsBlock>
             <SettingsBlock

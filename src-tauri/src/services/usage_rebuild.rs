@@ -184,7 +184,7 @@ mod tests {
     }
 
     /// 在数据库副本上走一遍升级和重建，按月打印各应用的费用。`CC_SWITCH_TEST_HOME`
-    /// 指向一个临时目录，里面放 `.cc-switch/cc-switch.db` 的副本，各 CLI 的目录
+    /// 指向一个临时目录，里面放 `.ccs-lite/cc-switch.db` 的副本，各 CLI 的目录
     /// 链接到真实目录：
     /// `CC_SWITCH_TEST_HOME=/tmp/home cargo test --release --lib upgrade_database_copy -- --ignored --nocapture`
     #[test]
@@ -229,7 +229,7 @@ mod tests {
     }
 
     /// 把本机的全部会话日志导入内存数据库，按应用和模型打印合计，用来和 ccusage 对照。
-    /// 只读日志，不碰 `~/.cc-switch`：
+    /// 只读日志，不碰数据目录：
     /// `CC_USAGE_RANGES=2026-09-07..2026-10-07 cargo test --release --lib real_session_logs_totals -- --ignored --nocapture`
     #[test]
     #[ignore = "reads the real session logs under $HOME"]

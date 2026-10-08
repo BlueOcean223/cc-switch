@@ -41,6 +41,7 @@ mod settings;
 mod store;
 mod token_usage;
 mod tray;
+mod upstream_import;
 mod usage_events;
 mod usage_script;
 
@@ -228,7 +229,7 @@ fn runtime_log_level_allows(level: log::Level, max_level: log::LevelFilter) -> b
     max_level.to_level().is_some_and(|maximum| level <= maximum)
 }
 
-/// 统一处理 ccswitch:// 深链接 URL
+/// 统一处理 ccslite:// 深链接 URL（也接受上游的 ccswitch://）
 ///
 /// - 解析 URL
 /// - 向前端发射 `deeplink-import` / `deeplink-error` 事件
@@ -239,7 +240,7 @@ fn handle_deeplink_url(
     focus_main_window: bool,
     source: &str,
 ) -> bool {
-    if !url_str.starts_with("ccswitch://") {
+    if !crate::deeplink::is_deeplink_url(url_str) {
         return false;
     }
 
@@ -322,7 +323,7 @@ async fn update_tray_menu(
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    // 设置 panic hook，在应用崩溃时记录日志到 <app_config_dir>/crash.log（默认 ~/.cc-switch/crash.log）
+    // 设置 panic hook，在应用崩溃时记录日志到 <app_config_dir>/crash.log（默认 ~/.ccs-lite/crash.log）
     panic_hook::setup_panic_hook();
 
     let mut builder = tauri::Builder::default();
@@ -487,6 +488,12 @@ pub fn run() {
             // 让 Store 损坏或路径无效等启动警告能够真正落盘。
             let _ = app_store::refresh_app_config_dir_override(app.handle());
 
+            // 首次启动：ccs-lite 数据目录里还没有数据库时，从上游 CC Switch 导入一次。
+            // 必须在打开数据库之前。
+            if let Some(record) = upstream_import::run_on_first_launch() {
+                crate::init_status::set_upstream_import(record);
+            }
+
             #[cfg(target_os = "windows")]
             set_windows_app_user_model_id(app.handle());
 
@@ -643,7 +650,7 @@ pub fn run() {
 
             let app_state = AppState::new(db);
 
-            // 补完上次崩溃时写到一半的客户端文件（写前意图在 ~/.cc-switch/live-state.json），
+            // 补完上次崩溃时写到一半的客户端文件（写前意图在设备目录 ~/.ccs-lite/live-state.json），
             // 要在任何写客户端文件的启动步骤之前。
             crate::mode::operation::recover_on_startup(&app_state.db);
 
@@ -1012,14 +1019,19 @@ pub fn run() {
             {
                 #[cfg(target_os = "linux")]
                 {
-                    // Use Tauri's path API to get correct path (includes app identifier)
-                    // tauri-plugin-deep-link writes to: ~/.local/share/io.github.blueocean223.ccs-lite/applications/cc-switch-handler.desktop
-                    // Only register if .desktop file doesn't exist to avoid overwriting user customizations
-                    let should_register = app
-                        .path()
-                        .data_dir()
-                        .map(|d| !d.join("applications/cc-switch-handler.desktop").exists())
-                        .unwrap_or(true);
+                    // tauri-plugin-deep-link 写的是 `<data_dir>/applications/<可执行文件名>-handler.desktop`，
+                    // data_dir 是 ~/.local/share（不含 identifier）。可执行文件名由
+                    // tauri.linux.conf.json 的 mainBinaryName 定为 ccs-lite，不和上游的
+                    // cc-switch-handler.desktop 同名。
+                    // 文件已存在就不注册，避免覆盖用户自己的修改。
+                    let handler_name = std::env::current_exe()
+                        .ok()
+                        .and_then(|exe| exe.file_name().map(|n| n.to_string_lossy().into_owned()))
+                        .map(|name| format!("{name}-handler.desktop"));
+                    let should_register = match (app.path().data_dir(), handler_name) {
+                        (Ok(dir), Some(name)) => !dir.join("applications").join(name).exists(),
+                        _ => true,
+                    };
 
                     if should_register {
                         if let Err(e) = app.deep_link().register_all() {
@@ -1061,7 +1073,7 @@ pub fn run() {
                         log::debug!("  URL[{i}]: {}", url_for_log(url_str));
 
                         if handle_deeplink_url(&app_handle, url_str, true, "on_open_url") {
-                            break; // Process only first ccswitch:// URL
+                            break; // Process only the first deep link URL
                         }
                     }
                 }
@@ -1302,6 +1314,12 @@ pub fn run() {
 
             // 静默启动：根据设置决定是否显示主窗口
             let settings = crate::settings::get_settings();
+
+            // 登录项和"开机自启"设置对齐（macOS 的检查走 AppleScript，放到后台线程）
+            {
+                let wanted = settings.launch_on_startup;
+                std::thread::spawn(move || crate::auto_launch::align_with_setting(wanted));
+            }
             if let Some(window) = app.get_webview_window("main") {
                 // 在窗口首次显示前同步装饰状态，避免前端加载后再切换导致标题栏闪烁
                 // Linux：由设置决定（解决 Wayland 下系统窗口按钮不可用的问题）
@@ -1364,6 +1382,7 @@ pub fn run() {
             commands::open_external,
             commands::get_init_error,
             commands::get_migration_result,
+            commands::get_upstream_import_result,
             commands::get_skills_migration_result,
             commands::get_app_config_path,
             commands::open_app_config_folder,
@@ -1523,7 +1542,6 @@ pub fn run() {
             commands::install_skills_from_zip,
             // Auto launch
             commands::set_auto_launch,
-            commands::get_auto_launch_status,
             tray::take_tray_navigation,
             tray::tray_app_page_seen,
             // Usage statistics
@@ -1720,7 +1738,7 @@ pub fn run() {
                         }
                     }
                 }
-                // 处理通过自定义 URL 协议触发的打开事件（例如 ccswitch://...）
+                // 处理通过自定义 URL 协议触发的打开事件（例如 ccslite://...）
                 RunEvent::Opened { urls } => {
                     if let Some(url) = urls.first() {
                         let url_str = url.to_string();
@@ -1729,7 +1747,7 @@ pub fn run() {
                             url_for_log(&url_str)
                         );
 
-                        if url_str.starts_with("ccswitch://") {
+                        if crate::deeplink::is_deeplink_url(&url_str) {
                             if crate::lightweight::is_lightweight_mode() {
                                 if let Err(e) = crate::lightweight::exit_lightweight_mode(app_handle)
                                 {

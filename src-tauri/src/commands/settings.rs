@@ -610,12 +610,6 @@ mod tests {
     }
 }
 
-/// 获取开机自启状态
-#[tauri::command]
-pub async fn get_auto_launch_status() -> Result<bool, String> {
-    crate::auto_launch::is_auto_launch_enabled().map_err(|e| format!("获取开机自启状态失败: {e}"))
-}
-
 /// 获取日志配置
 #[tauri::command]
 pub async fn get_log_config(

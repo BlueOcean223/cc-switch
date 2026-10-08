@@ -106,6 +106,15 @@ pub async fn get_migration_result() -> Result<bool, String> {
     Ok(crate::init_status::take_migration_success())
 }
 
+/// 获取本次启动从上游 CC Switch 导入的结果（若有）。只返回一次，用于前端提示。
+/// 没找到上游数据（全新安装）时不提示。
+#[tauri::command]
+pub async fn get_upstream_import_result(
+) -> Result<Option<crate::upstream_import::ImportRecord>, String> {
+    Ok(crate::init_status::take_upstream_import()
+        .filter(|record| record.result != crate::upstream_import::ImportResult::NoUpstream))
+}
+
 /// 获取 Skills 自动导入（SSOT）迁移结果（若有）。
 /// 只返回一次 Some({count})，之后返回 None，用于前端显示一次性 Toast 通知。
 #[tauri::command]

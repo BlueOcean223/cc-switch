@@ -436,7 +436,6 @@
         "path": "Remote path",
         "dbCompat": "DB compatibility",
         "artifacts": "Contents",
-        "legacyNotice": "A legacy remote path was detected. After restoring, the next upload will write to the new v2/db-v6 path.",
         "warning": "This will overwrite all local data and skill configurations",
         "confirm": "Confirm Restore"
       },
@@ -452,7 +451,6 @@
         "path": "Remote path",
         "dbCompat": "DB compatibility",
         "warning": "This will overwrite existing sync data on the remote server",
-        "legacyNotice": "Legacy remote data was detected. This upload will write to the new v2/db-v6 path and will not overwrite the legacy path.",
         "confirm": "Confirm Upload"
       }
     },
@@ -713,6 +711,12 @@
     },
     "data": {
       "location": "Location"
+    },
+    "deeplinkPaste": {
+      "title": "Import from link",
+      "description": "The system only hands ccslite:// links to ccs-lite. One-click import links on provider websites (ccswitch://) open CC Switch instead; copy the link and paste it here to import it.",
+      "hint": "Paste a ccslite:// or ccswitch:// import link.",
+      "import": "Import"
     }
   },
   "apps": {
@@ -1839,13 +1843,13 @@
   },
   "dbUpgrade": {
     "title": "Database version is too new",
-    "description": "This database was created by a newer version of CC Switch. Upgrade the app to continue. Upgrading will not delete your data.",
+    "description": "This database was created by a newer version of ccs-lite. Upgrade the app to continue. Upgrading will not delete your data.",
     "versionInfo": "Database v{{db}} · App supports v{{supported}}",
     "dbPath": "Database file",
     "checking": "Checking for available updates…",
     "updateAvailable": "Version v{{version}} is available; upgrading will let you continue.",
     "incompatibleTitle": "Upgrading won't fix this",
-    "incompatibleDescription": "You are already on the latest version, but the database (v{{db}}) is still newer than this app supports (v{{supported}}). It was likely created by a third-party client or a newer build, so upgrading the official app cannot make it compatible.",
+    "incompatibleDescription": "You are already on the latest version, but the database (v{{db}}) is still newer than this app supports (v{{supported}}). It was likely created by a third-party client or a newer build, so upgrading ccs-lite cannot make it compatible.",
     "preparing": "Preparing update…",
     "downloading": "Downloading update…",
     "upgradeNow": "Upgrade app",
@@ -3277,5 +3281,9 @@
       "refresh": "Refresh quota",
       "refreshAria": "Refresh quota for {{login}}"
     }
+  },
+  "upstreamImport": {
+    "imported": "Imported data from CC Switch",
+    "notImported": "CC Switch data was not imported; ccs-lite started as a fresh install"
   }
 }

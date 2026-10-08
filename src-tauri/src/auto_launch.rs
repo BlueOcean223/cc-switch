@@ -61,17 +61,79 @@ pub fn disable_auto_launch() -> Result<(), AppError> {
 }
 
 /// 检查是否已启用开机自启
-pub fn is_auto_launch_enabled() -> Result<bool, AppError> {
+fn is_auto_launch_enabled() -> Result<bool, AppError> {
     let auto_launch = get_auto_launch()?;
     auto_launch
         .is_enabled()
         .map_err(|e| AppError::Message(format!("检查开机自启状态失败: {e}")))
 }
 
+/// 启动时补上设置里开着、系统里却没有的登录项。
+///
+/// 设置可能来自上游 CC Switch 的导入（上游的登录项名字不同），也可能被用户在系统设置里
+/// 删掉了登录项；这两种情况下开关显示开着，实际不会开机启动。
+///
+/// 设置关着时不查也不改：macOS 上查询要用 AppleScript 问 System Events，会弹"自动化"
+/// 授权，没开这个功能的用户不该看到；关掉开关时设置页已经删过登录项。
+///
+/// 调试构建不做，免得把 target/debug 下的二进制加进登录项。
+pub fn align_with_setting(wanted: bool) {
+    if cfg!(debug_assertions) {
+        return;
+    }
+    if let Err(e) = align(wanted, is_auto_launch_enabled, enable_auto_launch) {
+        log::warn!("对齐开机自启失败: {e}");
+    }
+}
+
+/// [`align_with_setting`] 的步骤：设置开着才查询，没注册就注册。
+fn align(
+    wanted: bool,
+    registered: impl FnOnce() -> Result<bool, AppError>,
+    register: impl FnOnce() -> Result<(), AppError>,
+) -> Result<(), AppError> {
+    if !wanted || registered()? {
+        return Ok(());
+    }
+    register()
+}
+
 #[cfg(test)]
 mod tests {
     #[allow(unused_imports)]
     use super::*;
+    use std::cell::Cell;
+
+    /// 跑一次 `align`，返回（查询次数，注册次数，结果是否成功）
+    fn run_align(wanted: bool, registered: Result<bool, AppError>) -> (u32, u32, bool) {
+        let queried = Cell::new(0);
+        let registered_calls = Cell::new(0);
+        let outcome = align(
+            wanted,
+            || {
+                queried.set(queried.get() + 1);
+                registered
+            },
+            || {
+                registered_calls.set(registered_calls.get() + 1);
+                Ok(())
+            },
+        );
+        (queried.get(), registered_calls.get(), outcome.is_ok())
+    }
+
+    #[test]
+    fn align_queries_only_when_the_setting_is_on() {
+        // 设置关着：不查询（macOS 上不弹自动化授权），也不改登录项
+        assert_eq!(run_align(false, Ok(true)), (0, 0, true));
+        // 开着但没有登录项：注册
+        assert_eq!(run_align(true, Ok(false)), (1, 1, true));
+        // 已经注册：不动
+        assert_eq!(run_align(true, Ok(true)), (1, 0, true));
+        // 查询失败：不注册，报错给调用方记日志
+        let failed = run_align(true, Err(AppError::Message("denied".to_string())));
+        assert_eq!(failed, (1, 0, false));
+    }
 
     #[cfg(target_os = "macos")]
     #[test]

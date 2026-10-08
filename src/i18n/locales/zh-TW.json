@@ -436,7 +436,6 @@
         "path": "遠端路徑",
         "dbCompat": "資料庫相容層",
         "artifacts": "包含內容",
-        "legacyNotice": "檢測到舊版雲端路徑。還原完成後，下次上傳將寫入新路徑 v2/db-v6。",
         "warning": "還原將覆寫本地所有資料和技能設定",
         "confirm": "確認還原"
       },
@@ -452,7 +451,6 @@
         "path": "遠端路徑",
         "dbCompat": "資料庫相容層",
         "warning": "將覆寫雲端已有的同步資料",
-        "legacyNotice": "檢測到舊版雲端路徑資料。本次上傳將寫入新路徑 v2/db-v6，不會覆寫舊路徑。",
         "confirm": "確認上傳"
       }
     },
@@ -713,6 +711,12 @@
     },
     "data": {
       "location": "儲存位置"
+    },
+    "deeplinkPaste": {
+      "title": "從連結匯入",
+      "description": "系統只會把 ccslite:// 連結交給 ccs-lite。供應商網站上的一鍵匯入連結（ccswitch://）會被系統交給 CC Switch；複製連結後貼到這裡即可匯入。",
+      "hint": "貼上 ccslite:// 或 ccswitch:// 一鍵匯入連結。",
+      "import": "匯入"
     }
   },
   "apps": {
@@ -1839,13 +1843,13 @@
   },
   "dbUpgrade": {
     "title": "資料庫版本過新",
-    "description": "目前資料庫由較新版本的 CC Switch 建立，需要升級應用後才能繼續使用。升級不會刪除你的資料。",
+    "description": "目前資料庫由較新版本的 ccs-lite 建立，需要升級應用後才能繼續使用。升級不會刪除你的資料。",
     "versionInfo": "資料庫版本 v{{db}} · 應用支援 v{{supported}}",
     "dbPath": "資料庫檔案",
     "checking": "正在檢查可用更新…",
     "updateAvailable": "發現新版本 v{{version}}，升級後即可繼續使用。",
     "incompatibleTitle": "升級也無法解決",
-    "incompatibleDescription": "你已是最新版本，但資料庫版本（v{{db}}）仍高於本應用支援的版本（v{{supported}}）。該資料庫可能由第三方用戶端或更高版本建立，升級目前官方應用也無法相容。",
+    "incompatibleDescription": "你已是最新版本，但資料庫版本（v{{db}}）仍高於本應用支援的版本（v{{supported}}）。該資料庫可能由第三方用戶端或更高版本建立，升級 ccs-lite 也無法相容。",
     "preparing": "正在準備更新…",
     "downloading": "正在下載更新…",
     "upgradeNow": "升級應用",
@@ -3277,5 +3281,9 @@
       "refresh": "重新整理額度",
       "refreshAria": "重新整理 {{login}} 的額度"
     }
+  },
+  "upstreamImport": {
+    "imported": "已從 CC Switch 匯入資料",
+    "notImported": "沒有匯入 CC Switch 的資料，ccs-lite 以全新安裝啟動"
   }
 }

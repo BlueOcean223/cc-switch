@@ -6638,7 +6638,7 @@ mod tests {
         let _guard = TestHomeGuard::set(temp.path());
 
         // 手工放置一个备份：meta.json 里的 directory 指向 SSOT 之外。
-        // SSOT 位于 {home}/.cc-switch/skills，"../../pwned-restore" 若生效会写到 {home}/pwned-restore。
+        // SSOT 位于 {home}/.ccs-lite/skills，"../../pwned-restore" 若生效会写到 {home}/pwned-restore。
         let backup_id = "20260727_120000_evil";
         let backup_dir = SkillService::get_backup_dir()
             .expect("backup dir")
@@ -6769,7 +6769,7 @@ mod tests {
             .expect("migrate away from alias");
         let new_source = temp
             .path()
-            .join(".cc-switch")
+            .join(crate::config::APP_DIR_NAME)
             .join("skills")
             .join("test-skill");
         let pi_skill = temp
@@ -6794,7 +6794,7 @@ mod tests {
         let _guard = TestHomeGuard::set(temp.path());
 
         // 模拟同步导入灌进来的脏数据：directory 含路径穿越（save_skill 不校验，
-        // 与 import_sql_string_for_sync 的效果一致）。SSOT = {home}/.cc-switch/skills，
+        // 与 import_sql_string_for_sync 的效果一致）。SSOT = {home}/.ccs-lite/skills，
         // "../../victim-uninstall" 解析为 {home}/victim-uninstall。
         let victim = temp.path().join("victim-uninstall");
         fs::create_dir_all(&victim).expect("create victim dir");
@@ -6884,7 +6884,7 @@ mod tests {
             .join("test-skill");
         fs::create_dir_all(pi_skill.parent().expect("Pi skills directory"))
             .expect("create Pi skills directory");
-        std::os::unix::fs::symlink(Path::new("../../.cc-switch/skills/test-skill"), &pi_skill)
+        std::os::unix::fs::symlink(Path::new("../../.ccs-lite/skills/test-skill"), &pi_skill)
             .expect("create relative Pi symlink");
 
         let result = SkillService::migrate_storage(&db, SkillStorageLocation::Unified)
@@ -7176,11 +7176,7 @@ mod tests {
                 ("weread-skills", "skills", "."),
             ] {
                 let home = tempdir().expect("home");
-                let config_dir = home.path().join(".cc-switch");
-                fs::create_dir_all(&config_dir).expect("isolated config directory");
-                // Keep Windows' legacy-HOME fallback out of this destructive test.
-                fs::File::create(config_dir.join("cc-switch.db"))
-                    .expect("isolated database sentinel");
+                let config_dir = home.path().join(crate::config::APP_DIR_NAME);
                 let _home = TestHomeGuard::set(home.path());
                 assert_eq!(crate::config::get_app_config_dir(), config_dir);
                 let _storage = StorageLocationGuard::set(location);

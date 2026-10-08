@@ -82,12 +82,15 @@ impl AppLiveState {
     }
 }
 
-/// 操作名。用字符串而不是枚举，旧版本读到新版本写的操作名也能照常前滚或丢弃。
+/// 操作名。启动恢复只回放 [`op::REPLAYABLE`] 里的操作，其他操作名（上游 CC Switch 的
+/// enter、attach、route 等）直接丢弃，见 `operation::recover`。
 pub mod op {
     /// 切换供应商（会改指针）。
     pub const SWITCH: &str = "switch";
     /// 把当前供应商重新写进客户端文件（编辑、同步等）。
     pub const APPLY: &str = "apply";
+    /// ccs-lite 自己会写、恢复时可以回放的操作。新增操作名要加进来。
+    pub const REPLAYABLE: &[&str] = &[SWITCH, APPLY];
 }
 
 /// 一次操作的写前意图。

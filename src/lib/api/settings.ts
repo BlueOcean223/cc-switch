@@ -229,10 +229,6 @@ export const settingsApi = {
     return await invoke("set_auto_launch", { enabled });
   },
 
-  async getAutoLaunchStatus(): Promise<boolean> {
-    return await invoke("get_auto_launch_status");
-  },
-
   async getToolVersions(
     tools?: string[],
     wslShellByTool?: Record<

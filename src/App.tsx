@@ -453,6 +453,35 @@ function App() {
   }, [t]);
 
   useEffect(() => {
+    const checkUpstreamImport = async () => {
+      try {
+        const record = await invoke<{
+          result: "imported" | "skipped" | "failed";
+          from?: string;
+          error?: string;
+        } | null>("get_upstream_import_result");
+        if (!record) return;
+        if (record.result === "imported") {
+          toast.success(t("upstreamImport.imported"), {
+            description: record.from,
+            closeButton: true,
+          });
+        } else {
+          toast.warning(t("upstreamImport.notImported"), {
+            description: record.error,
+            closeButton: true,
+            duration: 15000,
+          });
+        }
+      } catch (error) {
+        console.error("[App] Failed to check upstream import result:", error);
+      }
+    };
+
+    checkUpstreamImport();
+  }, [t]);
+
+  useEffect(() => {
     const checkSkillsMigration = async () => {
       try {
         const result = await invoke<{ count: number; error?: string } | null>(

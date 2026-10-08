@@ -103,6 +103,28 @@ pub fn take_skills_migration_result() -> Option<SkillsMigrationPayload> {
     }
 }
 
+// ============================================================
+// 首次启动从上游 CC Switch 导入的结果
+// ============================================================
+
+static UPSTREAM_IMPORT: OnceLock<RwLock<Option<crate::upstream_import::ImportRecord>>> =
+    OnceLock::new();
+
+fn upstream_import_cell() -> &'static RwLock<Option<crate::upstream_import::ImportRecord>> {
+    UPSTREAM_IMPORT.get_or_init(|| RwLock::new(None))
+}
+
+pub fn set_upstream_import(record: crate::upstream_import::ImportRecord) {
+    if let Ok(mut guard) = upstream_import_cell().write() {
+        *guard = Some(record);
+    }
+}
+
+/// 获取并消费本次启动的导入结果（只返回一次 Some）
+pub fn take_upstream_import() -> Option<crate::upstream_import::ImportRecord> {
+    upstream_import_cell().write().ok()?.take()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

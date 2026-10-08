@@ -205,6 +205,7 @@ fn schema_migration_sets_user_version_when_missing() {
 fn schema_migration_rejects_future_version() {
     let conn = Connection::open_in_memory().expect("open memory db");
     Database::create_tables_on_conn(&conn).expect("create tables");
+    lineage::mark_fork(&conn).expect("mark fork");
     Database::set_user_version(&conn, SCHEMA_VERSION + 1).expect("set future version");
 
     let err =
@@ -212,6 +213,70 @@ fn schema_migration_rejects_future_version() {
     assert!(
         err.to_string().contains("数据库版本过新"),
         "unexpected error: {err}"
+    );
+}
+
+#[test]
+fn schema_migration_rejects_newer_upstream_schema() {
+    let conn = Connection::open_in_memory().expect("open memory db");
+    conn.execute_batch("CREATE TABLE proxy_config (id INTEGER); PRAGMA user_version = 22;")
+        .expect("seed upstream v22");
+
+    let err = Database::apply_schema_migrations_on_conn(&conn)
+        .expect_err("newer upstream schema must be rejected");
+    assert!(err.to_string().contains("上游"), "unexpected error: {err}");
+    assert_eq!(Database::get_user_version(&conn).unwrap(), 22);
+    assert_eq!(lineage::application_id(&conn).unwrap(), 0);
+}
+
+#[test]
+fn migrations_mark_upgraded_upstream_databases_as_fork() {
+    for version in [19, 20] {
+        let conn = Connection::open_in_memory().expect("open memory db");
+        Database::create_tables_on_conn(&conn).expect("create tables");
+        Database::set_user_version(&conn, version).expect("set version");
+        assert_eq!(
+            lineage::classify(&conn).unwrap(),
+            lineage::Lineage::Upstream
+        );
+
+        Database::apply_schema_migrations_on_conn(&conn).expect("migrate");
+
+        assert_eq!(Database::get_user_version(&conn).unwrap(), SCHEMA_VERSION);
+        assert_eq!(
+            lineage::application_id(&conn).unwrap(),
+            lineage::FORK_APPLICATION_ID,
+            "v{version} upgrade must leave the fork mark"
+        );
+    }
+}
+
+#[test]
+fn unmarked_fork_development_database_gets_marked() {
+    let conn = Connection::open_in_memory().expect("open memory db");
+    Database::create_tables_on_conn(&conn).expect("create tables");
+    Database::apply_schema_migrations_on_conn(&conn).expect("migrate");
+    conn.execute_batch("PRAGMA application_id = 0;").unwrap();
+    assert_eq!(
+        lineage::classify(&conn).unwrap(),
+        lineage::Lineage::UnmarkedFork
+    );
+
+    Database::apply_schema_migrations_on_conn(&conn).expect("re-run on dev db");
+
+    assert_eq!(
+        lineage::application_id(&conn).unwrap(),
+        lineage::FORK_APPLICATION_ID
+    );
+}
+
+#[test]
+fn memory_database_is_marked_as_fork() {
+    let db = Database::memory().expect("memory db");
+    let conn = db.conn.lock().unwrap();
+    assert_eq!(
+        lineage::application_id(&conn).unwrap(),
+        lineage::FORK_APPLICATION_ID
     );
 }
 

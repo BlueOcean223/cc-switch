@@ -8,7 +8,7 @@ use crate::error::AppError;
 use chrono::{Local, Utc};
 use rusqlite::backup::{Backup, StepResult};
 use rusqlite::types::ValueRef;
-use rusqlite::Connection;
+use rusqlite::{Connection, OptionalExtension};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
@@ -34,14 +34,14 @@ fn lock_backup_file_operations() -> Result<BackupFileOperationGuard, AppError> {
 
 /// `dump_sql` 会写出的 PRAGMA。其余 PRAGMA 一律拒绝——`temp_store_directory`
 /// 能把临时文件重定向到任意目录，`writable_schema` 能绕过 schema 完整性检查。
-const IMPORT_ALLOWED_PRAGMAS: &[&str] = &["foreign_keys", "user_version"];
+const IMPORT_ALLOWED_PRAGMAS: &[&str] = &["foreign_keys", "user_version", "application_id"];
 
 /// 执行外部 SQL 期间的 authorizer：拒绝一切能**离开临时数据库文件**的动作。
 ///
 /// 头部校验（`validate_cc_switch_sql_export`）只比较一个注释前缀，任何人都能在
 /// 合法前缀后面接着写别的语句。`ATTACH DATABASE '/path/x.db'` 的副作用发生在
 /// 暂存库的 schema 校验之前，导入即使最终失败，文件也已经被创建；而 `settings`
-/// 表不在 `SYNC_SKIP_TABLES` / `SYNC_PRESERVE_TABLES` 之列，WebDAV/S3 同步会走
+/// 表不在 `SYNC_LOCAL_TABLES` 之列，WebDAV/S3 同步会走
 /// 同一条 `import_sql_string_inner`，所以这条路径的输入不可信。
 ///
 /// 为什么是 authorizer 而不是「扫描 ATTACH 关键字」：字符串扫描会被 `/*x*/ATTACH`、
@@ -82,21 +82,20 @@ fn import_authorizer(context: rusqlite::hooks::AuthContext<'_>) -> rusqlite::hoo
     }
 }
 
-/// Tables whose data rows are skipped when exporting for WebDAV sync.
-const SYNC_SKIP_TABLES: &[&str] = &[
+/// 本机的用量表：WebDAV/S3 同步导出时不带它们的数据行，同步导入时保留本机的内容。
+/// 导出和导入用同一份清单，以后加表不会只加到一边（只加到导入一边会让每次同步导入
+/// 清空那张表）。
+const SYNC_LOCAL_TABLES: &[&str] = &[
     "proxy_request_logs",
     "usage_daily_rollups",
     "session_log_sync",
     "session_usage_dedup",
 ];
 
-/// Tables whose local data is preserved from the live database during WebDAV import.
-const SYNC_PRESERVE_TABLES: &[&str] = &[
-    "proxy_request_logs",
-    "usage_daily_rollups",
-    "session_log_sync",
-    "session_usage_dedup",
-];
+/// 描述本机用量表状态的 settings 键。用量表在同步导入时保留本机的，这些键也要跟着
+/// 保留：远端快照（或导入时跑的迁移）里的值说的是另一份用量表。
+const SYNC_LOCAL_SETTING_KEYS: &[&str] =
+    &[crate::services::usage_rebuild::USAGE_REBUILD_PENDING_KEY];
 
 /// A database backup entry for the UI
 #[derive(Debug, serde::Serialize)]
@@ -117,7 +116,7 @@ impl Database {
     /// Export SQL for sync (WebDAV), skipping local-only tables' data
     pub fn export_sql_string_for_sync(&self) -> Result<String, AppError> {
         let snapshot = self.snapshot_to_memory()?;
-        Self::dump_sql(&snapshot, SYNC_SKIP_TABLES)
+        Self::dump_sql(&snapshot, SYNC_LOCAL_TABLES)
     }
 
     /// 导出为 SQLite 兼容的 SQL 文本
@@ -147,27 +146,34 @@ impl Database {
 
     /// 从 SQL 字符串导入，返回生成的备份 ID（若无备份则为空字符串）
     pub fn import_sql_string(&self, sql_raw: &str) -> Result<String, AppError> {
-        self.import_sql_string_inner(sql_raw, &[])
+        self.import_sql_string_inner(sql_raw, &[], &[])
     }
 
     /// Import SQL generated for sync, then restore local-only tables from the
     /// current live database before replacing it.
     pub(crate) fn import_sql_string_for_sync(&self, sql_raw: &str) -> Result<String, AppError> {
-        self.import_sql_string_inner(sql_raw, SYNC_PRESERVE_TABLES)
+        self.import_sql_string_inner(sql_raw, SYNC_LOCAL_TABLES, SYNC_LOCAL_SETTING_KEYS)
     }
 
     fn import_sql_string_inner(
         &self,
         sql_raw: &str,
         preserve_tables: &[&str],
+        preserve_setting_keys: &[&str],
     ) -> Result<String, AppError> {
-        self.import_sql_string_inner_with_hook(sql_raw, preserve_tables, || Ok(()))
+        self.import_sql_string_inner_with_hook(
+            sql_raw,
+            preserve_tables,
+            preserve_setting_keys,
+            || Ok(()),
+        )
     }
 
     fn import_sql_string_inner_with_hook<F>(
         &self,
         sql_raw: &str,
         preserve_tables: &[&str],
+        preserve_setting_keys: &[&str],
         on_staging_ready: F,
     ) -> Result<String, AppError>
     where
@@ -212,6 +218,7 @@ impl Database {
         // Validate the schema produced by the input itself before migrations
         // can create missing tables and accidentally make a truncated file look valid.
         Self::validate_imported_schema(&temp_conn)?;
+        super::lineage::ensure_supported(&temp_conn)?;
 
         // 补齐缺失表/索引并执行迁移
         Self::create_tables_on_conn(&temp_conn)?;
@@ -229,6 +236,7 @@ impl Database {
             if !preserve_tables.is_empty() {
                 Self::restore_tables(&main_conn, &temp_conn, preserve_tables)?;
             }
+            Self::restore_setting_keys(&main_conn, &temp_conn, preserve_setting_keys)?;
             let backup = Backup::new(&temp_conn, &mut main_conn)
                 .map_err(|e| AppError::Database(e.to_string()))?;
             Self::complete_backup(&backup, "替换主数据库")?;
@@ -356,6 +364,31 @@ impl Database {
 
         tx.commit()
             .map_err(|e| AppError::Database(format!("提交恢复事务失败: {e}")))?;
+        Ok(())
+    }
+
+    /// 把 `keys` 在 `source_conn` 里的值（或没有值）原样带到 `target_conn`。
+    fn restore_setting_keys(
+        source_conn: &Connection,
+        target_conn: &Connection,
+        keys: &[&str],
+    ) -> Result<(), AppError> {
+        for key in keys {
+            let value: Option<String> = source_conn
+                .query_row("SELECT value FROM settings WHERE key = ?1", [key], |row| {
+                    row.get(0)
+                })
+                .optional()
+                .map_err(|e| AppError::Database(format!("读取本机设置 {key} 失败: {e}")))?;
+            match value {
+                Some(value) => target_conn.execute(
+                    "INSERT OR REPLACE INTO settings (key, value) VALUES (?1, ?2)",
+                    [*key, value.as_str()],
+                ),
+                None => target_conn.execute("DELETE FROM settings WHERE key = ?1", [key]),
+            }
+            .map_err(|e| AppError::Database(format!("保留本机设置 {key} 失败: {e}")))?;
+        }
         Ok(())
     }
 
@@ -703,6 +736,9 @@ impl Database {
         ));
         output.push_str("PRAGMA foreign_keys=OFF;\n");
         output.push_str(&format!("PRAGMA user_version={user_version};\n"));
+        // 导入时据此区分 ccs-lite 的导出和上游 CC Switch 的导出，见 `database::lineage`
+        let application_id = super::lineage::application_id(conn).unwrap_or(0);
+        output.push_str(&format!("PRAGMA application_id={application_id};\n"));
         output.push_str("BEGIN TRANSACTION;\n");
 
         // 导出 schema
@@ -1045,6 +1081,7 @@ impl Database {
 
         Self::validate_sqlite_integrity(&staging_conn)?;
         Self::validate_imported_schema(&staging_conn)?;
+        super::lineage::ensure_supported(&staging_conn)?;
         Self::ensure_incremental_auto_vacuum_on_conn(&staging_conn)?;
         Self::create_tables_on_conn(&staging_conn)?;
         Self::apply_schema_migrations_on_conn(&staging_conn)?;
@@ -1183,10 +1220,8 @@ mod tests {
             let temp_dir = tempfile::tempdir().expect("create isolated test home");
             let previous_test_home = std::env::var_os("CC_SWITCH_TEST_HOME");
             std::env::set_var("CC_SWITCH_TEST_HOME", temp_dir.path());
-            // Prevent the Windows legacy-HOME fallback without mutating HOME:
-            // an existing default DB keeps get_app_config_dir() anchored under
-            // CC_SWITCH_TEST_HOME and makes import exercise its safety backup.
-            let config_dir = temp_dir.path().join(".cc-switch");
+            // An existing default DB makes import exercise its safety backup.
+            let config_dir = temp_dir.path().join(crate::config::APP_DIR_NAME);
             std::fs::create_dir_all(&config_dir).expect("create isolated config directory");
             std::fs::File::create(config_dir.join("cc-switch.db"))
                 .expect("create isolated database sentinel");
@@ -2132,13 +2167,15 @@ mod tests {
     }
 
     #[test]
-    fn every_sync_preserved_table_is_skipped_from_remote_payloads() {
-        for table in super::SYNC_PRESERVE_TABLES {
-            assert!(
-                super::SYNC_SKIP_TABLES.contains(table),
-                "本地保留表 {table} 也必须从远端 payload 中排除"
-            );
+    fn every_sync_local_table_exists() -> Result<(), AppError> {
+        // 导出跳过和导入保留共用 SYNC_LOCAL_TABLES；这里防的是表名写错或表被改名后
+        // 清单没跟上（那样这张表会随同步被覆盖）。
+        let db = Database::memory()?;
+        let conn = crate::database::lock_conn!(db.conn);
+        for table in super::SYNC_LOCAL_TABLES {
+            assert!(Database::table_exists(&conn, table)?, "{table}");
         }
+        Ok(())
     }
 
     #[test]
@@ -2485,7 +2522,8 @@ mod tests {
 
         local_db.import_sql_string_inner_with_hook(
             &remote_sql,
-            super::SYNC_PRESERVE_TABLES,
+            super::SYNC_LOCAL_TABLES,
+            super::SYNC_LOCAL_SETTING_KEYS,
             || {
                 // Deterministically simulate writes after the remote SQL has
                 // finished staging but before the main database is replaced.
@@ -2555,7 +2593,8 @@ mod tests {
 
         let safety_id = local_db.import_sql_string_inner_with_hook(
             &remote_sql,
-            super::SYNC_PRESERVE_TABLES,
+            super::SYNC_LOCAL_TABLES,
+            super::SYNC_LOCAL_SETTING_KEYS,
             || {
                 let conn = crate::database::lock_conn!(local_db.conn);
                 conn.execute(
@@ -2928,6 +2967,166 @@ mod tests {
             backup_count_after, backup_count_before,
             "staging failure should occur before creating a redundant safety backup"
         );
+        Ok(())
+    }
+
+    fn set_rebuild_flag(db: &Database, pending: bool) -> Result<(), AppError> {
+        let conn = crate::database::lock_conn!(db.conn);
+        let key = crate::services::usage_rebuild::USAGE_REBUILD_PENDING_KEY;
+        if pending {
+            conn.execute(
+                "INSERT OR REPLACE INTO settings (key, value) VALUES (?1, 'true')",
+                [key],
+            )?;
+        } else {
+            conn.execute("DELETE FROM settings WHERE key = ?1", [key])?;
+        }
+        Ok(())
+    }
+
+    /// 把当前 schema 的导出改成上游 v20 的样子（迁移时会设重建标记）
+    fn as_upstream_v20_dump(sql: &str) -> String {
+        sql.replace(
+            &format!("PRAGMA user_version={};", crate::database::SCHEMA_VERSION),
+            "PRAGMA user_version=20;",
+        )
+        .replace(
+            &format!(
+                "PRAGMA application_id={};",
+                super::super::lineage::FORK_APPLICATION_ID
+            ),
+            "PRAGMA application_id=0;",
+        )
+    }
+
+    #[test]
+    #[serial]
+    fn sync_import_keeps_the_local_rebuild_flag() -> Result<(), AppError> {
+        let _test_home = TestHomeGuard::new();
+        let remote = Database::memory()?;
+        set_rebuild_flag(&remote, false)?;
+        let remote_sql = remote.export_sql_string_for_sync()?;
+
+        // 本机待重建，远端快照（已经重建过的设备）没有标记 → 本机仍待重建
+        let local = Database::memory()?;
+        set_rebuild_flag(&local, true)?;
+        local.import_sql_string_for_sync(&remote_sql)?;
+        assert!(crate::services::usage_rebuild::is_rebuild_pending(&local)?);
+
+        // 本机不需要重建，导入 v20 dump（迁移会设标记）→ 本机仍不需要
+        let local = Database::memory()?;
+        set_rebuild_flag(&local, false)?;
+        local.import_sql_string_for_sync(&as_upstream_v20_dump(&remote_sql))?;
+        assert!(!crate::services::usage_rebuild::is_rebuild_pending(&local)?);
+        Ok(())
+    }
+
+    #[test]
+    #[serial]
+    fn full_import_of_a_v20_dump_marks_usage_for_rebuild() -> Result<(), AppError> {
+        let _test_home = TestHomeGuard::new();
+        let source = Database::memory()?;
+        set_rebuild_flag(&source, false)?;
+        let sql = as_upstream_v20_dump(&source.export_sql_string()?);
+
+        let local = Database::memory()?;
+        set_rebuild_flag(&local, false)?;
+        local.import_sql_string(&sql)?;
+
+        // 完整导入连用量表一起换掉，迁移设下的标记要保留
+        assert!(crate::services::usage_rebuild::is_rebuild_pending(&local)?);
+        Ok(())
+    }
+
+    #[test]
+    #[serial]
+    fn init_rejects_newer_upstream_database_without_touching_it() -> Result<(), AppError> {
+        let _test_home = TestHomeGuard::new();
+        let db_path = crate::config::get_app_config_dir().join("cc-switch.db");
+        std::fs::remove_file(&db_path).map_err(|e| AppError::io(&db_path, e))?;
+        {
+            let conn = Connection::open(&db_path)?;
+            conn.execute_batch(
+                "CREATE TABLE proxy_config (id INTEGER);
+                 CREATE TABLE providers (id TEXT);
+                 PRAGMA user_version = 22;",
+            )?;
+        }
+        let read = |p: &std::path::Path| std::fs::read(p).map_err(|e| AppError::io(p, e));
+        let hash_before = crate::live::engine::sha256_hex(&read(&db_path)?);
+        let mtime_before = std::fs::metadata(&db_path)
+            .and_then(|m| m.modified())
+            .map_err(|e| AppError::io(&db_path, e))?;
+
+        let err = match Database::init() {
+            Ok(_) => panic!("newer upstream database must be rejected"),
+            Err(e) => e,
+        };
+        assert!(err.to_string().contains("上游"), "unexpected error: {err}");
+        assert_eq!(
+            Database::stored_user_version_exceeds_supported(&db_path)?,
+            None,
+            "an upstream database is not an 'app too old' case"
+        );
+
+        assert_eq!(
+            crate::live::engine::sha256_hex(&read(&db_path)?),
+            hash_before
+        );
+        let mtime_after = std::fs::metadata(&db_path)
+            .and_then(|m| m.modified())
+            .map_err(|e| AppError::io(&db_path, e))?;
+        assert_eq!(mtime_after, mtime_before);
+        Ok(())
+    }
+
+    #[test]
+    #[serial]
+    fn sql_export_round_trip_keeps_the_fork_mark() -> Result<(), AppError> {
+        let _test_home = TestHomeGuard::new();
+        let db = Database::init()?;
+        let sql = db.export_sql_string()?;
+        assert!(
+            sql.contains(&format!(
+                "PRAGMA application_id={};",
+                super::super::lineage::FORK_APPLICATION_ID
+            )),
+            "export must carry the fork mark"
+        );
+
+        db.import_sql_string(&sql)?;
+
+        let conn = crate::database::lock_conn!(db.conn);
+        assert_eq!(
+            super::super::lineage::application_id(&conn)?,
+            super::super::lineage::FORK_APPLICATION_ID
+        );
+        Ok(())
+    }
+
+    #[test]
+    #[serial]
+    fn sql_import_rejects_a_newer_upstream_dump() -> Result<(), AppError> {
+        let _test_home = TestHomeGuard::new();
+        let db = Database::init()?;
+        let sql = db.export_sql_string()?;
+        let upstream = sql
+            .replace(
+                &format!(
+                    "PRAGMA application_id={};",
+                    super::super::lineage::FORK_APPLICATION_ID
+                ),
+                "PRAGMA application_id=0;",
+            )
+            .replace(
+                &format!("PRAGMA user_version={};", crate::database::SCHEMA_VERSION),
+                "PRAGMA user_version=22;",
+            );
+
+        let err = db
+            .import_sql_string(&upstream)
+            .expect_err("newer upstream dump must be rejected");
+        assert!(err.to_string().contains("上游"), "unexpected error: {err}");
         Ok(())
     }
 

@@ -2,15 +2,15 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-  <!-- 注册 ccswitch:// 自定义 URL 协议，用于深链接导入 -->
+  <!-- 注册 ccslite:// 自定义 URL 协议，用于深链接导入（上游 CC Switch 用 ccswitch://） -->
   <key>CFBundleURLTypes</key>
   <array>
     <dict>
       <key>CFBundleURLName</key>
-      <string>CC Switch Deep Link</string>
+      <string>ccs-lite Deep Link</string>
       <key>CFBundleURLSchemes</key>
       <array>
-        <string>ccswitch</string>
+        <string>ccslite</string>
       </array>
     </dict>
   </array>

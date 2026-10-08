@@ -17,11 +17,10 @@ use crate::settings::{update_webdav_sync_status, WebDavSyncSettings, WebDavSyncS
 
 pub(crate) use super::sync_protocol::run_with_sync_lock;
 use super::sync_protocol::{
-    apply_snapshot, build_local_snapshot, effective_db_compat_version, localized,
-    persist_sync_success_best_effort, sha256_hex, validate_artifact_size_limit,
-    validate_manifest_compat, verify_artifact, ArtifactMeta, RemoteLayout, SyncManifest,
-    DB_COMPAT_VERSION, MAX_MANIFEST_BYTES, MAX_SYNC_ARTIFACT_BYTES, PROTOCOL_VERSION,
-    REMOTE_DB_SQL, REMOTE_MANIFEST, REMOTE_SKILLS_ZIP,
+    apply_snapshot, build_local_snapshot, localized, persist_sync_success_best_effort, sha256_hex,
+    validate_artifact_size_limit, validate_manifest_compat, verify_artifact, ArtifactMeta,
+    SyncManifest, DB_COMPAT_VERSION, MAX_MANIFEST_BYTES, MAX_SYNC_ARTIFACT_BYTES, PROTOCOL_VERSION,
+    REMOTE_DB_SQL, REMOTE_MANIFEST, REMOTE_NAMESPACE, REMOTE_SKILLS_ZIP,
 };
 
 #[cfg(test)]
@@ -32,7 +31,6 @@ pub(crate) fn sync_mutex() -> &'static tokio::sync::Mutex<()> {
 pub(crate) mod archive;
 
 struct RemoteSnapshot {
-    layout: RemoteLayout,
     manifest: SyncManifest,
     manifest_bytes: Vec<u8>,
     manifest_etag: Option<String>,
@@ -44,7 +42,7 @@ pub async fn check_connection(settings: &WebDavSyncSettings) -> Result<(), AppEr
     settings.validate()?;
     let auth = auth_for(settings);
     test_connection(&settings.base_url, &auth).await?;
-    let dir_segs = remote_dir_segments(settings, RemoteLayout::Current);
+    let dir_segs = remote_dir_segments(settings);
     ensure_remote_directories(&settings.base_url, &dir_segs, &auth).await?;
     Ok(())
 }
@@ -56,19 +54,19 @@ pub async fn upload(
 ) -> Result<Value, AppError> {
     settings.validate()?;
     let auth = auth_for(settings);
-    let dir_segs = remote_dir_segments(settings, RemoteLayout::Current);
+    let dir_segs = remote_dir_segments(settings);
     ensure_remote_directories(&settings.base_url, &dir_segs, &auth).await?;
 
     let snapshot = build_local_snapshot(db)?;
 
     // Upload order: artifacts first, manifest last (best-effort consistency)
-    let db_url = remote_file_url(settings, RemoteLayout::Current, REMOTE_DB_SQL)?;
+    let db_url = remote_file_url(settings, REMOTE_DB_SQL)?;
     put_bytes(&db_url, &auth, snapshot.db_sql, "application/sql").await?;
 
-    let skills_url = remote_file_url(settings, RemoteLayout::Current, REMOTE_SKILLS_ZIP)?;
+    let skills_url = remote_file_url(settings, REMOTE_SKILLS_ZIP)?;
     put_bytes(&skills_url, &auth, snapshot.skills_zip, "application/zip").await?;
 
-    let manifest_url = remote_file_url(settings, RemoteLayout::Current, REMOTE_MANIFEST)?;
+    let manifest_url = remote_file_url(settings, REMOTE_MANIFEST)?;
     put_bytes(
         &manifest_url,
         &auth,
@@ -112,21 +110,14 @@ pub async fn download(
             )
         })?;
 
-    validate_manifest_compat(&snapshot.manifest, snapshot.layout)?;
+    validate_manifest_compat(&snapshot.manifest)?;
 
     // Download and verify artifacts
-    let db_sql = download_and_verify(
-        settings,
-        &auth,
-        snapshot.layout,
-        REMOTE_DB_SQL,
-        &snapshot.manifest.artifacts,
-    )
-    .await?;
+    let db_sql =
+        download_and_verify(settings, &auth, REMOTE_DB_SQL, &snapshot.manifest.artifacts).await?;
     let skills_zip = download_and_verify(
         settings,
         &auth,
-        snapshot.layout,
         REMOTE_SKILLS_ZIP,
         &snapshot.manifest.artifacts,
     )
@@ -144,8 +135,7 @@ pub async fn download(
     );
     Ok(serde_json::json!({
         "status": "downloaded",
-        "sourceLayout": snapshot.layout.as_str(),
-        "sourcePath": remote_dir_display(settings, snapshot.layout),
+        "sourcePath": remote_dir_display(settings),
     }))
 }
 
@@ -156,8 +146,7 @@ pub async fn fetch_remote_info(settings: &WebDavSyncSettings) -> Result<Option<V
     let Some(snapshot) = find_remote_snapshot(settings, &auth).await? else {
         return Ok(None);
     };
-    let compatible = validate_manifest_compat(&snapshot.manifest, snapshot.layout).is_ok();
-    let db_compat_version = effective_db_compat_version(&snapshot.manifest, snapshot.layout);
+    let compatible = validate_manifest_compat(&snapshot.manifest).is_ok();
 
     let payload = serde_json::json!({
         "deviceName": snapshot.manifest.device_name,
@@ -165,11 +154,10 @@ pub async fn fetch_remote_info(settings: &WebDavSyncSettings) -> Result<Option<V
         "snapshotId": snapshot.manifest.snapshot_id,
         "version": snapshot.manifest.version,
         "protocolVersion": snapshot.manifest.version,
-        "dbCompatVersion": db_compat_version,
+        "dbCompatVersion": snapshot.manifest.db_compat_version,
         "compatible": compatible,
         "artifacts": snapshot.manifest.artifacts.keys().collect::<Vec<_>>(),
-        "layout": snapshot.layout.as_str(),
-        "remotePath": remote_dir_display(settings, snapshot.layout),
+        "remotePath": remote_dir_display(settings),
     });
 
     Ok(Some(payload))
@@ -198,18 +186,7 @@ async fn find_remote_snapshot(
     settings: &WebDavSyncSettings,
     auth: &WebDavAuth,
 ) -> Result<Option<RemoteSnapshot>, AppError> {
-    if let Some(snapshot) = fetch_remote_snapshot(settings, auth, RemoteLayout::Current).await? {
-        return Ok(Some(snapshot));
-    }
-    fetch_remote_snapshot(settings, auth, RemoteLayout::Legacy).await
-}
-
-async fn fetch_remote_snapshot(
-    settings: &WebDavSyncSettings,
-    auth: &WebDavAuth,
-    layout: RemoteLayout,
-) -> Result<Option<RemoteSnapshot>, AppError> {
-    let manifest_url = remote_file_url(settings, layout, REMOTE_MANIFEST)?;
+    let manifest_url = remote_file_url(settings, REMOTE_MANIFEST)?;
     let Some((manifest_bytes, manifest_etag)) =
         get_bytes(&manifest_url, auth, MAX_MANIFEST_BYTES).await?
     else {
@@ -223,7 +200,6 @@ async fn fetch_remote_snapshot(
         })?;
 
     Ok(Some(RemoteSnapshot {
-        layout,
         manifest,
         manifest_bytes,
         manifest_etag,
@@ -234,7 +210,6 @@ async fn fetch_remote_snapshot(
 async fn download_and_verify(
     settings: &WebDavSyncSettings,
     auth: &WebDavAuth,
-    layout: RemoteLayout,
     artifact_name: &str,
     artifacts: &BTreeMap<String, ArtifactMeta>,
 ) -> Result<Vec<u8>, AppError> {
@@ -247,7 +222,7 @@ async fn download_and_verify(
     })?;
     validate_artifact_size_limit(artifact_name, meta.size)?;
 
-    let url = remote_file_url(settings, layout, artifact_name)?;
+    let url = remote_file_url(settings, artifact_name)?;
     let (bytes, _) = get_bytes(&url, auth, MAX_SYNC_ARTIFACT_BYTES as usize)
         .await?
         .ok_or_else(|| {
@@ -264,29 +239,25 @@ async fn download_and_verify(
 
 // ─── Remote path helpers ─────────────────────────────────────
 
-fn remote_dir_segments(settings: &WebDavSyncSettings, layout: RemoteLayout) -> Vec<String> {
+/// `{remote_root}/ccs-lite/v2/db-v6/{profile}`
+fn remote_dir_segments(settings: &WebDavSyncSettings) -> Vec<String> {
     let mut segs = Vec::new();
     segs.extend(path_segments(&settings.remote_root).map(str::to_string));
+    segs.push(REMOTE_NAMESPACE.to_string());
     segs.push(format!("v{PROTOCOL_VERSION}"));
-    if layout == RemoteLayout::Current {
-        segs.push(format!("db-v{DB_COMPAT_VERSION}"));
-    }
+    segs.push(format!("db-v{DB_COMPAT_VERSION}"));
     segs.extend(path_segments(&settings.profile).map(str::to_string));
     segs
 }
 
-fn remote_file_url(
-    settings: &WebDavSyncSettings,
-    layout: RemoteLayout,
-    file_name: &str,
-) -> Result<String, AppError> {
-    let mut segs = remote_dir_segments(settings, layout);
+fn remote_file_url(settings: &WebDavSyncSettings, file_name: &str) -> Result<String, AppError> {
+    let mut segs = remote_dir_segments(settings);
     segs.extend(path_segments(file_name).map(str::to_string));
     build_remote_url(&settings.base_url, &segs)
 }
 
-fn remote_dir_display(settings: &WebDavSyncSettings, layout: RemoteLayout) -> String {
-    let segs = remote_dir_segments(settings, layout);
+fn remote_dir_display(settings: &WebDavSyncSettings) -> String {
+    let segs = remote_dir_segments(settings);
     format!("/{}", segs.join("/"))
 }
 
@@ -301,24 +272,20 @@ mod tests {
     use super::*;
 
     #[test]
-    fn remote_dir_segments_uses_current_layout() {
+    fn remote_dir_segments_add_the_ccs_lite_namespace() {
         let settings = WebDavSyncSettings {
             remote_root: "cc-switch-sync".to_string(),
             profile: "default".to_string(),
             ..WebDavSyncSettings::default()
         };
-        let segs = remote_dir_segments(&settings, RemoteLayout::Current);
-        assert_eq!(segs, vec!["cc-switch-sync", "v2", "db-v6", "default"]);
-    }
-
-    #[test]
-    fn remote_dir_segments_uses_legacy_layout() {
-        let settings = WebDavSyncSettings {
-            remote_root: "cc-switch-sync".to_string(),
-            profile: "default".to_string(),
-            ..WebDavSyncSettings::default()
-        };
-        let segs = remote_dir_segments(&settings, RemoteLayout::Legacy);
-        assert_eq!(segs, vec!["cc-switch-sync", "v2", "default"]);
+        let segs = remote_dir_segments(&settings);
+        assert_eq!(
+            segs,
+            vec!["cc-switch-sync", "ccs-lite", "v2", "db-v6", "default"]
+        );
+        assert_eq!(
+            remote_dir_display(&settings),
+            "/cc-switch-sync/ccs-lite/v2/db-v6/default"
+        );
     }
 }
