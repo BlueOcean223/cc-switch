@@ -49,6 +49,114 @@ describe("MoArk (模力方舟) provider presets", () => {
     expect(preset?.config).toContain('wire_api = "responses"');
   });
 
+  it("declares the Codex model catalog so /model lists every MoArk model", () => {
+    const preset = codexProviderPresets.find(
+      (item) => item.name === "模力方舟",
+    );
+    const catalog = preset?.modelCatalog ?? [];
+
+    // 缺 modelCatalog 时 Codex 退回通用元数据，/model 只会列出默认模型。
+    expect(catalog.map((model) => model.model)).toEqual([
+      DEFAULT_MODEL,
+      "DeepSeek-V4-Pro",
+      "GLM-5.3",
+      "Kimi-K2.7-Code",
+    ]);
+
+    // 目录首行 = 默认模型，必须与 config.toml 的 model 一致。
+    expect(preset?.config).toContain(`model = "${catalog[0]?.model}"`);
+
+    for (const model of catalog) {
+      expect(
+        model.contextWindow,
+        `${model.model} contextWindow`,
+      ).toBeGreaterThan(0);
+      expect(model.inputModalities, `${model.model} inputModalities`).toContain(
+        "text",
+      );
+    }
+    // Kimi K2.7 Code 与 OpenClaw 预设一致地支持图像输入。
+    expect(
+      catalog.find((model) => model.model === "Kimi-K2.7-Code")
+        ?.inputModalities,
+    ).toEqual(["text", "image"]);
+  });
+
+  it("keeps Codex capacities in step with the OpenClaw preset", () => {
+    const codex = codexProviderPresets.find((item) => item.name === "模力方舟");
+    const openclaw = openclawProviderPresets.find(
+      (item) => item.name === "模力方舟",
+    );
+    const openclawById = new Map(
+      (openclaw?.settingsConfig.models ?? []).map((model) => [model.id, model]),
+    );
+
+    for (const model of codex?.modelCatalog ?? []) {
+      const counterpart = openclawById.get(model.model);
+      expect(
+        counterpart,
+        `${model.model} exists in the OpenClaw preset`,
+      ).toBeDefined();
+      expect(model.contextWindow, `${model.model} contextWindow`).toBe(
+        counterpart?.contextWindow,
+      );
+    }
+  });
+
+  it("declares only platform- or vendor-verified Codex reasoning levels", () => {
+    const preset = codexProviderPresets.find(
+      (item) => item.name === "模力方舟",
+    );
+    const levels = Object.fromEntries(
+      (preset?.modelCatalog ?? []).map((model) => [
+        model.model,
+        model.reasoningLevels,
+      ]),
+    );
+
+    // 实测自 https://moark.com/v1/responses：非法 reasoning_effort 触发的 400
+    // 里厂商给出的明文枚举。
+    expect(levels["DeepSeek-V4-Pro"]).toEqual([
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max",
+    ]);
+    expect(levels["GLM-5.3"]).toEqual([
+      "none",
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max",
+    ]);
+    expect(levels["Kimi-K2.7-Code"]).toEqual([
+      "none",
+      "minimal",
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+    ]);
+    // MoArk 不校验该字段，退回 DeepSeek 官方目录的档位。
+    expect(levels[DEFAULT_MODEL]).toEqual(["low", "high", "max"]);
+    // 每个模型都必须保留多档且每档都含 high，后端才会保留模板默认 high，与
+    // config 的 model_reasoning_effort = "high" 一致。
+    const models = preset?.modelCatalog ?? [];
+    expect(models).toHaveLength(4);
+    for (const model of models) {
+      expect(model.reasoningLevels, `${model.model} keeps high`).toContain(
+        "high",
+      );
+      expect(
+        model.reasoningLevels?.length,
+        `${model.model} still offers a choice`,
+      ).toBeGreaterThan(1);
+    }
+    expect(preset?.config).toContain('model_reasoning_effort = "high"');
+  });
+
   it("uses the OpenAI-compatible endpoint for Pi", () => {
     const preset = piProviderPresets.find((item) => item.name === "模力方舟");
 
