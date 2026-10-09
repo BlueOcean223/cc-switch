@@ -1401,6 +1401,51 @@ requires_openai_auth = true`,
       "deepseek-v4-flash-0731",
     ),
     endpointCandidates: ["https://moark.com/v1"],
+    // 档位口径按 codexReasoningLevelPresets.test.ts：优先取**平台自己声明的**
+    // 枚举（非法 reasoning_effort 触发 400 时厂商返回的明文），平台不声明则退回
+    // 模型厂商官方档位，两者皆无则不写。2026-10-08 用真实 key 对
+    // https://moark.com/v1/responses 实测（非法值各采样 3 次）：
+    // - DeepSeek-V4-Pro / GLM-5.3 的枚举稳定；Kimi-K2.7-Code 3 次里 2 次对非法
+    //   值返回 200，以厂商明文那次为准；
+    // - deepseek-v4-flash-0731 对非法值也返回 200（平台不自证）→ 退回 DeepSeek
+    //   官方目录的 low/high/max。
+    // 每个模型的档位都含 high，后端保留模板默认 high，与上面 config 的
+    // model_reasoning_effort = "high" 一致，故无需 defaultReasoningLevel。
+    // qwen3-coder-plus 2026-10-10 下线（阿里云公告 118344），与 OpenClaw 预设一样不列。
+    // 首行 = 默认模型，须与 config 的 model 一致。
+    modelCatalog: modelCatalog([
+      {
+        model: "deepseek-v4-flash-0731",
+        displayName: "DeepSeek V4 Flash",
+        contextWindow: 1000000,
+        inputModalities: ["text"],
+        reasoningLevels: ["low", "high", "max"],
+      },
+      {
+        model: "DeepSeek-V4-Pro",
+        displayName: "DeepSeek V4 Pro",
+        contextWindow: 1000000,
+        inputModalities: ["text"],
+        // MoArk 400 明文：'low', 'medium', 'high', 'xhigh', 'max'
+        reasoningLevels: ["low", "medium", "high", "xhigh", "max"],
+      },
+      {
+        model: "GLM-5.3",
+        displayName: "GLM-5.3",
+        contextWindow: 1048576,
+        inputModalities: ["text"],
+        // MoArk 400 明文：none or low or medium or high or xhigh or max
+        reasoningLevels: ["none", "low", "medium", "high", "xhigh", "max"],
+      },
+      {
+        model: "Kimi-K2.7-Code",
+        displayName: "Kimi K2.7 Code",
+        contextWindow: 262144,
+        inputModalities: ["text", "image"],
+        // MoArk 400 明文：'none', 'minimal', 'low', 'medium', 'high', 'xhigh'
+        reasoningLevels: ["none", "minimal", "low", "medium", "high", "xhigh"],
+      },
+    ]),
     category: "aggregator",
     icon: "moark",
   },

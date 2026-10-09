@@ -660,6 +660,7 @@ dependencies = [
  "chrono",
  "dirs 5.0.1",
  "futures",
+ "gtk",
  "hmac",
  "indexmap 2.13.0",
  "json-five",
