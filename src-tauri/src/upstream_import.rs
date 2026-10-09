@@ -441,6 +441,9 @@ mod tests {
 
     #[test]
     fn imports_upstream_data_once_without_touching_it() {
+        if crate::config::sqlite_unsupported_in_temp_dir() {
+            return;
+        }
         let fx = fixture();
         let upstream = fx.paths.home.join(UPSTREAM_DIR_NAME);
         make_upstream(&upstream, 19);
@@ -479,6 +482,9 @@ mod tests {
 
     #[test]
     fn newer_upstream_database_is_not_imported() {
+        if crate::config::sqlite_unsupported_in_temp_dir() {
+            return;
+        }
         let fx = fixture();
         make_upstream(&fx.paths.home.join(UPSTREAM_DIR_NAME), 22);
 
@@ -516,6 +522,9 @@ mod tests {
 
     #[test]
     fn upstream_custom_data_dir_is_used_when_it_exists() {
+        if crate::config::sqlite_unsupported_in_temp_dir() {
+            return;
+        }
         let fx = fixture();
         let custom = fx.paths.home.join("Dropbox").join("cc-switch-data");
         make_upstream(&custom, 20);
@@ -551,6 +560,9 @@ mod tests {
 
     #[test]
     fn legacy_home_dir_is_found_when_the_default_is_missing() {
+        if crate::config::sqlite_unsupported_in_temp_dir() {
+            return;
+        }
         let mut fx = fixture();
         let legacy_home = fx.paths.home.join("msys-home");
         make_upstream(&legacy_home.join(UPSTREAM_DIR_NAME), 18);

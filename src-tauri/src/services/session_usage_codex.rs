@@ -1432,6 +1432,13 @@ fn parent_signatures_before(
     if let Some(timeline) = cached_timeline {
         return timeline.signatures_before(parent_path, cutoff);
     }
+    // 取不到文件身份时（如 Windows 访问 \\wsl.localhost）stamp 为 None，但修改时间
+    // 仍能从 metadata 读到；否则父文件永远被当作还在写，fork 一直推迟
+    let modified_nanos = stamp.map(|stamp| stamp.modified_nanos).or_else(|| {
+        file.metadata()
+            .ok()
+            .map(|metadata| metadata_modified_nanos(&metadata))
+    });
 
     let mut events = Vec::new();
     let mut max_timestamp: Option<DateTime<Utc>> = None;
@@ -1483,7 +1490,7 @@ fn parent_signatures_before(
         events,
         max_timestamp,
         has_token_without_timestamp,
-        modified_nanos: stamp.map(|stamp| stamp.modified_nanos),
+        modified_nanos,
     });
     let result = timeline.signatures_before(parent_path, cutoff);
     if let (Some(stamp), Ok(mut caches)) = (stamp, replay_caches().lock()) {
