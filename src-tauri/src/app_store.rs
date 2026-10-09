@@ -167,6 +167,9 @@ mod tests {
 
     #[test]
     fn data_dir_override_rejects_upstream_data_dirs() {
+        if crate::config::sqlite_unsupported_in_temp_dir() {
+            return;
+        }
         let empty = tempfile::tempdir().unwrap();
         assert!(ensure_not_foreign_data_dir(empty.path()).is_ok());
 
